@@ -1,0 +1,92 @@
+import Foundation
+import Testing
+@testable import TokenTankDomain
+
+@Suite("Token Tank domain semantics")
+struct ModelsTests {
+    @Test("zero remains distinct from a missing source value")
+    func zeroIsNotMissing() {
+        let zero = SourceValue(value: 0, rawText: "0", unit: "requests")
+        let item = RawQuotaItem(
+            id: "requests",
+            originalName: "Requests",
+            used: zero,
+            remaining: nil,
+            percentage: .missing(meaning: .used),
+            resetsAt: nil
+        )
+
+        #expect(item.used == zero)
+        #expect(item.remaining == nil)
+        #expect(item.percentage.value == nil)
+    }
+
+    @Test("percentage direction is source-explicit")
+    func percentageDirection() {
+        let used = SourcePercentage(value: 37.5, rawText: "37.5", meaning: .used)
+        let remaining = SourcePercentage(value: 62.5, rawText: "62.5", meaning: .remaining)
+
+        #expect(used.meaning == .used)
+        #expect(remaining.meaning == .remaining)
+        #expect(used != remaining)
+    }
+
+    @Test("only terminal authentication failures request authentication")
+    func authenticationBoundary() {
+        let terminal: Set<CollectionErrorKind> = [
+            .authenticationRejected,
+            .authenticationRevoked,
+            .externalSessionMissing,
+            .appCredentialMissing,
+        ]
+
+        for kind in CollectionErrorKind.allCases {
+            #expect(kind.requiresAuthenticationAction == terminal.contains(kind))
+        }
+        #expect(CollectionErrorKind.keychainUnavailable.defaultRecoveryAction == .waitForNextRefresh)
+        #expect(CollectionErrorKind.permissionDenied.defaultRecoveryAction == .allowAccessInSystemSettings)
+        #expect(CollectionErrorKind.externalSessionMissing.defaultRecoveryAction == .signInSourceApp)
+    }
+
+    @Test("default preferences contain each required provider once")
+    func defaultPreferences() {
+        let preferences = UserPreferences()
+
+        #expect(preferences.providers.map(\.providerID) == ProviderID.allCases)
+        #expect(preferences.visibleProviders.map(\.providerID) == ProviderID.allCases)
+        #expect(Set(preferences.providers.map(\.abbreviation)).count == ProviderID.allCases.count)
+    }
+
+    @Test("snapshot round trips without changing raw source precision")
+    func snapshotRoundTrip() throws {
+        let source = ProviderSourceDescriptor(
+            id: "fixture",
+            name: "Fixture",
+            kind: .officialAPI,
+            credentialOwnership: .tokenTank,
+            documentationURL: URL(string: "https://example.invalid/docs"),
+            detail: "Fixture source"
+        )
+        let snapshot = ProviderSnapshot(
+            providerID: .grok,
+            source: source,
+            quotas: [
+                RawQuotaItem(
+                    id: "credit",
+                    originalName: "Prepaid credit",
+                    used: SourceValue(value: 0.10, rawText: "0.10", unit: "USD"),
+                    remaining: SourceValue(value: 9.90, rawText: "9.90", unit: "USD"),
+                    percentage: SourcePercentage(value: 1.00, rawText: "1.00", meaning: .used),
+                    resetsAt: nil,
+                    sourceFields: ["currency": "USD"]
+                ),
+            ],
+            refreshedAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+
+        let data = try JSONEncoder().encode(snapshot)
+        let decoded = try JSONDecoder().decode(ProviderSnapshot.self, from: data)
+        #expect(decoded == snapshot)
+        #expect(decoded.quotas[0].used?.rawText == "0.10")
+    }
+}

@@ -1,0 +1,461 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "credential.claude.admin_key" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Anthropic Admin API key" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Anthropic 관리자 API 키" } }
+      }
+    },
+    "credential.doubao.access_key" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Volcano Access Key ID" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Volcano Access Key ID" } }
+      }
+    },
+    "credential.doubao.secret_key" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Volcano Secret Access Key" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Volcano Secret Access Key" } }
+      }
+    },
+    "credential.grok.management_key" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "xAI Management API key" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "xAI Management API 키" } }
+      }
+    },
+    "credential.grok.team_id" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "xAI team ID" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "xAI 팀 ID" } }
+      }
+    },
+    "action.allow_system_settings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Allow access in System Settings" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "시스템 설정에서 접근 허용" } }
+      }
+    },
+    "action.none" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "No action available" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "사용 가능한 동작 없음" } }
+      }
+    },
+    "action.quit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Quit Token Tank" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank 종료" } }
+      }
+    },
+    "action.refresh.help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Refresh every provider" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "모든 Provider 새로고침" } }
+      }
+    },
+    "action.retry" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Retry" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "다시 시도" } }
+      }
+    },
+    "action.sign_in_source" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign in again in the source app" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "원본 앱에서 다시 로그인" } }
+      }
+    },
+    "action.sign_in_token_tank" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign in to Token Tank" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank에서 로그인" } }
+      }
+    },
+    "action.wait" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Wait for next refresh" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "다음 갱신까지 대기" } }
+      }
+    },
+    "detail.source" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Source" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "원본" } }
+      }
+    },
+    "detail.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank" } }
+      }
+    },
+    "error.app_credential_missing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank credential required" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank 인증 정보 필요" } }
+      }
+    },
+    "error.authentication" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Authentication rejected" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "인증 거부됨" } }
+      }
+    },
+    "error.cancelled" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Refresh cancelled" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "새로고침 취소됨" } }
+      }
+    },
+    "error.external_session_missing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Source session missing" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "원본 세션 없음" } }
+      }
+    },
+    "error.keychain" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Keychain unavailable" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "키체인을 사용할 수 없음" } }
+      }
+    },
+    "error.network" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Network error" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "네트워크 오류" } }
+      }
+    },
+    "error.offline" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Offline" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "오프라인" } }
+      }
+    },
+    "error.permission" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Permission required" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "권한 필요" } }
+      }
+    },
+    "error.rate_limited" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Rate limited" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "요청 한도 초과" } }
+      }
+    },
+    "error.schema" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Data format changed" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "데이터 형식 변경됨" } }
+      }
+    },
+    "error.source_unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Source unavailable" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "원본을 사용할 수 없음" } }
+      }
+    },
+    "error.unsafe_path" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Unsafe source path" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "안전하지 않은 원본 경로" } }
+      }
+    },
+    "field.not_provided" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Not provided" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "제공 안 됨" } }
+      }
+    },
+    "menu.summary.accessibility" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Provider quota summary" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Provider 할당량 요약" } }
+      }
+    },
+    "menu.summary.empty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank — no Providers visible" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank — 표시 중인 Provider 없음" } }
+      }
+    },
+    "quota.percentage.remaining" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Remaining percentage" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "잔여 비율" } }
+      }
+    },
+    "quota.percentage.used" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Used percentage" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "사용 비율" } }
+      }
+    },
+    "quota.refreshed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last refreshed" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "마지막 갱신" } }
+      }
+    },
+    "quota.remaining" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Remaining" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "잔여" } }
+      }
+    },
+    "quota.reset" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Reset" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "리셋" } }
+      }
+    },
+    "quota.used" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Used" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "사용" } }
+      }
+    },
+    "settings.abbreviation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Abbreviation" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "축약명" } }
+      }
+    },
+    "settings.credentials" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Credentials" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "인증 정보" } }
+      }
+    },
+    "settings.credentials.delete" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Delete from Keychain" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "키체인에서 삭제" } }
+      }
+    },
+    "settings.credentials.explanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "App-owned credentials are stored only in this Mac’s Keychain. Existing source-app sessions remain owned and updated by their source app." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "앱 소유 인증 정보는 이 Mac의 키체인에만 저장됩니다. 기존 원본 앱 세션은 원본 앱이 계속 소유하고 갱신합니다." } }
+      }
+    },
+    "settings.credentials.keychain_footer" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Saved with After First Unlock, This Device Only accessibility." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "첫 잠금 해제 후, 이 기기에서만 접근 가능한 항목으로 저장됩니다." } }
+      }
+    },
+    "settings.credentials.save" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Save to Keychain" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "키체인에 저장" } }
+      }
+    },
+    "settings.move_down" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Move down" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "아래로 이동" } }
+      }
+    },
+    "settings.move_up" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Move up" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "위로 이동" } }
+      }
+    },
+    "settings.providers" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Providers" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Provider" } }
+      }
+    },
+    "settings.representative.none" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Choose another" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "다시 선택" } }
+      }
+    },
+    "settings.representative_quota" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Representative quota" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "대표 할당량" } }
+      }
+    },
+    "settings.source.documentation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Official documentation" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "공식 문서" } }
+      }
+    },
+    "settings.sources" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sources" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "원본" } }
+      }
+    },
+    "settings.sources.explanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank displays one selected source per Provider without estimating or reconciling values." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank는 값을 추정하거나 조정하지 않고 Provider마다 선택한 원본 하나를 표시합니다." } }
+      }
+    },
+    "settings.summary" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Menu bar summary" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "메뉴바 요약" } }
+      }
+    },
+    "settings.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Settings" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "설정" } }
+      }
+    },
+    "source.detail.claude" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Official Anthropic organization usage API. This is organization API activity, not Claude Pro/Max subscription quota." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "공식 Anthropic 조직 사용량 API입니다. Claude Pro/Max 구독 할당량이 아니라 조직 API 활동입니다." } }
+      }
+    },
+    "source.detail.codex" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Official Codex app-server rate limits. Sign in through Codex; Token Tank never reads or changes its credentials." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "공식 Codex app-server 사용 한도입니다. Codex에서 로그인하며 Token Tank는 자격 증명을 읽거나 변경하지 않습니다." } }
+      }
+    },
+    "source.detail.cursor" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read-only Cursor.app session and usage summary. Sign in through Cursor; undocumented schema changes fail closed." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Cursor.app 세션과 사용량 요약을 읽기 전용으로 사용합니다. Cursor에서 로그인하며 비공개 스키마 변경 시 안전하게 중단됩니다." } }
+      }
+    },
+    "source.detail.doubao" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Official Volcano Coding Plan usage source. Requires app-owned AK/SK credentials." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "공식 Volcano Coding Plan 사용량 원본입니다. 앱이 소유한 AK/SK 자격 증명이 필요합니다." } }
+      }
+    },
+    "source.detail.grok" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Official xAI Management prepaid balance. This is developer-platform billing, not consumer SuperGrok quota." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "공식 xAI Management 선불 잔액입니다. 소비자 SuperGrok 할당량이 아니라 개발자 플랫폼 결제 정보입니다." } }
+      }
+    },
+    "state.authentication_required" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Authentication required" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "인증 필요" } }
+      }
+    },
+    "state.fresh" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Fresh" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "최신" } }
+      }
+    },
+    "state.never_loaded" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Waiting for the first refresh" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "첫 갱신 대기 중" } }
+      }
+    },
+    "state.refreshing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Refreshing" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "갱신 중" } }
+      }
+    },
+    "state.source.empty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The source returned no quota items. Its format may have changed." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "원본이 할당량 항목을 반환하지 않았습니다. 데이터 형식이 변경되었을 수 있습니다." } }
+      }
+    },
+    "state.selected_unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Selected quota unavailable" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "선택한 할당량을 사용할 수 없음" } }
+      }
+    },
+    "state.stale" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Stale" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "오래됨" } }
+      }
+    },
+    "state.unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Unavailable" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "사용할 수 없음" } }
+      }
+    }
+  },
+  "version" : "1.0"
+}

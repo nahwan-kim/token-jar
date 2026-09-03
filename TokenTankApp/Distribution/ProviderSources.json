@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-08-31",
+  "contract": {
+    "singleSourcePerProvider": true,
+    "externalCredentialsReadOnly": true,
+    "appCredentialsKeychainOnly": true,
+    "estimationAllowed": false,
+    "sourceMergingAllowed": false,
+    "browserAutomationAllowed": false,
+    "tccOrFdaRequiresSeparateApproval": true,
+    "codexBarReferenceOnly": true
+  },
+  "providers": [
+    {
+      "provider": "codex",
+      "surface": "ChatGPT Codex subscription rate-limit windows",
+      "selectedSource": "Official Codex app-server JSON-RPC account/rateLimits/read",
+      "sourceStatus": "clear",
+      "productionComposition": true,
+      "sourceStatusReason": "The user approved the reviewed process boundary. Token Tank starts only the official stdio server, advertises no filesystem or terminal capability, and never reads or mutates Codex credentials.",
+      "documentation": [
+        "https://developers.openai.com/codex/app-server"
+      ],
+      "credentialOwner": "Codex CLI",
+      "credentialPersistence": "Codex-owned store; Token Tank does not read, copy, write, or rotate it",
+      "tokenTankIO": [
+        "Launch one allowlisted codex executable candidate with the literal app-server argument",
+        "Exchange initialize, initialized, and account/rateLimits/read JSONL over stdio",
+        "Read one size-bounded response line, then terminate the child after the response or exact timeout"
+      ],
+      "externalPaths": [
+        "/opt/homebrew/bin/codex",
+        "/usr/local/bin/codex",
+        "~/.local/bin/codex",
+        "~/.local/share/mise/shims/codex",
+        "~/.bun/bin/codex"
+      ],
+      "tccClass": "none",
+      "fdaRequired": false,
+      "liveValidation": "Owner-managed live app-server returned rateLimits, rateLimitsByLimitId, two keyed primary/secondary/credits buckets, and rateLimitResetCredits without exposing raw values or account identifiers.",
+      "mutationRisk": "The app-server owner may maintain its own credential; Token Tank sends no auth mutation method.",
+      "releaseBlocker": "Revalidate the owner session and sanitized shape through the final frozen candidate"
+    },
+    {
+      "provider": "claude",
+      "surface": "Anthropic organization API usage report",
+      "selectedSource": "Official Anthropic Admin API /v1/organizations/usage_report/messages",
+      "sourceStatus": "clear",
+      "productionComposition": true,
+      "sourceStatusReason": "The selected official source reports organization API usage. Token Tank labels that surface explicitly and never presents it as Claude Pro/Max consumer subscription quota.",
+      "documentation": [
+        "https://platform.claude.com/docs/en/manage-claude/usage-cost-api",
+        "https://code.claude.com/docs/en/legal-and-compliance"
+      ],
+      "credentialOwner": "Token Tank user",
+      "credentialPersistence": "macOS Keychain generic-password item claude.admin-api-key",
+      "tokenTankIO": [
+        "HTTPS GET every has_more/next_page page from api.anthropic.com using the app-owned Admin API key",
+        "Expose every numeric usage leaf, including token and server-tool request categories, under stable opaque raw IDs"
+      ],
+      "externalPaths": [],
+      "tccClass": "none",
+      "fdaRequired": false,
+      "mutationRisk": "none",
+      "releaseBlocker": "Validate an owner-provided Admin API key and sanitized live pagination/schema"
+    },
+    {
+      "provider": "grok",
+      "surface": "xAI Management developer prepaid balance",
+      "selectedSource": "Official xAI Management API prepaid balance",
+      "sourceStatus": "clear",
+      "productionComposition": true,
+      "sourceStatusReason": "The user selected the best compliant current source. This official endpoint is labeled xAI Management developer prepaid balance everywhere and never presented as consumer SuperGrok subscription quota.",
+      "rejectedAlternative": "The CodexBar-observed Grok Build ACP x.ai/billing extension returned JSON-RPC -32601 (method-not-found) on official Grok 1.0.13; browser-cookie and local-estimate fallbacks remain prohibited.",
+      "documentation": [
+        "https://docs.x.ai/developers/management-api-guide",
+        "https://docs.x.ai/developers/rest-api-reference/management",
+        "https://docs.x.ai/console/faq/accounts",
+        "https://github.com/steipete/CodexBar/blob/main/docs/providers.md"
+      ],
+      "credentialOwner": "Token Tank user",
+      "credentialPersistence": "macOS Keychain generic-password items grok.management-api-key and grok.team-id",
+      "tokenTankIO": [
+        "HTTPS GET the exact management-api.x.ai prepaid balance endpoint",
+        "Expose the total USD-cent balance and every balance change with recursively preserved scalar source fields and stable opaque change IDs"
+      ],
+      "externalPaths": [],
+      "tccClass": "none",
+      "fdaRequired": false,
+      "mutationRisk": "none",
+      "releaseBlocker": "Validate owner-provided Management credentials and a sanitized live response"
+    },
+    {
+      "provider": "cursor",
+      "surface": "Cursor individual account usage summary and billing-cycle quota blocks",
+      "selectedSource": "Read-only Cursor.app state.vscdb session plus cursor.com/api/usage-summary",
+      "sourceStatus": "watch",
+      "productionComposition": true,
+      "sourceStatusReason": "Cursor documents the usage surface but not the local session layout or usage-summary endpoint. Token Tank follows the current CodexBar behavior as a reference, reads the Cursor-owned SQLite value in place with immutable=1 and no persistence or refresh, and fails closed on expiry or schema drift.",
+      "documentation": [
+        "https://prod.cursor.com/help/models-and-usage/usage-limits",
+        "https://github.com/steipete/CodexBar/blob/main/docs/cursor.md"
+      ],
+      "credentialOwner": "Cursor.app",
+      "credentialPersistence": "Cursor-owned state.vscdb; Token Tank does not persist, copy, write, or refresh the JWT",
+      "tokenTankIO": [
+        "Open only Cursor/User/globalStorage/state.vscdb with O_NOFOLLOW, verify the opened descriptor identity, bind immutable=1 SQLite to that descriptor, and query only ItemTable cursorAuth/accessToken",
+        "Require a canonical token envelope, bounded allowed subject, and unexpired timestamp; use it only in an ephemeral owner-session cookie whose authority is decided by cursor.com/api/usage-summary",
+        "Expose individual and team usage blocks, plan breakdowns, and percentages independently with opaque identities"
+      ],
+      "externalPaths": [
+        "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+        "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb-wal",
+        "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb-shm"
+      ],
+      "tccClass": "none",
+      "fdaRequired": false,
+      "liveValidation": "Immutable exact-key read preserved all tracked main/WAL/SHM facts and the owner session returned the expected usage-summary root and individual plan/onDemand blocks; ordinary mode=ro was rejected after it changed SQLite metadata.",
+      "mutationRisk": "Immutable SQLite ignores active WAL state rather than touching shared-memory metadata; an older/expired checkpointed token fails closed. No browser import, token cache, copy, refresh, or external-store mutation is allowed.",
+      "releaseBlocker": "Revalidate the descriptor-bound immutable read, sanitized schema, and exact owner path through the final frozen candidate"
+    },
+    {
+      "provider": "doubao",
+      "surface": "Volcano Coding Plan quota windows",
+      "selectedSource": "Official Volcano OpenAPI GetCodingPlanUsage",
+      "sourceStatus": "clear",
+      "productionComposition": true,
+      "sourceStatusReason": "The official control-plane API exposes source-faithful plan windows and accepts app-owned AK/SK authentication.",
+      "reviewedAlternative": "GetAFPUsage is fixture-tested but is not part of production composition and is never merged with Coding Plan data.",
+      "documentation": [
+        "https://docs.volcengine.com/docs/82379/1928261",
+        "https://github.com/volcengine/ark-cli"
+      ],
+      "credentialOwner": "Token Tank user",
+      "credentialPersistence": "macOS Keychain generic-password items doubao.access-key-id and doubao.secret-access-key",
+      "tokenTankIO": [
+        "HMAC-SHA256 signed HTTPS request to open.volcengineapi.com",
+        "Production composition selects GetCodingPlanUsage only; Coding and Agent responses are never merged",
+        "Derive remaining and used percentage only by exact same-row used/total arithmetic when the source omits them"
+      ],
+      "externalPaths": [],
+      "tccClass": "none",
+      "fdaRequired": false,
+      "mutationRisk": "none",
+      "releaseBlocker": "Validate Coding Plan region, signature, and sanitized live schema with operator credentials"
+    }
+  ]
+}

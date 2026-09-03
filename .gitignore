@@ -1,0 +1,77 @@
+# Xcode and Swift build products
+.build/
+DerivedData/
+build/
+Build/
+*.build/
+*.xcarchive
+*.xcresult
+*.dSYM
+*.dSYM.zip
+
+# Xcode user state
+xcuserdata/
+*.xcuserdatad/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+.swiftpm/
+.gjc/
+.DS_Store
+
+# Local environment, secrets, and credentials
+.env
+.env.*
+!.env.example
+*.credential
+*.credentials
+*.secret
+*.secrets
+*.token
+*.tokens
+*.key
+*.pem
+*.p12
+*.pfx
+*.mobileprovision
+*.provisionprofile
+*.provisioningprofile
+secrets/
+Secrets/
+credentials/
+Credentials/
+
+# Notarization profiles and results
+notarization-profiles/
+notarization-results/
+notarytool-results/
+notary-results/
+*.notaryprofile
+*.notary-profile
+*.notarytool-profile
+*.notarization-profile
+*.notary.json
+*.notarization.json
+
+# Raw performance captures (sanitized fixtures remain trackable)
+performance/raw/
+performance-artifacts/raw/
+artifacts/performance/raw/
+perf/raw/
+*.perf
+*.perfdata
+*.performance.raw
+*.trace
+*.trace.json
+*.raw
+*.raw.json
+
+# Keep sanitized fixtures and source documentation
+!fixtures/
+!fixtures/**
+!Fixtures/
+!Fixtures/**
+!docs/
+!docs/**
+!Docs/
+!Docs/**
