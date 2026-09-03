@@ -24,15 +24,55 @@ final class AppModelTests: XCTestCase {
         }
         XCTAssertTrue(becameFresh)
         var preference = model.preference(for: .codex)
-        XCTAssertEqual(model.menuPercentage(for: preference), "—")
+        XCTAssertEqual(model.menuValue(for: preference), "—")
 
         preference.representativeQuotaID = "primary"
         model.updatePreference(preference)
-        XCTAssertEqual(model.menuPercentage(for: preference), "37.5%")
+        XCTAssertEqual(model.menuValue(for: preference), "37.5%")
 
         preference.representativeQuotaID = "vanished"
         model.updatePreference(preference)
-        XCTAssertEqual(model.menuPercentage(for: preference), "—")
+        XCTAssertEqual(model.menuValue(for: preference), "—")
+        await model.stop()
+    }
+
+    func testMenuValueUsesSourceScalarWhenPercentageIsMissing() async throws {
+        let usedOnly = makeSnapshot(
+            providerID: .claude,
+            used: SourceValue(value: 10, rawText: "10", unit: "tokens")
+        )
+        let remainingOnly = makeSnapshot(
+            providerID: .grok,
+            remaining: SourceValue(value: 2500, rawText: "2500", unit: "USD cents")
+        )
+        let claude = TestAppAdapter(id: .claude, results: [.success(usedOnly)])
+        let grok = TestAppAdapter(id: .grok, results: [.success(remainingOnly)])
+        let credentials = InMemoryCredentialStore()
+        let model = AppModel(
+            adapters: [claude, grok],
+            credentialStore: credentials,
+            preferencesStore: MemoryPreferencesStore(),
+            context: makeContext(credentials: credentials)
+        )
+
+        model.ensureStarted()
+        let bothFresh = await eventually {
+            if case .fresh = model.states[.claude], case .fresh = model.states[.grok] {
+                return true
+            }
+            return false
+        }
+        XCTAssertTrue(bothFresh)
+
+        var claudePreference = model.preference(for: .claude)
+        claudePreference.representativeQuotaID = "primary"
+        model.updatePreference(claudePreference)
+        XCTAssertEqual(model.menuValue(for: claudePreference), "10")
+
+        var grokPreference = model.preference(for: .grok)
+        grokPreference.representativeQuotaID = "primary"
+        model.updatePreference(grokPreference)
+        XCTAssertEqual(model.menuValue(for: grokPreference), "2500")
         await model.stop()
     }
 
@@ -65,59 +105,6 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.orderedPreferences.count, ProviderID.allCases.count)
     }
 
-    func testAppOwnedCredentialsUseOnlyCredentialStore() async throws {
-        let credentials = InMemoryCredentialStore()
-        let preferences = MemoryPreferencesStore()
-        let model = AppModel(
-            adapters: [],
-            credentialStore: credentials,
-            preferencesStore: preferences,
-            context: makeContext(credentials: credentials)
-        )
-
-        model.updateCredentialDraft("access-id", id: "doubao.access-key-id")
-        model.updateCredentialDraft("secret-value", id: "doubao.secret-access-key")
-        model.saveCredentials(for: .doubao)
-
-        let credentialsSaved = await eventually {
-            await credentials.read(CredentialID(providerID: .doubao, name: "secret-access-key")) == "secret-value"
-        }
-        XCTAssertTrue(credentialsSaved)
-        let accessKeyID = await credentials.read(CredentialID(providerID: .doubao, name: "access-key-id"))
-        XCTAssertEqual(accessKeyID, "access-id")
-        let preferenceSaveCount = await preferences.saveCount
-        XCTAssertEqual(preferenceSaveCount, 0)
-
-        model.deleteCredentials(for: .doubao)
-        let credentialsDeleted = await eventually {
-            await credentials.read(CredentialID(providerID: .doubao, name: "secret-access-key")) == nil
-        }
-        XCTAssertTrue(credentialsDeleted)
-        await model.stop()
-    }
-    func testStopCancelsAndAwaitsCredentialOperations() async {
-        let credentials = BlockingCredentialStore()
-        let model = AppModel(
-            adapters: [],
-            credentialStore: credentials,
-            preferencesStore: MemoryPreferencesStore(),
-            context: makeContext(credentials: credentials)
-        )
-
-        model.updateCredentialDraft("secret-value", id: "doubao.secret-access-key")
-        model.saveCredentials(for: .doubao)
-        let didStart = await eventually { await credentials.writeStarted }
-        XCTAssertTrue(didStart)
-        await model.stop()
-
-        let cancellationCount = await credentials.cancellationCount
-        let storedValue = await credentials.read(
-            CredentialID(providerID: .doubao, name: "secret-access-key")
-        )
-        XCTAssertEqual(cancellationCount, 1)
-        XCTAssertNil(storedValue)
-        XCTAssertFalse(model.hasCredentialDrafts(for: .doubao))
-    }
 
     func testStopRejectsLaterManualRefresh() async throws {
         let adapter = TestAppAdapter(
@@ -156,7 +143,7 @@ final class AppModelTests: XCTestCase {
             context: makeContext(credentials: InMemoryCredentialStore())
         )
 
-        XCTAssertEqual(model.credentialGroups.map(\.providerID), [.claude, .grok, .doubao])
+        XCTAssertEqual(model.credentialGroups.map(\.providerID), [])
         for providerID in ProviderID.allCases {
             XCTAssertNotNil(model.sourceDescriptor(for: providerID))
         }
@@ -251,12 +238,18 @@ final class AppModelTests: XCTestCase {
             externalSessions: NoExternalSessionReader(),
             sqlite: NoSQLiteReader(),
             codexAccount: NoCodexAccountUsageReader(),
+            doubaoPlan: NoDoubaoPlanUsageReader(),
             clock: SystemClock(),
             diagnostics: NoDiagnostics()
         )
     }
 
-    private func makeSnapshot(providerID: ProviderID, percentage: Decimal) -> ProviderSnapshot {
+    private func makeSnapshot(
+        providerID: ProviderID,
+        percentage: Decimal? = nil,
+        used: SourceValue? = nil,
+        remaining: SourceValue? = nil
+    ) -> ProviderSnapshot {
         ProviderSnapshot(
             providerID: providerID,
             source: ProviderSourceDescriptor(
@@ -271,13 +264,15 @@ final class AppModelTests: XCTestCase {
                 RawQuotaItem(
                     id: "primary",
                     originalName: "Primary",
-                    used: nil,
-                    remaining: nil,
-                    percentage: SourcePercentage(
-                        value: percentage,
-                        rawText: NSDecimalNumber(decimal: percentage).stringValue,
-                        meaning: .used
-                    ),
+                    used: used,
+                    remaining: remaining,
+                    percentage: percentage.map {
+                        SourcePercentage(
+                            value: $0,
+                            rawText: NSDecimalNumber(decimal: $0).stringValue,
+                            meaning: .used
+                        )
+                    } ?? .missing(meaning: .used),
                     resetsAt: nil
                 ),
             ],

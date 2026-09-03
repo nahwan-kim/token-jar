@@ -346,9 +346,10 @@ extension CollectionContext {
         CollectionContext(
             network: ProviderScopedNetworkClient(providerID: providerID, base: network),
             credentials: ProviderScopedCredentialStore(providerID: providerID, base: credentials),
-            externalSessions: DeniedExternalSessionReader(),
+            externalSessions: ProviderScopedExternalSessionReader(providerID: providerID, base: externalSessions),
             sqlite: ProviderScopedSQLiteReader(providerID: providerID, base: sqlite),
             codexAccount: ProviderScopedCodexAccountReader(providerID: providerID, base: codexAccount),
+            doubaoPlan: ProviderScopedDoubaoPlanReader(providerID: providerID, base: doubaoPlan),
             clock: clock,
             diagnostics: NoDiagnostics(),
             correlationID: correlationID
@@ -401,23 +402,42 @@ private struct ProviderScopedCredentialStore: AppCredentialStore {
 
     private static func allowedNames(for providerID: ProviderID) -> Set<String> {
         switch providerID {
-        case .codex: []
-        case .claude: ["admin-api-key"]
-        case .grok: ["management-api-key", "team-id"]
-        case .cursor: []
-        case .doubao: ["access-key-id", "secret-access-key"]
+        case .codex, .claude, .grok, .cursor, .doubao: []
         }
     }
 }
 
-private struct DeniedExternalSessionReader: ExternalSessionReader {
-    func exists(_ request: ExternalFileRequest) async -> Bool { false }
+private struct ProviderScopedExternalSessionReader: ExternalSessionReader {
+    let providerID: ProviderID
+    let base: any ExternalSessionReader
+
+    func exists(_ request: ExternalFileRequest) async -> Bool {
+        guard isAllowed(request) else { return false }
+        return await base.exists(request)
+    }
 
     func read(_ request: ExternalFileRequest) async throws -> Data {
-        throw CollectionError(
-            kind: .sourceUnavailable,
-            diagnosticCode: "capability.external-session.denied"
-        )
+        guard isAllowed(request) else {
+            throw CollectionError(
+                kind: .sourceUnavailable,
+                diagnosticCode: "capability.external-session.denied"
+            )
+        }
+        return try await base.read(request)
+    }
+
+    private func isAllowed(_ request: ExternalFileRequest) -> Bool {
+        guard request.providerID == providerID, request.root == .home else { return false }
+        switch providerID {
+        case .claude:
+            return request.relativePath == ".claude.json"
+                && request.maximumBytes == 32 * 1024 * 1024
+        case .grok:
+            return request.relativePath == ".grok/auth.json"
+                && request.maximumBytes == 64 * 1024
+        default:
+            return false
+        }
     }
 }
 
@@ -470,6 +490,20 @@ private struct ProviderScopedCodexAccountReader: CodexAccountUsageReader {
             )
         }
         return try await base.readRateLimits()
+    }
+}
+private struct ProviderScopedDoubaoPlanReader: DoubaoPlanUsageReader {
+    let providerID: ProviderID
+    let base: any DoubaoPlanUsageReader
+
+    func readPlanUsage() async throws -> Data {
+        guard providerID == .doubao else {
+            throw CollectionError(
+                kind: .sourceUnavailable,
+                diagnosticCode: "capability.doubao-plan.denied"
+            )
+        }
+        return try await base.readPlanUsage()
     }
 }
 

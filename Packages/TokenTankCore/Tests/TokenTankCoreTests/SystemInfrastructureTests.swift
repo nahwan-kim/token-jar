@@ -374,64 +374,17 @@ struct SystemInfrastructureTests {
     func networkAllowlist() async {
         let client = URLSessionNetworkClient()
         let cursorURL = URL(string: "https://cursor.com/api/usage-summary")!
+        let grokURL = URL(string: "https://cli-chat-proxy.grok.com/v1/billing?format=credits")!
         let approvedRequests = [
-            NetworkRequest(
-                providerID: .claude,
-                url: URL(string: "https://api.anthropic.com/v1/organizations/usage_report/messages?starting_at=2026-08-01T00%3A00%3A00Z&ending_at=2026-09-01T00%3A00%3A00Z&bucket_width=1d")!
-            ),
-            NetworkRequest(
-                providerID: .claude,
-                url: URL(string: "https://api.anthropic.com/v1/organizations/usage_report/messages?starting_at=2026-08-01T00%3A00%3A00Z&ending_at=2026-09-01T00%3A00%3A00Z&bucket_width=1d&page=next-page")!
-            ),
-            NetworkRequest(
-                providerID: .grok,
-                url: URL(string: "https://management-api.x.ai/v1/billing/teams/team-123/prepaid/balance")!
-            ),
+            NetworkRequest(providerID: .grok, url: grokURL),
             NetworkRequest(providerID: .cursor, url: cursorURL),
-            NetworkRequest(
-                providerID: .doubao,
-                url: URL(string: "https://open.volcengineapi.com?Action=GetCodingPlanUsage&Version=2024-01-01")!,
-                method: .post
-            ),
-            NetworkRequest(
-                providerID: .doubao,
-                url: URL(string: "https://ark.cn-beijing.volces.com/?Action=GetAFPUsage&Version=2024-01-01")!,
-                method: .post
-            ),
         ]
         #expect(approvedRequests.allSatisfy(URLSessionNetworkClient.isAllowed))
-        var oversizedClaudeComponents = URLComponents(
-            string: "https://api.anthropic.com/v1/organizations/usage_report/messages"
-        )!
-        oversizedClaudeComponents.queryItems = [
-            URLQueryItem(name: "starting_at", value: String(repeating: "2", count: 16 * 1024)),
-            URLQueryItem(name: "ending_at", value: "2026-09-01T00:00:00Z"),
-            URLQueryItem(name: "bucket_width", value: "1d"),
-        ]
-        let oversizedClaudeURL = oversizedClaudeComponents.url!
         let requests: [(NetworkRequest, String)] = [
             (
                 NetworkRequest(
                     providerID: .claude,
-                    url: URL(string: "https://api.anthropic.com/v1/organizations/usage_report/messages?starting_at=2026-08-02T00%3A00%3A00Z&ending_at=2026-09-01T00%3A00%3A00Z&bucket_width=1d")!
-                ),
-                "network.destination-not-allowlisted"
-            ),
-            (
-                NetworkRequest(
-                    providerID: .claude,
-                    url: URL(string: "https://api.anthropic.com/v1/organizations/usage_report/messages?starting_at=2026-08-01T00%3A00%3A00Z&ending_at=2026-09-02T00%3A00%3A00Z&bucket_width=1d")!
-                ),
-                "network.destination-not-allowlisted"
-            ),
-            (
-                NetworkRequest(providerID: .claude, url: oversizedClaudeURL),
-                "network.destination-not-allowlisted"
-            ),
-            (
-                NetworkRequest(
-                    providerID: .claude,
-                    url: URL(string: "https://example.com/v1/organizations/usage_report/messages?starting_at=a&ending_at=b&bucket_width=1d")!
+                    url: URL(string: "https://api.anthropic.com/v1/organizations/usage_report/messages?starting_at=2026-08-01T00%3A00%3A00Z&ending_at=2026-09-01T00%3A00%3A00Z&bucket_width=1d")!
                 ),
                 "network.destination-not-allowlisted"
             ),
@@ -460,24 +413,8 @@ struct SystemInfrastructureTests {
             ),
             (
                 NetworkRequest(
-                    providerID: .claude,
-                    url: URL(string: "https://api.anthropic.com/v1/organizations/usage_report/messages?starting_at=2026-08-01T00%3A00%3A00Z&ending_at=2026-09-01T00%3A00%3A00Z&bucket_width=1d")!,
-                    body: Data("unexpected".utf8)
-                ),
-                "network.destination-not-allowlisted"
-            ),
-            (
-                NetworkRequest(
                     providerID: .grok,
-                    url: URL(string: "https://management-api.x.ai/v1/billing/teams/team-123/prepaid/balance")!,
-                    body: Data("unexpected".utf8)
-                ),
-                "network.destination-not-allowlisted"
-            ),
-            (
-                NetworkRequest(
-                    providerID: .grok,
-                    url: URL(string: "https://management-api.x.ai/v1/billing/teams/team%2Falpha/prepaid/balance")!
+                    url: URL(string: "https://management-api.x.ai/v1/billing/teams/team-123/prepaid/balance")!
                 ),
                 "network.destination-not-allowlisted"
             ),
@@ -522,7 +459,7 @@ struct SystemInfrastructureTests {
                     method: .post,
                     body: Data(count: 1_048_577)
                 ),
-                "network.request-size-limit"
+                "network.destination-not-allowlisted"
             ),
             (
                 NetworkRequest(
@@ -559,12 +496,11 @@ struct SystemInfrastructureTests {
             maximumResponseBytes: 3
         )
         let request = NetworkRequest(
-            providerID: .claude,
-            url: URL(string: "https://api.anthropic.com/v1/organizations/usage_report/messages?starting_at=2026-08-01T00%3A00%3A00Z&ending_at=2026-09-01T00%3A00%3A00Z&bucket_width=1d")!,
+            providerID: .cursor,
+            url: URL(string: "https://cursor.com/api/usage-summary")!,
             headers: [
                 "Accept": "application/json",
-                "anthropic-version": "2023-06-01",
-                "x-api-key": "test-key",
+                "Cookie": "WorkosCursorSessionToken=user%3A%3Atoken",
             ]
         )
 
@@ -721,30 +657,19 @@ struct SystemInfrastructureTests {
     @Test("Keychain credentials use the data-protection Keychain and frozen accessibility class")
     func keychainAccessibility() async {
         let service = "com.tokentank.tests.\(UUID().uuidString)"
-        let store = KeychainCredentialStore(service: service)
-        let id = CredentialID(providerID: .grok, name: "management-api-key")
-
+        let id = CredentialID(providerID: .doubao, name: "access-key-id")
         await expectCollectionError(
             kind: .sourceUnavailable,
             code: "keychain.credential-id-denied"
         ) {
-            try await store.write(
-                "blocked",
-                for: CredentialID(providerID: .cursor, name: "access-token")
-            )
-        }
-        await expectCollectionError(
-            kind: .malformedResponse,
-            code: "keychain.value-invalid"
-        ) {
-            try await store.write(String(repeating: "a", count: 16 * 1024 + 1), for: id)
+            try await KeychainCredentialStore(service: service).write("blocked", for: id)
         }
 
         let query = KeychainCredentialStore.dataProtectionQuery(service: service, id: id)
         #expect(query[kSecClass as String] as? String == kSecClassGenericPassword as String)
         #expect(query[kSecUseDataProtectionKeychain as String] as? Bool == true)
         #expect(query[kSecAttrService as String] as? String == service)
-        #expect(query[kSecAttrAccount as String] as? String == "grok.management-api-key")
+        #expect(query[kSecAttrAccount as String] as? String == "doubao.access-key-id")
         #expect(query[kSecAttrSynchronizable as String] as? Bool == false)
         #expect(
             query[kSecAttrAccessible as String] as? String

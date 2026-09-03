@@ -28,40 +28,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var credentialErrorCodes: [ProviderID: String] = [:]
     @Published private var credentialDrafts: [String: String] = [:]
 
-    let credentialGroups: [CredentialGroup] = [
-        CredentialGroup(
-            providerID: .claude,
-            fields: [
-                CredentialField(
-                    providerID: .claude,
-                    name: "admin-api-key",
-                    labelKey: "credential.claude.admin_key"
-                ),
-            ]
-        ),
-        CredentialGroup(
-            providerID: .grok,
-            fields: [
-                CredentialField(
-                    providerID: .grok,
-                    name: "management-api-key",
-                    labelKey: "credential.grok.management_key"
-                ),
-                CredentialField(
-                    providerID: .grok,
-                    name: "team-id",
-                    labelKey: "credential.grok.team_id"
-                ),
-            ]
-        ),
-        CredentialGroup(
-            providerID: .doubao,
-            fields: [
-                CredentialField(providerID: .doubao, name: "access-key-id", labelKey: "credential.doubao.access_key"),
-                CredentialField(providerID: .doubao, name: "secret-access-key", labelKey: "credential.doubao.secret_key"),
-            ]
-        ),
-    ]
+    let credentialGroups: [CredentialGroup] = []
 
     private let sourceDescriptors: [ProviderID: ProviderSourceDescriptor]
     private let credentialStore: any AppCredentialStore
@@ -105,9 +72,10 @@ final class AppModel: ObservableObject {
             let context = CollectionContext(
                 network: URLSessionNetworkClient(),
                 credentials: credentials,
-                externalSessions: NoExternalSessionReader(),
+                externalSessions: filesystemPolicy,
                 sqlite: SQLiteExternalSessionReader(policy: filesystemPolicy),
                 codexAccount: CodexAppServerUsageReader(),
+                doubaoPlan: ArkCLIPlanUsageReader(),
                 clock: SystemClock(),
                 diagnostics: diagnostics
             )
@@ -224,13 +192,21 @@ final class AppModel: ObservableObject {
         startRefresh(providerID: providerID)
     }
 
-    func menuPercentage(for preference: ProviderPreference) -> String {
+    func menuValue(for preference: ProviderPreference) -> String {
         guard
             let selectedID = preference.representativeQuotaID,
-            let quota = states[preference.providerID]?.snapshot?.quotas.first(where: { $0.id == selectedID }),
-            let raw = quota.percentage.rawText
+            let quota = states[preference.providerID]?.snapshot?.quotas.first(where: { $0.id == selectedID })
         else { return "—" }
-        return raw.contains("%") ? raw : "\(raw)%"
+        if let raw = quota.percentage.rawText {
+            return raw.contains("%") ? raw : "\(raw)%"
+        }
+        if let used = quota.used {
+            return used.rawText
+        }
+        if let remaining = quota.remaining {
+            return remaining.rawText
+        }
+        return "—"
     }
 
     var orderedPreferences: [ProviderPreference] {

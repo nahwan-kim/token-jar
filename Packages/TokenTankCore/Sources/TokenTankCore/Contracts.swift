@@ -120,6 +120,9 @@ public protocol ReadOnlySQLiteReader: Sendable {
 public protocol CodexAccountUsageReader: Sendable {
     func readRateLimits() async throws -> Data
 }
+public protocol DoubaoPlanUsageReader: Sendable {
+    func readPlanUsage() async throws -> Data
+}
 
 public protocol TokenTankClock: Sendable {
     func now() async -> Date
@@ -169,6 +172,7 @@ public struct CollectionContext: Sendable {
     public let externalSessions: any ExternalSessionReader
     public let sqlite: any ReadOnlySQLiteReader
     public let codexAccount: any CodexAccountUsageReader
+    public let doubaoPlan: any DoubaoPlanUsageReader
     public let clock: any TokenTankClock
     public let diagnostics: any DiagnosticsSink
     public let correlationID: UUID
@@ -179,6 +183,7 @@ public struct CollectionContext: Sendable {
         externalSessions: any ExternalSessionReader,
         sqlite: any ReadOnlySQLiteReader,
         codexAccount: any CodexAccountUsageReader,
+        doubaoPlan: any DoubaoPlanUsageReader,
         clock: any TokenTankClock,
         diagnostics: any DiagnosticsSink,
         correlationID: UUID = UUID()
@@ -188,6 +193,7 @@ public struct CollectionContext: Sendable {
         self.externalSessions = externalSessions
         self.sqlite = sqlite
         self.codexAccount = codexAccount
+        self.doubaoPlan = doubaoPlan
         self.clock = clock
         self.diagnostics = diagnostics
         self.correlationID = correlationID
@@ -262,6 +268,16 @@ public struct NoCodexAccountUsageReader: CodexAccountUsageReader {
         throw CollectionError(
             kind: .sourceUnavailable,
             diagnosticCode: "codex.app-server.disabled"
+        )
+    }
+}
+public struct NoDoubaoPlanUsageReader: DoubaoPlanUsageReader {
+    public init() {}
+
+    public func readPlanUsage() async throws -> Data {
+        throw CollectionError(
+            kind: .sourceUnavailable,
+            diagnosticCode: "doubao.arkcli.disabled"
         )
     }
 }

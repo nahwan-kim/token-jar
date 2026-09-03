@@ -9,12 +9,12 @@ public struct GrokAdapter: ProviderAdapter {
 
     public var sourceDescriptor: ProviderSourceDescriptor {
         ProviderSourceDescriptor(
-            id: "xai.management-api.prepaid-balance",
-            name: "xAI Management API prepaid balance",
-            kind: .officialAPI,
-            credentialOwnership: .tokenTank,
-            documentationURL: URL(string: "https://docs.x.ai/developers/management-api-guide"),
-            detail: "Official xAI developer prepaid balance. This source is never presented as consumer SuperGrok subscription quota."
+            id: "grok.cli-proxy.credits",
+            name: "Grok CLI SuperGrok credits",
+            kind: .localSession,
+            credentialOwnership: .externalProvider,
+            documentationURL: URL(string: "https://github.com/steipete/CodexBar/blob/main/docs/grok.md"),
+            detail: "Read-only Grok CLI ~/.grok/auth.json session plus cli-chat-proxy.grok.com/v1/billing?format=credits. This is the CodexBar SuperGrok credits path. Token Tank never copies or refreshes the token, never imports browser cookies, never uses grok agent stdio, and never calls the xAI Management prepaid-balance API."
         )
     }
 
@@ -22,34 +22,39 @@ public struct GrokAdapter: ProviderAdapter {
 
     public func probeAvailability(context: CollectionContext) async -> ProviderAvailability {
         do {
-            _ = try await grokCredentials(in: context)
+            let now = await context.clock.now()
+            _ = try grokSession(from: try await grokAuthFile(in: context), now: now)
             return .available(sourceDescriptor)
+        } catch is CancellationError {
+            return .unavailable(
+                CollectionError(kind: .cancelled, diagnosticCode: "grok.cli-session.cancelled")
+            )
         } catch let error as CollectionError {
-            if error.kind == .appCredentialMissing {
+            if error.kind == .externalSessionMissing {
                 return .needsConfiguration(code: error.diagnosticCode)
             }
             return .unavailable(error)
         } catch {
             return .unavailable(
-                CollectionError(kind: .keychainUnavailable, diagnosticCode: "grok.credentials.unavailable")
+                CollectionError(kind: .sourceUnavailable, diagnosticCode: "grok.cli-session.unavailable")
             )
         }
     }
 
     public func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
-        let credentials = try await grokCredentials(in: context)
         let now = await context.clock.now()
-        guard let url = URL(string: "https://management-api.x.ai/v1/billing/teams/\(credentials.teamID)/prepaid/balance") else {
-            throw CollectionError(kind: .malformedResponse, diagnosticCode: "grok.request.url-invalid")
+        let session = try grokSession(from: try await grokAuthFile(in: context), now: now)
+        guard let url = URL(string: "https://cli-chat-proxy.grok.com/v1/billing?format=credits") else {
+            throw grokMalformedError("grok.credits.request-url-invalid")
         }
-
         let request = NetworkRequest(
             providerID: .grok,
             url: url,
             method: .get,
             headers: [
-                "Authorization": "Bearer \(credentials.apiKey)",
-                "Accept": "application/json"
+                "Accept": "application/json",
+                "Authorization": "Bearer \(session.token)",
+                "x-xai-token-auth": "xai-grok-cli",
             ]
         )
         let response: NetworkResponse
@@ -60,7 +65,7 @@ public struct GrokAdapter: ProviderAdapter {
         } catch let error as CollectionError {
             throw error
         } catch {
-            throw CollectionError(kind: .transientNetwork, diagnosticCode: "grok.network.failed")
+            throw CollectionError(kind: .transientNetwork, diagnosticCode: "grok.credits.network-failed")
         }
         try grokValidate(response, now: now)
         return try Self.decodeSnapshot(from: response.body, refreshedAt: now)
@@ -71,113 +76,67 @@ public struct GrokAdapter: ProviderAdapter {
         refreshedAt: Date = Date()
     ) throws -> ProviderSnapshot {
         let root = try grokObject(from: data)
-        let (balanceKey, balanceValue): (String, Any?)
-        if let total = root["total"] as? [String: Any], total["val"] != nil {
-            balanceKey = "total.val"
-            balanceValue = total["val"]
-        } else if root["balance"] != nil {
-            balanceKey = "balance"
-            balanceValue = root["balance"]
-        } else if root["prepaid_balance"] != nil {
-            balanceKey = "prepaid_balance"
-            balanceValue = root["prepaid_balance"]
-        } else if root["prepaidBalance"] != nil {
-            balanceKey = "prepaidBalance"
-            balanceValue = root["prepaidBalance"]
-        } else {
-            throw grokSchemaError("grok.balance.missing")
-        }
-        guard let balance = grokDecimal(balanceValue) else {
-            throw grokSchemaError("grok.balance.invalid")
+        let config = (root["config"] as? [String: Any]) ?? root
+        var fields: [String: String] = [:]
+        grokCopyScalarFields(from: config, into: &fields)
+        if root["config"] != nil {
+            grokCopyScalarFields(from: root, prefix: "root.", into: &fields)
         }
 
-        var fields: [String: String] = ["balanceField": balanceKey, balanceKey: balance.raw]
-        grokCopyScalarFields(from: root, into: &fields)
-        if let total = root["total"] as? [String: Any] {
-            grokCopyScalarFields(from: total, prefix: "total.", into: &fields)
-        }
-        let unit = grokString(root["currency"])
-            ?? grokString(root["unit"])
-            ?? (balanceKey == "total.val" ? "USD cents" : nil)
-        let resetValue = root["resetsAt"]
-            ?? root["resetAt"]
-            ?? root["reset_at"]
-            ?? root["expiresAt"]
-            ?? root["expires_at"]
+        let percent = grokCreditPercent(from: config, fields: &fields)
+        let resetValue = grokNested(config, ["currentPeriod", "end"])
+            ?? config["billingPeriodEnd"]
+            ?? config["billing_period_end"]
         if let resetValue, let raw = grokRawText(resetValue) {
             fields["resetSource"] = raw
         }
 
-        var quotas: [RawQuotaItem] = [
-            RawQuotaItem(
-                id: RawQuotaID(rawValue: "prepaid-balance"),
-                originalName: balanceKey,
-                used: nil,
-                remaining: SourceValue(value: balance.value, rawText: balance.raw, unit: unit),
-                percentage: .missing(meaning: .remaining),
-                resetsAt: grokDate(resetValue),
-                sourceFields: fields
-            )
-        ]
-        guard let changes = root["changes"] as? [Any] else {
-            throw grokSchemaError("grok.balance-changes.missing-or-invalid")
-        }
-        for value in changes {
-            guard let change = value as? [String: Any] else {
-                throw grokSchemaError("grok.balance-change.invalid")
-            }
-            guard
-                let amountObject = change["amount"] as? [String: Any],
-                let amount = grokDecimal(amountObject["val"])
-            else {
-                throw grokSchemaError("grok.balance-change.amount-invalid")
-            }
-            guard let changeName = grokString(change["changeOrigin"])
-                ?? grokString(change["change_origin"])
-            else {
-                throw grokSchemaError("grok.balance-change.origin-missing")
-            }
-            guard grokString(change["createTime"] ?? change["create_time"] ?? change["createTs"]) != nil else {
-                throw grokSchemaError("grok.balance-change.time-missing")
-            }
-            var changeFields: [String: String] = [:]
-            grokCopyScalarFields(from: change, into: &changeFields)
-            quotas.append(
-                RawQuotaItem(
-                    id: StableSourceID.make(
-                        prefix: "grok-change",
-                        components: changeFields.keys.sorted().map {
-                            "\($0)=\(changeFields[$0] ?? "")"
-                        }
-                    ),
-                    originalName: changeName,
-                    used: SourceValue(value: amount.value, rawText: amount.raw, unit: unit),
-                    remaining: nil,
-                    percentage: .missing(meaning: .used),
-                    resetsAt: nil,
-                    sourceFields: changeFields
+        let remaining: SourceValue?
+        if let percent {
+            let leftover = Decimal(100) - percent.value
+            remaining = leftover >= 0
+                ? SourceValue(
+                    value: leftover,
+                    rawText: NSDecimalNumber(decimal: leftover).stringValue,
+                    unit: "%"
                 )
-            )
+                : nil
+        } else {
+            remaining = nil
         }
-        guard Set(quotas.map(\.id)).count == quotas.count else {
-            throw grokSchemaError("grok.balance-change.duplicate-identity")
-        }
+
+        let quota = RawQuotaItem(
+            id: "credits",
+            originalName: "credits",
+            used: percent.map { SourceValue(value: $0.value, rawText: $0.raw, unit: "%") },
+            remaining: remaining,
+            percentage: percent.map {
+                SourcePercentage(value: $0.value, rawText: $0.raw, meaning: .used)
+            } ?? .missing(meaning: .used),
+            resetsAt: grokDate(resetValue),
+            sourceFields: fields
+        )
         return ProviderSnapshot(
             providerID: .grok,
             source: GrokAdapter().sourceDescriptor,
-            quotas: quotas,
+            quotas: [quota],
             refreshedAt: refreshedAt
         )
     }
 
-    internal static func decode(data: Data, refreshedAt: Date) throws -> ProviderSnapshot {
+    public static func decode(data: Data, refreshedAt: Date) throws -> ProviderSnapshot {
         try decodeSnapshot(from: data, refreshedAt: refreshedAt)
     }
 }
 
-private struct GrokCredentials {
-    let apiKey: String
-    let teamID: String
+let grokAuthFileRequest = ExternalFileRequest(
+    providerID: .grok,
+    relativePath: ".grok/auth.json",
+    maximumBytes: 64 * 1024
+)
+
+private struct GrokSession {
+    let token: String
 }
 
 private struct GrokDecimalValue {
@@ -185,92 +144,145 @@ private struct GrokDecimalValue {
     let raw: String
 }
 
-private func grokCredentials(in context: CollectionContext) async throws -> GrokCredentials {
-    let keyID = CredentialID(providerID: .grok, name: "management-api-key")
-    let teamID = CredentialID(providerID: .grok, name: "team-id")
+private func grokAuthFile(in context: CollectionContext) async throws -> Data {
     do {
-        guard let apiKey = try await context.credentials.read(keyID),
-              let team = try await context.credentials.read(teamID)
-        else {
-            throw CollectionError(kind: .appCredentialMissing, diagnosticCode: "grok.credentials.missing")
-        }
-        let normalizedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedTeamID = team.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedAPIKey.isEmpty, !normalizedTeamID.isEmpty else {
-            throw CollectionError(kind: .appCredentialMissing, diagnosticCode: "grok.credentials.missing")
-        }
-        guard grokTeamIDIsAllowed(normalizedTeamID) else {
-            throw CollectionError(kind: .malformedResponse, diagnosticCode: "grok.team-id.invalid")
-        }
-        return GrokCredentials(apiKey: normalizedAPIKey, teamID: normalizedTeamID)
+        return try await context.externalSessions.read(grokAuthFileRequest)
     } catch let error as CollectionError {
+        if error.kind == .externalSessionMissing {
+            throw CollectionError(
+                kind: .externalSessionMissing,
+                diagnosticCode: "grok.cli-session.missing"
+            )
+        }
         throw error
     } catch is CancellationError {
         throw CancellationError()
     } catch {
-        throw CollectionError(kind: .keychainUnavailable, diagnosticCode: "grok.credentials.unavailable")
+        throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "grok.cli-session.unavailable")
     }
 }
 
-private func grokTeamIDIsAllowed(_ value: String) -> Bool {
-    let bytes = Array(value.utf8)
-    guard !bytes.isEmpty, bytes.count <= 256 else { return false }
-    return bytes.allSatisfy { byte in
-        (byte >= 0x30 && byte <= 0x39)
-            || (byte >= 0x41 && byte <= 0x5A)
-            || (byte >= 0x61 && byte <= 0x7A)
-            || byte == 0x2D
-            || byte == 0x5F
+private func grokSession(from data: Data, now: Date) throws -> GrokSession {
+    let root = try grokObject(from: data, code: "grok.cli-session.invalid-json")
+    let preferred = grokPreferredEntry(from: root)
+    guard let token = grokString(preferred["key"]), grokTokenLooksUsable(token) else {
+        throw CollectionError(kind: .authenticationRejected, diagnosticCode: "grok.cli-session.token-missing")
     }
+    if let expiry = grokDate(preferred["expires_at"]), expiry.timeIntervalSince1970 <= now.timeIntervalSince1970 + 60 {
+        throw CollectionError(kind: .authenticationRevoked, diagnosticCode: "grok.cli-session.expired")
+    }
+    return GrokSession(token: token)
+}
+
+private func grokPreferredEntry(from root: [String: Any]) -> [String: Any] {
+    let scopes = root.keys.sorted()
+    if let preferred = scopes.first(where: { $0.hasPrefix("https://auth.x.ai::") }),
+       let entry = root[preferred] as? [String: Any]
+    {
+        return entry
+    }
+    if let entry = root["https://accounts.x.ai/sign-in"] as? [String: Any] {
+        return entry
+    }
+    for key in scopes {
+        if let entry = root[key] as? [String: Any], grokString(entry["key"]) != nil {
+            return entry
+        }
+    }
+    return [:]
+}
+
+private func grokTokenLooksUsable(_ token: String) -> Bool {
+    let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, trimmed.utf8.count <= 8_192 else { return false }
+    let lowered = trimmed.lowercased()
+    if lowered.hasPrefix("xai-") { return false }
+    if lowered.contains("cookie:") { return false }
+    if trimmed.contains("="), trimmed.contains(";") { return false }
+    return trimmed.unicodeScalars.allSatisfy { scalar in
+        scalar.value == 0x09 || (scalar.value >= 0x20 && scalar.value != 0x7F)
+    }
+}
+
+private func grokCreditPercent(
+    from config: [String: Any],
+    fields: inout [String: String]
+) -> GrokDecimalValue? {
+    if let explicit = grokNonnegativeDecimal(config["creditUsagePercent"] ?? config["credit_usage_percent"]) {
+        fields["percentField"] = "creditUsagePercent"
+        return explicit
+    }
+    let used = grokCents(config["onDemandUsed"] ?? config["on_demand_used"])
+    let cap = grokCents(config["onDemandCap"] ?? config["on_demand_cap"])
+    guard let used, let cap, cap.value > 0 else { return nil }
+    let derived = (used.value / cap.value) * Decimal(100)
+    let raw = NSDecimalNumber(decimal: derived).stringValue
+    fields["percentField"] = "onDemandUsed/onDemandCap"
+    fields["derivedPercentage"] = raw
+    return GrokDecimalValue(value: derived, raw: raw)
+}
+
+private func grokCents(_ value: Any?) -> GrokDecimalValue? {
+    if let object = value as? [String: Any] {
+        return grokNonnegativeDecimal(object["val"])
+    }
+    return grokNonnegativeDecimal(value)
 }
 
 private func grokValidate(_ response: NetworkResponse, now: Date) throws {
     switch response.statusCode {
     case 200..<300:
-        guard !response.body.isEmpty else { throw grokMalformedError("grok.response.empty-body") }
+        guard !response.body.isEmpty else {
+            throw grokMalformedError("grok.credits.empty-body")
+        }
     case 401:
-        throw CollectionError(kind: .authenticationRejected, diagnosticCode: "grok.authentication.rejected")
+        throw CollectionError(kind: .authenticationRejected, diagnosticCode: "grok.credits.authentication.rejected")
     case 403:
-        throw CollectionError(kind: .authenticationRevoked, diagnosticCode: "grok.authentication.revoked")
+        throw CollectionError(kind: .authenticationRevoked, diagnosticCode: "grok.credits.authentication.revoked")
     case 429:
         throw CollectionError(
             kind: .rateLimited,
-            diagnosticCode: "grok.rate-limited",
-            retryAfter: grokRetryAfter(response.header("Retry-After"), now: now)
+            diagnosticCode: "grok.credits.rate-limited",
+            retryAfter: grokRetryAfter(response.headers, now: now)
         )
-    case 408, 500...599:
-        throw CollectionError(kind: .transientNetwork, diagnosticCode: "grok.server.transient")
     default:
-        throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "grok.http.\(response.statusCode)")
+        throw CollectionError(kind: .transientNetwork, diagnosticCode: "grok.credits.http-\(response.statusCode)")
     }
 }
 
-private func grokRetryAfter(_ value: String?, now: Date) -> Date? {
-    guard let value else { return nil }
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    if let seconds = TimeInterval(trimmed), seconds >= 0 {
-        return now.addingTimeInterval(seconds)
-    }
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.timeZone = TimeZone(secondsFromGMT: 0)
-    formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-    return formatter.date(from: trimmed)
+private func grokRetryAfter(_ headers: [String: String], now: Date) -> Date? {
+    let raw = headers.first { $0.key.lowercased() == "retry-after" }?.value
+    guard let raw, let seconds = TimeInterval(raw), seconds > 0 else { return nil }
+    return now.addingTimeInterval(seconds)
 }
 
-private func grokObject(from data: Data) throws -> [String: Any] {
-    guard !data.isEmpty else { throw grokMalformedError("grok.response.empty-body") }
+private func grokObject(from data: Data, code: String = "grok.credits.invalid-json") throws -> [String: Any] {
+    guard !data.isEmpty else { throw grokMalformedError("grok.credits.empty-body") }
     do {
         let object = try JSONSerialization.jsonObject(with: data, options: [])
         guard let dictionary = object as? [String: Any] else {
-            throw grokSchemaError("grok.response.object-required")
+            throw grokSchemaError("grok.credits.object-required")
         }
         return dictionary
     } catch let error as CollectionError {
         throw error
     } catch {
-        throw grokMalformedError("grok.response.invalid-json")
+        throw grokMalformedError(code)
     }
+}
+
+private func grokNested(_ object: [String: Any], _ path: [String]) -> Any? {
+    var current: Any? = object
+    for key in path {
+        guard let nested = current as? [String: Any] else { return nil }
+        current = nested[key]
+    }
+    return current
+}
+
+private func grokNonnegativeDecimal(_ value: Any?) -> GrokDecimalValue? {
+    guard let parsed = grokDecimal(value), parsed.value >= 0 else { return nil }
+    return parsed
 }
 
 private func grokDecimal(_ value: Any?) -> GrokDecimalValue? {
@@ -281,25 +293,36 @@ private func grokDecimal(_ value: Any?) -> GrokDecimalValue? {
         }
         return GrokDecimalValue(value: decimal, raw: text)
     }
-    guard let number = value as? NSNumber, !JSONScalar.isBoolean(number) else { return nil }
-    return GrokDecimalValue(value: number.decimalValue, raw: number.stringValue)
-}
-
-private func grokRawText(_ value: Any?) -> String? {
-    if let text = value as? String { return text }
-    if let number = value as? NSNumber, !JSONScalar.isBoolean(number) { return number.stringValue }
+    if let number = value as? NSNumber, !JSONScalar.isBoolean(number) {
+        return GrokDecimalValue(value: number.decimalValue, raw: number.stringValue)
+    }
     return nil
 }
 
 private func grokString(_ value: Any?) -> String? {
-    guard let raw = grokRawText(value) else { return nil }
-    return raw.isEmpty ? nil : raw
+    if let text = value as? String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+    if let number = value as? NSNumber, !JSONScalar.isBoolean(number) {
+        return number.stringValue
+    }
+    return nil
+}
+
+private func grokRawText(_ value: Any?) -> String? {
+    if let text = grokString(value) { return text }
+    if let number = value as? NSNumber, !JSONScalar.isBoolean(number) { return number.stringValue }
+    if let flag = value as? Bool { return flag ? "true" : "false" }
+    return nil
 }
 
 private func grokDate(_ value: Any?) -> Date? {
-    if let text = value as? String {
-        let formatter = ISO8601DateFormatter()
-        if let date = formatter.date(from: text) { return date }
+    if let text = grokString(value) {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: text) { return date }
+        if let date = ISO8601DateFormatter().date(from: text) { return date }
         guard let decimal = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")) else { return nil }
         return grokEpochDate(decimal)
     }
@@ -309,25 +332,18 @@ private func grokDate(_ value: Any?) -> Date? {
 
 private func grokEpochDate(_ value: Decimal) -> Date? {
     let seconds = NSDecimalNumber(decimal: value).doubleValue
-    guard seconds > 0 else { return nil }
+    guard seconds.isFinite, seconds > 0 else { return nil }
     return Date(timeIntervalSince1970: abs(seconds) > 100_000_000_000 ? seconds / 1_000 : seconds)
 }
 
-private func grokCopyScalarFields(from object: [String: Any], into fields: inout [String: String]) {
-    grokCopyScalarFields(from: object, prefix: "", into: &fields)
-}
 private func grokCopyScalarFields(
     from object: [String: Any],
-    prefix: String,
+    prefix: String = "",
     into fields: inout [String: String]
 ) {
     for key in object.keys.sorted() {
         if let nested = object[key] as? [String: Any] {
-            grokCopyScalarFields(
-                from: nested,
-                prefix: "\(prefix)\(key).",
-                into: &fields
-            )
+            grokCopyScalarFields(from: nested, prefix: "\(prefix)\(key).", into: &fields)
         } else if let raw = grokRawText(object[key]) {
             fields["\(prefix)\(key)"] = raw
         }

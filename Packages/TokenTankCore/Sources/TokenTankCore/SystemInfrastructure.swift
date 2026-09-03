@@ -145,16 +145,12 @@ public actor URLSessionNetworkClient: NetworkClient {
 
         let expectedNames: Set<String>
         switch request.providerID {
-        case .codex:
+        case .codex, .claude, .doubao:
             expectedNames = []
-        case .claude:
-            expectedNames = ["accept", "anthropic-version", "x-api-key"]
         case .grok:
-            expectedNames = ["accept", "authorization"]
+            expectedNames = ["accept", "authorization", "x-xai-token-auth"]
         case .cursor:
             expectedNames = ["accept", "cookie"]
-        case .doubao:
-            expectedNames = ["authorization", "content-type", "host", "x-content-sha256", "x-date"]
         }
         return Set(normalizedNames) == expectedNames
     }
@@ -207,43 +203,16 @@ public actor URLSessionNetworkClient: NetworkClient {
         else { return false }
 
         switch request.providerID {
-        case .codex:
+        case .codex, .claude, .doubao:
             return false
-        case .claude:
-            let items = components.queryItems ?? []
-            let names = Set(items.map(\.name))
-            let requiredNames: Set<String> = ["starting_at", "ending_at", "bucket_width"]
-            let page = items.first(where: { $0.name == "page" })?.value
-            let namesAllowed = names == requiredNames || names == requiredNames.union(["page"])
-            let pageAllowed = page.map { !$0.isEmpty && $0.utf8.count <= 2_048 } ?? true
-            return request.method == .get
-                && host == "api.anthropic.com"
-                && components.percentEncodedPath == "/v1/organizations/usage_report/messages"
-                && items.count == names.count
-                && namesAllowed
-                && items.first(where: { $0.name == "bucket_width" })?.value == "1d"
-                && pageAllowed
-                && claudeWindowIsAllowed(items)
-                && request.body == nil
         case .grok:
-            let prefix = "/v1/billing/teams/"
-            let suffix = "/prepaid/balance"
-            let path = components.percentEncodedPath
-            guard path.hasPrefix(prefix), path.hasSuffix(suffix) else { return false }
-            let teamID = path.dropFirst(prefix.count).dropLast(suffix.count)
-            let teamIDAllowed = teamID.utf8.allSatisfy { byte in
-                (byte >= 0x30 && byte <= 0x39)
-                    || (byte >= 0x41 && byte <= 0x5A)
-                    || (byte >= 0x61 && byte <= 0x7A)
-                    || byte == 0x2D
-                    || byte == 0x5F
-            }
+            let items = components.queryItems ?? []
             return request.method == .get
-                && host == "management-api.x.ai"
-                && !teamID.isEmpty
-                && teamID.utf8.count <= 256
-                && teamIDAllowed
-                && components.query == nil
+                && host == "cli-chat-proxy.grok.com"
+                && components.percentEncodedPath == "/v1/billing"
+                && items.count == 1
+                && items.first?.name == "format"
+                && items.first?.value == "credits"
                 && request.body == nil
         case .cursor:
             return request.method == .get
@@ -251,60 +220,8 @@ public actor URLSessionNetworkClient: NetworkClient {
                 && components.percentEncodedPath == "/api/usage-summary"
                 && components.query == nil
                 && request.body == nil
-        case .doubao:
-            let items = components.queryItems ?? []
-            guard items.count == 2 else { return false }
-            let action = items.first(where: { $0.name == "Action" })?.value
-            let version = items.first(where: { $0.name == "Version" })?.value
-            return request.method == .post
-                && (components.percentEncodedPath.isEmpty || components.percentEncodedPath == "/")
-                && version == "2024-01-01"
-                && (
-                    (host == "open.volcengineapi.com" && action == "GetCodingPlanUsage")
-                        || (host == "ark.cn-beijing.volces.com" && action == "GetAFPUsage")
-                )
         }
     }
-
-    private static func claudeWindowIsAllowed(_ items: [URLQueryItem]) -> Bool {
-        guard
-            let startRaw = items.first(where: { $0.name == "starting_at" })?.value,
-            let endRaw = items.first(where: { $0.name == "ending_at" })?.value,
-            startRaw.utf8.count == 20,
-            endRaw.utf8.count == 20
-        else { return false }
-
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
-        formatter.isLenient = false
-        guard
-            let start = formatter.date(from: startRaw),
-            let end = formatter.date(from: endRaw),
-            formatter.string(from: start) == startRaw,
-            formatter.string(from: end) == endRaw,
-            end >= start,
-            end.timeIntervalSince(start) <= 32 * 24 * 60 * 60
-        else { return false }
-
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        let startComponents = calendar.dateComponents(
-            [.year, .month, .day, .hour, .minute, .second],
-            from: start
-        )
-        guard let endLimit = calendar.date(byAdding: .month, value: 1, to: start) else {
-            return false
-        }
-        return startComponents.day == 1
-            && startComponents.hour == 0
-            && startComponents.minute == 0
-            && startComponents.second == 0
-            && end <= endLimit
-    }
-
 }
 
 private final class NoRedirectURLSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
@@ -402,14 +319,8 @@ public actor KeychainCredentialStore: AppCredentialStore {
     private static func validate(_ id: CredentialID) throws {
         let allowedNames: Set<String>
         switch id.providerID {
-        case .codex, .cursor:
+        case .codex, .claude, .grok, .cursor, .doubao:
             allowedNames = []
-        case .claude:
-            allowedNames = ["admin-api-key"]
-        case .grok:
-            allowedNames = ["management-api-key", "team-id"]
-        case .doubao:
-            allowedNames = ["access-key-id", "secret-access-key"]
         }
         guard allowedNames.contains(id.name) else {
             throw CollectionError(
@@ -1051,6 +962,168 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
             )
         }
         return try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
+    }
+}
+public actor ArkCLIPlanUsageReader: DoubaoPlanUsageReader {
+    private let executableCandidates: [URL]
+    private let timeout: Duration
+
+    public init(
+        executableCandidates: [URL] = ArkCLIPlanUsageReader.defaultExecutableCandidates,
+        timeout: Duration = .seconds(20)
+    ) {
+        self.executableCandidates = executableCandidates
+        self.timeout = timeout
+    }
+
+    public func readPlanUsage() async throws -> Data {
+        guard let executable = executableCandidates.first(where: {
+            FileManager.default.isExecutableFile(atPath: $0.path)
+        }) else {
+            throw CollectionError(
+                kind: .sourceUnavailable,
+                diagnosticCode: "doubao.arkcli.executable-missing"
+            )
+        }
+
+        let process = Process()
+        let output = Pipe()
+        let error = Pipe()
+        process.executableURL = executable
+        process.arguments = ["usage", "plan", "--format", "json"]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = output
+        process.standardError = error
+
+        do {
+            try process.run()
+        } catch {
+            throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "doubao.arkcli.launch-failed")
+        }
+        defer { Self.stop(process) }
+
+        let stdoutHandle = output.fileHandleForReading
+        let fileDescriptor = stdoutHandle.fileDescriptor
+        let timeout = timeout
+        let reader = Task.detached(priority: .utility) {
+            try Self.readBoundedOutput(fileDescriptor: fileDescriptor, timeout: timeout)
+        }
+        let data: Data
+        do {
+            data = try await withTaskCancellationHandler {
+                try await reader.value
+            } onCancel: {
+                reader.cancel()
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as CollectionError {
+            throw error
+        } catch {
+            throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "doubao.arkcli.read-failed")
+        }
+
+        process.waitUntilExit()
+        let stderr = error.fileHandleForReading.readDataToEndOfFile()
+        if process.terminationStatus != 0 {
+            if Self.looksLikeMissingSession(data) || Self.looksLikeMissingSession(stderr) {
+                throw CollectionError(
+                    kind: .externalSessionMissing,
+                    diagnosticCode: "doubao.arkcli.session-missing"
+                )
+            }
+            throw CollectionError(
+                kind: .sourceUnavailable,
+                diagnosticCode: "doubao.arkcli.exit-\(process.terminationStatus)"
+            )
+        }
+        guard !data.isEmpty else {
+            throw CollectionError(kind: .malformedResponse, diagnosticCode: "doubao.arkcli.empty-output")
+        }
+        return data
+    }
+
+    public static var defaultExecutableCandidates: [URL] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return [
+            URL(fileURLWithPath: "/opt/homebrew/bin/arkcli"),
+            URL(fileURLWithPath: "/usr/local/bin/arkcli"),
+            home.appendingPathComponent(".local/bin/arkcli"),
+            home.appendingPathComponent(".local/share/mise/shims/arkcli"),
+            home.appendingPathComponent(".bun/bin/arkcli"),
+        ]
+    }
+
+    private static func stop(_ process: Process) {
+        if process.isRunning {
+            process.terminate()
+            for _ in 0..<20 {
+                if !process.isRunning { break }
+                Darwin.usleep(50_000)
+            }
+        }
+        if process.isRunning {
+            _ = Darwin.kill(process.processIdentifier, SIGKILL)
+        }
+        process.waitUntilExit()
+    }
+
+    private nonisolated static func readBoundedOutput(
+        fileDescriptor: Int32,
+        timeout: Duration
+    ) throws -> Data {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        var data = Data()
+        var descriptor = pollfd(
+            fd: fileDescriptor,
+            events: Int16(POLLIN | POLLHUP | POLLERR),
+            revents: 0
+        )
+        while true {
+            if Task.isCancelled { throw CancellationError() }
+            let remaining = clock.now.duration(to: deadline)
+            guard remaining > .zero else {
+                throw CollectionError(
+                    kind: .sourceUnavailable,
+                    diagnosticCode: "doubao.arkcli.timeout"
+                )
+            }
+            let components = remaining.components
+            let remainingSeconds =
+                Double(components.seconds) + Double(components.attoseconds) / 1_000_000_000_000_000_000
+            let pollMilliseconds = max(1, min(100, Int(ceil(remainingSeconds * 1_000))))
+            descriptor.revents = 0
+            let pollResult = Darwin.poll(&descriptor, 1, Int32(pollMilliseconds))
+            if pollResult == 0 { continue }
+            if pollResult < 0 {
+                if errno == EINTR { continue }
+                throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "doubao.arkcli.read-failed")
+            }
+            var buffer = [UInt8](repeating: 0, count: 4_096)
+            let count = Darwin.read(fileDescriptor, &buffer, buffer.count)
+            if count == 0 { return data }
+            if count < 0 {
+                if errno == EINTR || errno == EAGAIN { continue }
+                throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "doubao.arkcli.read-failed")
+            }
+            data.append(contentsOf: buffer.prefix(count))
+            guard data.count <= 4 * 1024 * 1024 else {
+                throw CollectionError(
+                    kind: .malformedResponse,
+                    diagnosticCode: "doubao.arkcli.response-size-limit"
+                )
+            }
+        }
+    }
+
+    private static func looksLikeMissingSession(_ data: Data) -> Bool {
+        guard let text = String(data: data, encoding: .utf8)?.lowercased() else { return false }
+        return text.contains("auth login")
+            || text.contains("refresh_token")
+            || text.contains("sts")
+            || text.contains("not logged")
+            || text.contains("session")
     }
 }
 

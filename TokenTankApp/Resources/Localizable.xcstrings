@@ -1,41 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "credential.claude.admin_key" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Anthropic Admin API key" } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Anthropic 관리자 API 키" } }
-      }
-    },
-    "credential.doubao.access_key" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Volcano Access Key ID" } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Volcano Access Key ID" } }
-      }
-    },
-    "credential.doubao.secret_key" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Volcano Secret Access Key" } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Volcano Secret Access Key" } }
-      }
-    },
-    "credential.grok.management_key" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "xAI Management API key" } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "xAI Management API 키" } }
-      }
-    },
-    "credential.grok.team_id" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "xAI team ID" } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "xAI 팀 ID" } }
-      }
-    },
     "action.allow_system_settings" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -368,8 +333,8 @@
     "source.detail.claude" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Official Anthropic organization usage API. This is organization API activity, not Claude Pro/Max subscription quota." } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "공식 Anthropic 조직 사용량 API입니다. Claude Pro/Max 구독 할당량이 아니라 조직 API 활동입니다." } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read-only Claude Code local usage cache. Sign in through Claude; Token Tank never reads its credentials." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Claude Code 로컬 사용량 캐시를 읽기 전용으로 사용합니다. Claude에서 로그인하며 Token Tank는 자격 증명을 읽지 않습니다." } }
       }
     },
     "source.detail.codex" : {
@@ -389,15 +354,15 @@
     "source.detail.doubao" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Official Volcano Coding Plan usage source. Requires app-owned AK/SK credentials." } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "공식 Volcano Coding Plan 사용량 원본입니다. 앱이 소유한 AK/SK 자격 증명이 필요합니다." } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Official arkcli plan usage. Sign in through arkcli auth login; Token Tank never copies Volcengine credentials." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "공식 arkcli 플랜 사용량입니다. arkcli auth login으로 로그인하며 Token Tank는 Volcengine 자격 증명을 복사하지 않습니다." } }
       }
     },
     "source.detail.grok" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Official xAI Management prepaid balance. This is developer-platform billing, not consumer SuperGrok quota." } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "공식 xAI Management 선불 잔액입니다. 소비자 SuperGrok 할당량이 아니라 개발자 플랫폼 결제 정보입니다." } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read-only Grok CLI SuperGrok credits. Sign in through grok login; Token Tank never copies the token or imports cookies." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Grok CLI SuperGrok 크레딧을 읽기 전용으로 사용합니다. grok login으로 로그인하며 Token Tank는 토큰을 복사하거나 쿠키를 가져오지 않습니다." } }
       }
     },
     "state.authentication_required" : {

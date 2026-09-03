@@ -44,52 +44,56 @@
     },
     {
       "provider": "claude",
-      "surface": "Anthropic organization API usage report",
-      "selectedSource": "Official Anthropic Admin API /v1/organizations/usage_report/messages",
-      "sourceStatus": "clear",
+      "surface": "Claude Code local session and weekly usage windows",
+      "selectedSource": "Read-only ~/.claude.json cachedUsageUtilization",
+      "sourceStatus": "watch",
       "productionComposition": true,
-      "sourceStatusReason": "The selected official source reports organization API usage. Token Tank labels that surface explicitly and never presents it as Claude Pro/Max consumer subscription quota.",
+      "sourceStatusReason": "Claude Code writes local five-hour, weekly, and scoped utilization that Orca already displays. Token Tank reads that cache in place, never presents organization Admin API usage as consumer quota, and never reads Claude credentials.",
       "documentation": [
-        "https://platform.claude.com/docs/en/manage-claude/usage-cost-api",
-        "https://code.claude.com/docs/en/legal-and-compliance"
+        "https://www.onorca.dev/docs/agents/usage-tracking",
+        "https://www.onorca.dev/docs/agents/claude-code"
       ],
-      "credentialOwner": "Token Tank user",
-      "credentialPersistence": "macOS Keychain generic-password item claude.admin-api-key",
+      "credentialOwner": "Claude Code",
+      "credentialPersistence": "Claude-owned ~/.claude.json; Token Tank does not persist, copy, write, or refresh credentials",
       "tokenTankIO": [
-        "HTTPS GET every has_more/next_page page from api.anthropic.com using the app-owned Admin API key",
-        "Expose every numeric usage leaf, including token and server-tool request categories, under stable opaque raw IDs"
+        "Open only ~/.claude.json with the exact external-session capability",
+        "Expose cachedUsageUtilization limits and named windows under stable opaque IDs"
       ],
-      "externalPaths": [],
+      "externalPaths": [
+        "~/.claude.json"
+      ],
       "tccClass": "none",
       "fdaRequired": false,
-      "mutationRisk": "none",
-      "releaseBlocker": "Validate an owner-provided Admin API key and sanitized live pagination/schema"
+      "liveValidation": "Current-host Claude Code cache exposed session, weekly_all, and weekly_scoped Fable utilization with source reset timestamps.",
+      "mutationRisk": "Read-only exact-path open. No credential copy, refresh, or Admin API fallback is allowed.",
+      "releaseBlocker": "Revalidate the local cache schema and exact owner path through the final frozen candidate"
     },
     {
       "provider": "grok",
-      "surface": "xAI Management developer prepaid balance",
-      "selectedSource": "Official xAI Management API prepaid balance",
-      "sourceStatus": "clear",
+      "surface": "Grok CLI SuperGrok credits",
+      "selectedSource": "Read-only ~/.grok/auth.json plus cli-chat-proxy.grok.com/v1/billing?format=credits",
+      "sourceStatus": "watch",
       "productionComposition": true,
-      "sourceStatusReason": "The user selected the best compliant current source. This official endpoint is labeled xAI Management developer prepaid balance everywhere and never presented as consumer SuperGrok subscription quota.",
-      "rejectedAlternative": "The CodexBar-observed Grok Build ACP x.ai/billing extension returned JSON-RPC -32601 (method-not-found) on official Grok 1.0.13; browser-cookie and local-estimate fallbacks remain prohibited.",
+      "sourceStatusReason": "This is the CodexBar SuperGrok credits path: the Grok CLI owner session plus the documented CLI-proxy credits endpoint. Token Tank never copies or refreshes the token, never imports browser cookies, never uses grok agent stdio, and never calls the xAI Management prepaid-balance API.",
+      "rejectedAlternative": "The CodexBar-observed Grok Build ACP x.ai/billing extension returned JSON-RPC -32601 (method-not-found) on official Grok 1.0.13; browser-cookie, gRPC-web, and local-session-estimate fallbacks remain prohibited.",
       "documentation": [
-        "https://docs.x.ai/developers/management-api-guide",
-        "https://docs.x.ai/developers/rest-api-reference/management",
-        "https://docs.x.ai/console/faq/accounts",
-        "https://github.com/steipete/CodexBar/blob/main/docs/providers.md"
+        "https://github.com/steipete/CodexBar/blob/main/docs/grok.md"
       ],
-      "credentialOwner": "Token Tank user",
-      "credentialPersistence": "macOS Keychain generic-password items grok.management-api-key and grok.team-id",
+      "credentialOwner": "Grok CLI",
+      "credentialPersistence": "Grok-owned ~/.grok/auth.json; Token Tank does not persist, copy, write, or refresh credentials",
       "tokenTankIO": [
-        "HTTPS GET the exact management-api.x.ai prepaid balance endpoint",
-        "Expose the total USD-cent balance and every balance change with recursively preserved scalar source fields and stable opaque change IDs"
+        "Open only ~/.grok/auth.json with the exact external-session capability",
+        "HTTPS GET https://cli-chat-proxy.grok.com/v1/billing?format=credits with the ephemeral owner bearer",
+        "Expose published creditUsagePercent or the same-row onDemandUsed/onDemandCap ratio under the credits quota"
       ],
-      "externalPaths": [],
+      "externalPaths": [
+        "~/.grok/auth.json"
+      ],
       "tccClass": "none",
       "fdaRequired": false,
-      "mutationRisk": "none",
-      "releaseBlocker": "Validate owner-provided Management credentials and a sanitized live response"
+      "liveValidation": "Current-host Grok CLI auth.json exists with an OIDC SuperGrok session; credits payload parsing is fixture-tested.",
+      "mutationRisk": "Read-only exact-path open. No credential copy, refresh, cookie import, or Management API fallback is allowed.",
+      "releaseBlocker": "Revalidate the owner session and sanitized CLI-proxy credits shape through the final frozen candidate"
     },
     {
       "provider": "cursor",
@@ -122,28 +126,35 @@
     },
     {
       "provider": "doubao",
-      "surface": "Volcano Coding Plan quota windows",
-      "selectedSource": "Official Volcano OpenAPI GetCodingPlanUsage",
-      "sourceStatus": "clear",
+      "surface": "Volcano arkcli Coding/Agent plan windows",
+      "selectedSource": "Official arkcli usage plan --format json",
+      "sourceStatus": "watch",
       "productionComposition": true,
-      "sourceStatusReason": "The official control-plane API exposes source-faithful plan windows and accepts app-owned AK/SK authentication.",
-      "reviewedAlternative": "GetAFPUsage is fixture-tested but is not part of production composition and is never merged with Coding Plan data.",
+      "sourceStatusReason": "This is the CodexBar Doubao path: the official arkcli CLI owns SSO and prints plan windows. Token Tank starts only the allowlisted arkcli executable with those literal arguments, never copies Volcengine credentials, and never signs OpenAPI requests.",
+      "rejectedAlternative": "App-owned AK/SK GetCodingPlanUsage remains fixture-tested history only and is not composed. Browser cookies and estimates remain prohibited.",
       "documentation": [
-        "https://docs.volcengine.com/docs/82379/1928261",
-        "https://github.com/volcengine/ark-cli"
+        "https://github.com/volcengine/ark-cli",
+        "https://github.com/steipete/CodexBar/blob/main/docs/doubao.md"
       ],
-      "credentialOwner": "Token Tank user",
-      "credentialPersistence": "macOS Keychain generic-password items doubao.access-key-id and doubao.secret-access-key",
+      "credentialOwner": "arkcli",
+      "credentialPersistence": "arkcli-owned SSO; Token Tank does not persist, copy, write, or refresh credentials",
       "tokenTankIO": [
-        "HMAC-SHA256 signed HTTPS request to open.volcengineapi.com",
-        "Production composition selects GetCodingPlanUsage only; Coding and Agent responses are never merged",
-        "Derive remaining and used percentage only by exact same-row used/total arithmetic when the source omits them"
+        "Launch one allowlisted arkcli executable candidate with the literal arguments usage plan --format json",
+        "Read one size-bounded JSON payload, then terminate the child after the response or exact timeout",
+        "Expose every plan window under stable opaque IDs; derive remaining/percentage only by exact same-row arithmetic"
       ],
-      "externalPaths": [],
+      "externalPaths": [
+        "/opt/homebrew/bin/arkcli",
+        "/usr/local/bin/arkcli",
+        "~/.local/bin/arkcli",
+        "~/.local/share/mise/shims/arkcli",
+        "~/.bun/bin/arkcli"
+      ],
       "tccClass": "none",
       "fdaRequired": false,
-      "mutationRisk": "none",
-      "releaseBlocker": "Validate Coding Plan region, signature, and sanitized live schema with operator credentials"
+      "liveValidation": "Current-host arkcli exists; live usage plan currently fails closed on expired Volcengine SSO and asks for arkcli auth login.",
+      "mutationRisk": "The CLI owner may maintain its own credential; Token Tank sends no auth mutation method.",
+      "releaseBlocker": "Revalidate the owner session and sanitized arkcli JSON shape through the final frozen candidate"
     }
   ]
 }

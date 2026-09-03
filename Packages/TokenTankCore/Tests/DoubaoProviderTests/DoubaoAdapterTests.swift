@@ -5,7 +5,7 @@ import TokenTankCore
 import TokenTankDomain
 import TokenTankTestSupport
 
-@Suite("Volcano plan usage adapter")
+@Suite("Volcano arkcli plan usage adapter")
 struct DoubaoAdapterTests {
     private let fixture = Data(
         """
@@ -20,12 +20,21 @@ struct DoubaoAdapterTests {
         """.utf8
     )
 
+    @Test("descriptor identifies arkcli plan usage, not OpenAPI AK/SK")
+    func descriptor() {
+        let descriptor = DoubaoAdapter().sourceDescriptor
+        #expect(descriptor.id == "volcano.arkcli.usage-plan")
+        #expect(descriptor.kind == .officialCLI)
+        #expect(descriptor.credentialOwnership == .externalProvider)
+        #expect(descriptor.detail.contains("arkcli usage plan --format json"))
+        #expect(descriptor.detail.contains("never signs OpenAPI requests"))
+    }
+
     @Test("maps every raw plan period and derives only exact same-row arithmetic")
     func decodePeriods() throws {
-        let snapshot = try DoubaoAdapter.decodeSnapshot(from: fixture, mode: .codingPlan)
-
+        let snapshot = try DoubaoAdapter.decodeSnapshot(from: fixture)
         #expect(snapshot.providerID == .doubao)
-        #expect(snapshot.source.id == "volcano-openapi.coding-plan.usage")
+        #expect(snapshot.source.id == "volcano.arkcli.usage-plan")
         #expect(snapshot.quotas.map(\.originalName) == ["5h", "weekly"])
         #expect(snapshot.quotas[0].used?.value == 250)
         #expect(snapshot.quotas[0].remaining?.value == 750)
@@ -34,66 +43,44 @@ struct DoubaoAdapterTests {
         #expect(snapshot.quotas[1].resetsAt == Date(timeIntervalSince1970: 1_800_000_200))
     }
 
-    @Test("source modes remain independent")
-    func modesDoNotMerge() throws {
-        let coding = try DoubaoAdapter.decodeSnapshot(from: fixture, mode: .codingPlan)
-        let agent = try DoubaoAdapter.decodeSnapshot(from: fixture, mode: .agentPlan)
-
-        #expect(coding.source.id != agent.source.id)
-        #expect(coding.quotas.allSatisfy { $0.id.rawValue.hasPrefix("coding-plan.") })
-        #expect(agent.quotas.allSatisfy { $0.id.rawValue.hasPrefix("agent-plan.") })
-    }
-
-    @Test("V4 request is deterministic and signs only the selected action")
-    func signingContract() throws {
-        let date = Date(timeIntervalSince1970: 1_800_000_000)
-        let coding = try DoubaoAdapter.signedRequest(
-            mode: .codingPlan,
-            accessKeyID: "AKIDEXAMPLE",
-            secretAccessKey: "dummy",
-            date: date
-        )
-        let codingAgain = try DoubaoAdapter.signedRequest(
-            mode: .codingPlan,
-            accessKeyID: "AKIDEXAMPLE",
-            secretAccessKey: "dummy",
-            date: date
-        )
-        let agent = try DoubaoAdapter.signedRequest(
-            mode: .agentPlan,
-            accessKeyID: "AKIDEXAMPLE",
-            secretAccessKey: "dummy",
-            date: date
-        )
-
-        #expect(coding.url.host == "open.volcengineapi.com")
-        #expect(coding.url.query?.contains("Action=GetCodingPlanUsage") == true)
-        #expect(agent.url.host == "ark.cn-beijing.volces.com")
-        #expect(agent.url.query?.contains("Action=GetAFPUsage") == true)
-        #expect(coding.headers["X-Content-Sha256"] == "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a")
-        #expect(coding.headers["Authorization"] == codingAgain.headers["Authorization"])
-        #expect(coding.headers["Authorization"] != agent.headers["Authorization"])
-        #expect(coding.headers["Authorization"]?.contains("dummy") == false)
-        #expect(coding.body == Data("{}".utf8))
-    }
-
-    @Test("fetch reads the configured AK/SK from the app credential capability")
+    @Test("fetch reads arkcli output and never uses app-owned credentials or network")
     func fetchContract() async throws {
         let credentials = InMemoryCredentialStore(
-            values: [
-                CredentialID(providerID: .doubao, name: "access-key-id"): "access",
-                CredentialID(providerID: .doubao, name: "secret-access-key"): "secret",
-            ]
+            values: [CredentialID(providerID: .doubao, name: "access-key-id"): "must-not-be-read"]
         )
-        let network = QueueNetworkClient(
-            results: [.success(NetworkResponse(statusCode: 200, headers: [:], body: fixture))]
+        let network = QueueNetworkClient(results: [])
+        let context = TestContextFactory.make(
+            network: network,
+            credentials: credentials,
+            doubaoPlan: MemoryDoubaoPlanUsageReader(results: [.success(fixture)])
         )
-        let context = TestContextFactory.make(network: network, credentials: credentials)
 
-        let snapshot = try await DoubaoAdapter(mode: .agentPlan).fetchSnapshot(context: context)
-        let request = try #require(await network.requests.first)
-        #expect(snapshot.source.id.contains("agent-plan"))
-        #expect(request.providerID == .doubao)
-        #expect(request.url.query?.contains("Action=GetAFPUsage") == true)
+        let snapshot = try await DoubaoAdapter().fetchSnapshot(context: context)
+        #expect(snapshot.quotas.map(\.originalName) == ["5h", "weekly"])
+        #expect(await network.requests.isEmpty)
+    }
+
+    @Test("expired arkcli SSO is source-owner setup, not a Token Tank credential")
+    func missingSession() throws {
+        let body = Data(
+            """
+            {
+              "ok": false,
+              "error": {
+                "type": "error",
+                "message": "please run arkcli auth login volc-sso: refresh_token is invalid"
+              }
+            }
+            """.utf8
+        )
+        do {
+            _ = try DoubaoAdapter.decodeSnapshot(from: body)
+            Issue.record("Expected missing session")
+        } catch let error as CollectionError {
+            #expect(error.kind == .externalSessionMissing)
+            #expect(error.diagnosticCode == "doubao.arkcli.session-missing")
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
     }
 }

@@ -108,10 +108,10 @@ jobs:
           statuses = {entry["provider"]: entry.get("sourceStatus") for entry in entries}
           expected_statuses = {
               "codex": "clear",
-              "claude": "clear",
-              "grok": "clear",
+              "claude": "watch",
+              "grok": "watch",
               "cursor": "watch",
-              "doubao": "clear",
+              "doubao": "watch",
           }
           if statuses != expected_statuses:
               raise SystemExit(f"unexpected source statuses: {statuses}")

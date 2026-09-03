@@ -286,50 +286,66 @@ struct RuntimeTests {
     }
     @Test("provider execution receives a least-privilege capability scope")
     func providerCapabilityScope() async throws {
-        let credentials = InMemoryCredentialStore()
-        let claudeID = CredentialID(providerID: .claude, name: "admin-api-key")
-        let grokID = CredentialID(providerID: .grok, name: "management-api-key")
-        await credentials.write("claude-key", for: claudeID)
-        await credentials.write("grok-key", for: grokID)
 
         let network = QueueNetworkClient(
             results: [.success(NetworkResponse(statusCode: 200, headers: [:], body: Data()))]
         )
-        let externalRequest = ExternalFileRequest(providerID: .claude, relativePath: ".claude/session")
-        let external = MemoryExternalSessionReader(files: [externalRequest: Data("external".utf8)])
+        let claudeRequest = ExternalFileRequest(
+            providerID: .claude,
+            relativePath: ".claude.json",
+            maximumBytes: 32 * 1024 * 1024
+        )
+        let grokRequest = ExternalFileRequest(
+            providerID: .grok,
+            relativePath: ".grok/auth.json",
+            maximumBytes: 64 * 1024
+        )
+        let deniedRequest = ExternalFileRequest(providerID: .claude, relativePath: ".claude/session")
+        let external = MemoryExternalSessionReader(
+            files: [
+                claudeRequest: Data("{\"cachedUsageUtilization\":{}}".utf8),
+                grokRequest: Data("{\"https://auth.x.ai::fixture\":{\"key\":\"token\"}}".utf8),
+                deniedRequest: Data("external".utf8),
+            ]
+        )
+        let credentials = InMemoryCredentialStore()
         let codex = MemoryCodexAccountUsageReader(results: [.success(Data("codex".utf8))])
+        let doubao = MemoryDoubaoPlanUsageReader(results: [.success(Data("doubao".utf8))])
         let context = TestContextFactory.make(
             network: network,
             credentials: credentials,
             externalSessions: external,
             sqlite: MemorySQLiteReader(values: ["cursorAuth/accessToken": "value"]),
-            codexAccount: codex
+            codexAccount: codex,
+            doubaoPlan: doubao
         )
         let scoped = context.scoped(to: .claude)
 
-        #expect(try await scoped.credentials.read(claudeID) == "claude-key")
         #expect(await collectionError {
-            _ = try await scoped.credentials.read(grokID)
+            _ = try await scoped.credentials.read(CredentialID(providerID: .claude, name: "admin-api-key"))
         }?.diagnosticCode == "capability.credentials.read-denied")
         #expect(await collectionError {
-            try await scoped.credentials.write("replacement", for: claudeID)
+            try await scoped.credentials.write("replacement", for: CredentialID(providerID: .claude, name: "admin-api-key"))
         }?.diagnosticCode == "capability.credentials.write-denied")
         #expect(await collectionError {
             _ = try await scoped.network.send(
                 NetworkRequest(
                     providerID: .grok,
-                    url: URL(string: "https://management-api.x.ai/v1/billing/teams/team/prepaid/balance")!
+                    url: URL(string: "https://cli-chat-proxy.grok.com/v1/billing?format=credits")!
                 )
             )
         }?.diagnosticCode == "capability.network.provider-mismatch")
         #expect(await network.requests.isEmpty)
-        #expect(await scoped.externalSessions.exists(externalRequest) == false)
+        #expect(await scoped.externalSessions.exists(claudeRequest) == true)
+        #expect(try await scoped.externalSessions.read(claudeRequest) == Data("{\"cachedUsageUtilization\":{}}".utf8))
+        #expect(await scoped.externalSessions.exists(deniedRequest) == false)
+        #expect(await scoped.externalSessions.exists(grokRequest) == false)
         #expect(await collectionError {
-            _ = try await scoped.externalSessions.read(externalRequest)
+            _ = try await scoped.externalSessions.read(deniedRequest)
         }?.diagnosticCode == "capability.external-session.denied")
         #expect(await collectionError {
             _ = try await scoped.sqlite.values(
-                in: externalRequest,
+                in: deniedRequest,
                 table: "store",
                 keyColumn: "key",
                 valueColumn: "value",
@@ -339,9 +355,16 @@ struct RuntimeTests {
         #expect(await collectionError {
             _ = try await scoped.codexAccount.readRateLimits()
         }?.diagnosticCode == "capability.codex-account.denied")
-
+        let grokScoped = context.scoped(to: .grok)
+        #expect(await grokScoped.externalSessions.exists(grokRequest) == true)
+        #expect(try await grokScoped.externalSessions.read(grokRequest) == Data("{\"https://auth.x.ai::fixture\":{\"key\":\"token\"}}".utf8))
         let codexScoped = context.scoped(to: .codex)
         #expect(try await codexScoped.codexAccount.readRateLimits() == Data("codex".utf8))
+        let doubaoScoped = context.scoped(to: .doubao)
+        #expect(try await doubaoScoped.doubaoPlan.readPlanUsage() == Data("doubao".utf8))
+        #expect(await collectionError {
+            _ = try await scoped.doubaoPlan.readPlanUsage()
+        }?.diagnosticCode == "capability.doubao-plan.denied")
 
         let cursorScoped = context.scoped(to: .cursor)
         let cursorRequest = ExternalFileRequest(

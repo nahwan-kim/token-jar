@@ -78,6 +78,20 @@ public actor MemoryCodexAccountUsageReader: CodexAccountUsageReader {
         return try results.removeFirst().get()
     }
 }
+public actor MemoryDoubaoPlanUsageReader: DoubaoPlanUsageReader {
+    private var results: [Result<Data, CollectionError>]
+
+    public init(results: [Result<Data, CollectionError>]) {
+        self.results = results
+    }
+
+    public func readPlanUsage() throws -> Data {
+        guard !results.isEmpty else {
+            throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "test.doubao.empty-queue")
+        }
+        return try results.removeFirst().get()
+    }
+}
 
 public actor ManualClock: TokenTankClock {
     private struct Waiter {
@@ -194,6 +208,7 @@ public enum TestContextFactory {
         externalSessions: any ExternalSessionReader = MemoryExternalSessionReader(),
         sqlite: any ReadOnlySQLiteReader = MemorySQLiteReader(),
         codexAccount: any CodexAccountUsageReader = MemoryCodexAccountUsageReader(results: []),
+        doubaoPlan: any DoubaoPlanUsageReader = MemoryDoubaoPlanUsageReader(results: []),
         clock: any TokenTankClock = ManualClock(),
         diagnostics: any DiagnosticsSink = RecordingDiagnostics()
     ) -> CollectionContext {
@@ -203,6 +218,7 @@ public enum TestContextFactory {
             externalSessions: externalSessions,
             sqlite: sqlite,
             codexAccount: codexAccount,
+            doubaoPlan: doubaoPlan,
             clock: clock,
             diagnostics: diagnostics
         )

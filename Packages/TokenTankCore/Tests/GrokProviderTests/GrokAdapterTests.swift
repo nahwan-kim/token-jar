@@ -5,134 +5,206 @@ import TokenTankCore
 import TokenTankDomain
 import TokenTankTestSupport
 
-@Suite("xAI developer prepaid-balance adapter")
+@Suite("Grok CLI SuperGrok credits adapter")
 struct GrokAdapterTests {
     private let fixture = Data(
         """
         {
-          "total": {"val": "-1000"},
-          "changes": [
-            {
-              "changeOrigin": "PURCHASE",
-              "amount": {"val": "-1000"},
-              "createTime": "2026-08-20T10:00:00Z",
-              "topupStatus": "SUCCEEDED",
-              "paymentProcessor": {"kind": "STRIPE"}
-            }
-          ]
+          "config": {
+            "creditUsagePercent": 37.5,
+            "currentPeriod": {"end": "2026-09-10T00:00:00Z"},
+            "billingPeriodEnd": "2026-09-10T00:00:00Z"
+          }
         }
         """.utf8
     )
 
-    @Test("descriptor identifies official xAI developer billing, not consumer quota")
+    private let authFile = Data(
+        """
+        {
+          "https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828": {
+            "key": "synthetic-grok-session-token",
+            "refresh_token": "synthetic-refresh",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "auth_mode": "oidc",
+            "email": "fixture@example.com",
+            "team_id": "team-fixture",
+            "user_id": "user-fixture",
+            "first_name": "Fixture",
+            "last_name": "User"
+          }
+        }
+        """.utf8
+    )
+
+    @Test("descriptor identifies CodexBar SuperGrok credits, not Management prepaid balance")
     func descriptor() {
         let descriptor = GrokAdapter().sourceDescriptor
-        #expect(descriptor.id == "xai.management-api.prepaid-balance")
-        #expect(descriptor.name == "xAI Management API prepaid balance")
-        #expect(descriptor.kind == .officialAPI)
-        #expect(descriptor.credentialOwnership == .tokenTank)
-        #expect(descriptor.documentationURL?.absoluteString == "https://docs.x.ai/developers/management-api-guide")
-        #expect(descriptor.detail.localizedCaseInsensitiveContains("official xAI developer prepaid balance"))
-        #expect(descriptor.detail.localizedCaseInsensitiveContains("never presented as consumer SuperGrok"))
+        #expect(descriptor.id == "grok.cli-proxy.credits")
+        #expect(descriptor.name == "Grok CLI SuperGrok credits")
+        #expect(descriptor.kind == .localSession)
+        #expect(descriptor.credentialOwnership == .externalProvider)
+        #expect(descriptor.detail.contains("cli-chat-proxy.grok.com"))
+        #expect(descriptor.detail.contains("never imports browser cookies"))
+        #expect(descriptor.detail.contains("never uses grok agent stdio"))
+        #expect(descriptor.detail.contains("never calls the xAI Management prepaid-balance API"))
     }
 
-    @Test("preserves the authoritative ledger direction without synthesizing quota")
-    func decodeBalance() throws {
+    @Test("preserves published credit percent and reset without inventing quota")
+    func decodeCredits() throws {
         let snapshot = try GrokAdapter.decodeSnapshot(from: fixture)
+        let quota = try #require(snapshot.quotas.first)
 
         #expect(snapshot.providerID == .grok)
-        #expect(snapshot.quotas.count == 2)
-        #expect(snapshot.quotas[0].originalName == "total.val")
-        #expect(snapshot.quotas[0].remaining?.value == -1000)
-        #expect(snapshot.quotas[0].remaining?.rawText == "-1000")
-        #expect(snapshot.quotas[0].remaining?.unit == "USD cents")
-        #expect(snapshot.quotas[0].percentage.value == nil)
-        #expect(snapshot.quotas[1].originalName == "PURCHASE")
-        #expect(snapshot.quotas[1].used?.rawText == "-1000")
-        #expect(snapshot.quotas[1].id.rawValue.hasPrefix("grok-change."))
-        #expect(!snapshot.quotas[1].id.rawValue.contains("PURCHASE"))
-        #expect(snapshot.quotas[1].sourceFields["paymentProcessor.kind"] == "STRIPE")
+        #expect(snapshot.quotas.count == 1)
+        #expect(quota.id.rawValue == "credits")
+        #expect(quota.originalName == "credits")
+        #expect(quota.percentage.rawText == "37.5")
+        #expect(quota.percentage.meaning == .used)
+        #expect(quota.remaining?.rawText == "62.5")
+        #expect(quota.resetsAt != nil)
+        #expect(quota.sourceFields["percentField"] == "creditUsagePercent")
     }
 
-    @Test("request uses a bounded unreserved team ID and only app-owned Keychain fields")
+    @Test("on-demand ratio is used only when creditUsagePercent is absent")
+    func derivedOnDemandPercent() throws {
+        let body = Data(
+            """
+            {
+              "config": {
+                "onDemandUsed": {"val": 25},
+                "onDemandCap": {"val": 100},
+                "billingPeriodEnd": "2026-09-10T00:00:00Z"
+              }
+            }
+            """.utf8
+        )
+        let snapshot = try GrokAdapter.decodeSnapshot(from: body)
+        let quota = try #require(snapshot.quotas.first)
+        #expect(quota.percentage.rawText == "25")
+        #expect(quota.sourceFields["percentField"] == "onDemandUsed/onDemandCap")
+    }
+
+    @Test("fetch reads the Grok CLI auth file and never uses app-owned Management keys")
     func requestContract() async throws {
-        let credentials = InMemoryCredentialStore(
-            values: [
-                CredentialID(providerID: .grok, name: "management-api-key"): "management-secret",
-                CredentialID(providerID: .grok, name: "team-id"): "team_alpha-123",
-            ]
+        let request = ExternalFileRequest(
+            providerID: .grok,
+            relativePath: ".grok/auth.json",
+            maximumBytes: 64 * 1024
         )
         let network = QueueNetworkClient(
             results: [.success(NetworkResponse(statusCode: 200, headers: [:], body: fixture))]
         )
-        let context = TestContextFactory.make(network: network, credentials: credentials)
+        let context = TestContextFactory.make(
+            network: network,
+            credentials: InMemoryCredentialStore(
+                values: [CredentialID(providerID: .grok, name: "management-api-key"): "must-not-be-read"]
+            ),
+            externalSessions: MemoryExternalSessionReader(files: [request: authFile])
+        )
 
         _ = try await GrokAdapter().fetchSnapshot(context: context)
-        let request = try #require(await network.requests.first)
-
-        #expect(request.method == .get)
-        #expect(request.providerID == .grok)
-        #expect(request.url.absoluteString.contains("/teams/team_alpha-123/prepaid/balance"))
-        #expect(request.headers["Authorization"] == "Bearer management-secret")
-        #expect(request.body == nil)
+        let sent = try #require(await network.requests.first)
+        #expect(sent.method == .get)
+        #expect(sent.providerID == .grok)
+        #expect(sent.url.absoluteString == "https://cli-chat-proxy.grok.com/v1/billing?format=credits")
+        #expect(sent.headers["Authorization"] == "Bearer synthetic-grok-session-token")
+        #expect(sent.headers["x-xai-token-auth"] == "xai-grok-cli")
+        #expect(sent.body == nil)
     }
 
-    @Test("team ID path-control characters fail before network access")
-    func invalidTeamID() async {
-        let credentials = InMemoryCredentialStore(
-            values: [
-                CredentialID(providerID: .grok, name: "management-api-key"): "management-secret",
-                CredentialID(providerID: .grok, name: "team-id"): "team/../alpha",
-            ]
+    @Test("missing auth file is source-owner setup, not a Token Tank credential")
+    func missingSession() async {
+        let availability = await GrokAdapter().probeAvailability(context: TestContextFactory.make())
+        guard case let .needsConfiguration(code) = availability else {
+            Issue.record("Expected needsConfiguration")
+            return
+        }
+        #expect(code == "grok.cli-session.missing")
+    }
+
+    @Test("expired CLI token fails closed before network access")
+    func expiredSession() async {
+        let expired = Data(
+            """
+            {
+              "https://auth.x.ai::fixture": {
+                "key": "expired-token",
+                "expires_at": "2020-01-01T00:00:00Z"
+              }
+            }
+            """.utf8
+        )
+        let request = ExternalFileRequest(
+            providerID: .grok,
+            relativePath: ".grok/auth.json",
+            maximumBytes: 64 * 1024
         )
         let network = QueueNetworkClient(results: [])
         do {
             _ = try await GrokAdapter().fetchSnapshot(
-                context: TestContextFactory.make(network: network, credentials: credentials)
+                context: TestContextFactory.make(
+                    network: network,
+                    externalSessions: MemoryExternalSessionReader(files: [request: expired]),
+                    clock: ManualClock(now: Date(timeIntervalSince1970: 1_800_000_000))
+                )
             )
-            Issue.record("Expected team ID rejection")
+            Issue.record("Expected expired session")
         } catch let error as CollectionError {
-            #expect(error.kind == .malformedResponse)
-            #expect(error.diagnosticCode == "grok.team-id.invalid")
+            #expect(error.kind == .authenticationRevoked)
+            #expect(error.diagnosticCode == "grok.cli-session.expired")
         } catch {
             Issue.record("Unexpected error: \(error)")
         }
         #expect(await network.requests.isEmpty)
     }
 
-    @Test("missing team or key reports configuration")
-    func missingConfiguration() async {
-        let credentials = InMemoryCredentialStore(
-            values: [CredentialID(providerID: .grok, name: "management-api-key"): "key-only"]
-        )
-        let availability = await GrokAdapter().probeAvailability(
-            context: TestContextFactory.make(credentials: credentials)
-        )
-        guard case .needsConfiguration = availability else {
-            Issue.record("Expected needsConfiguration")
-            return
-        }
-    }
-
-    @Test("empty successful object fails closed")
-    func emptyObject() {
-        #expect(throws: CollectionError.self) {
-            try GrokAdapter.decodeSnapshot(from: Data("{}".utf8))
-        }
-    }
-
-    @Test("missing balance-change inventory fails closed")
-    func missingChanges() {
-        do {
-            _ = try GrokAdapter.decodeSnapshot(
-                from: Data("{\"total\":{\"val\":\"100\"}}".utf8)
+    @Test("management keys and cookie-shaped tokens are rejected")
+    func rejectedTokenShapes() async {
+        let bodies = [
+            Data("{\"https://auth.x.ai::fixture\":{\"key\":\"xai-management\"}}".utf8),
+            Data("{\"https://auth.x.ai::fixture\":{\"key\":\"Cookie: session=abc\"}}".utf8),
+        ]
+        for body in bodies {
+            let request = ExternalFileRequest(
+                providerID: .grok,
+                relativePath: ".grok/auth.json",
+                maximumBytes: 64 * 1024
             )
-            Issue.record("Expected missing changes failure")
-        } catch let error as CollectionError {
-            #expect(error.kind == .schemaChanged)
-            #expect(error.diagnosticCode == "grok.balance-changes.missing-or-invalid")
-        } catch {
-            Issue.record("Unexpected error: \(error)")
+            let network = QueueNetworkClient(results: [])
+            do {
+                _ = try await GrokAdapter().fetchSnapshot(
+                    context: TestContextFactory.make(
+                        network: network,
+                        externalSessions: MemoryExternalSessionReader(files: [request: body])
+                    )
+                )
+                Issue.record("Expected token rejection")
+            } catch let error as CollectionError {
+                #expect(error.kind == .authenticationRejected)
+                #expect(error.diagnosticCode == "grok.cli-session.token-missing")
+            } catch {
+                Issue.record("Unexpected error: \(error)")
+            }
+            #expect(await network.requests.isEmpty)
         }
+    }
+
+    @Test("period-only payload keeps credits without inventing a percent")
+    func unknownUsage() throws {
+        let body = Data(
+            """
+            {
+              "config": {
+                "currentPeriod": {"end": "2026-09-10T00:00:00Z"}
+              }
+            }
+            """.utf8
+        )
+        let snapshot = try GrokAdapter.decodeSnapshot(from: body)
+        let quota = try #require(snapshot.quotas.first)
+        #expect(quota.percentage.value == nil)
+        #expect(quota.used == nil)
+        #expect(quota.resetsAt != nil)
     }
 }

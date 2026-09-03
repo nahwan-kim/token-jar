@@ -14,7 +14,7 @@ struct MenuBarLabelView: View {
             ForEach(model.preferences.visibleProviders) { preference in
                 HStack(spacing: 3) {
                     Text(verbatim: preference.abbreviation)
-                    Text(verbatim: model.menuPercentage(for: preference))
+                    Text(verbatim: model.menuValue(for: preference))
                     if model.states[preference.providerID]?.isStale == true {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .accessibilityLabel(Text("state.stale"))
@@ -36,7 +36,7 @@ struct MenuBarLabelView: View {
         return visibleProviders.enumerated().reduce(Text(verbatim: "")) { result, entry in
             let (index, preference) = entry
             var component = Text(
-                verbatim: "\(index == 0 ? "" : ", ")\(preference.abbreviation) \(model.menuPercentage(for: preference))"
+                verbatim: "\(index == 0 ? "" : ", ")\(preference.abbreviation) \(model.menuValue(for: preference))"
             )
             if model.states[preference.providerID]?.isStale == true {
                 component = component + Text(verbatim: " ") + Text("state.stale")

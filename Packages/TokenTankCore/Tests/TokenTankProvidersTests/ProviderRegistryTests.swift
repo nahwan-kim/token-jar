@@ -15,13 +15,17 @@ struct ProviderRegistryTests {
     @Test("narrower and undocumented source semantics remain explicit")
     func sourceSemanticsAreExplicit() {
         let byID = Dictionary(uniqueKeysWithValues: TokenTankProviderRegistry.defaultAdapters().map { ($0.id, $0) })
-        #expect(byID[.claude]?.sourceDescriptor.detail.contains("organization") == true)
-        #expect(byID[.claude]?.sourceDescriptor.detail.contains("consumer subscription quota") == true)
-        #expect(byID[.grok]?.sourceDescriptor.id == "xai.management-api.prepaid-balance")
-        #expect(byID[.grok]?.sourceDescriptor.detail.contains("developer") == true)
-        #expect(byID[.grok]?.sourceDescriptor.detail.contains("consumer") == true)
+        #expect(byID[.claude]?.sourceDescriptor.id == "claude.code.local-usage-cache")
+        #expect(byID[.claude]?.sourceDescriptor.kind == .localSession)
+        #expect(byID[.claude]?.sourceDescriptor.detail.contains("Orca") == true)
+        #expect(byID[.grok]?.sourceDescriptor.id == "grok.cli-proxy.credits")
+        #expect(byID[.grok]?.sourceDescriptor.kind == .localSession)
+        #expect(byID[.grok]?.sourceDescriptor.detail.contains("cli-chat-proxy.grok.com") == true)
         #expect(byID[.cursor]?.sourceDescriptor.id == "cursor.app-session.usage-summary")
         #expect(byID[.cursor]?.sourceDescriptor.detail.localizedCaseInsensitiveContains("read-only") == true)
         #expect(byID[.codex]?.sourceDescriptor.detail.contains("never reads") == true)
+        #expect(byID[.doubao]?.sourceDescriptor.id == "volcano.arkcli.usage-plan")
+        #expect(byID[.doubao]?.sourceDescriptor.kind == .officialCLI)
+        #expect(byID[.doubao]?.sourceDescriptor.detail.contains("arkcli") == true)
     }
 }
