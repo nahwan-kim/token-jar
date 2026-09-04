@@ -97,7 +97,7 @@ struct DetailPopoverView: View {
 
             TimelineView(.periodic(from: .now, by: 60)) { context in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 12) {
                         ForEach(ProviderID.allCases) { providerID in
                             ProviderDetailView(
                                 providerID: providerID,
@@ -290,31 +290,75 @@ private struct FailureView: View {
 }
 
 struct QuotaValueView: View {
+
     let quota: RawQuotaItem
     let refreshedAt: Date
     let now: Date
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(verbatim: quota.originalName)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(verbatim: QuotaDisplayFormatter.name(for: quota))
                 .font(.body.weight(.medium))
                 .textSelection(.enabled)
 
+            percentageGauge
+
             Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 4) {
-                valueRow(identifier: "used", label: "quota.used", value: formatted(quota.used))
-                valueRow(identifier: "remaining", label: "quota.remaining", value: formatted(quota.remaining))
-                valueRow(identifier: "percentage", label: percentageLabel, value: formattedPercentage)
-                valueRow(identifier: "reset", label: "quota.reset", value: formattedReset)
+                valueRow(identifier: "used", label: "quota.used", value: QuotaDisplayFormatter.value(quota.used))
+                valueRow(
+                    identifier: "remaining",
+                    label: "quota.remaining",
+                    value: QuotaDisplayFormatter.value(quota.remaining)
+                )
+                valueRow(
+                    identifier: "reset",
+                    label: "quota.reset",
+                    value: quota.resetsAt.map { QuotaDisplayFormatter.resetTime($0, relativeTo: now) }
+                )
                 valueRow(
                     identifier: "refreshed",
                     label: "quota.refreshed",
-                    value: refreshedAt.formatted(date: .abbreviated, time: .standard)
+                    value: QuotaDisplayFormatter.relativeTime(refreshedAt, relativeTo: now)
                 )
             }
             .font(.caption)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("quota.\(quota.id.rawValue)")
+    }
+
+    private var percentageGauge: some View {
+        VStack(spacing: 4) {
+            HStack {
+                Text("quota.remaining")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if let remainingPercentage {
+                    Text(verbatim: QuotaDisplayFormatter.percentageValue(remainingPercentage))
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
+                } else {
+                    Text("field.not_provided")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .font(.caption)
+
+            Capsule()
+                .fill(.secondary.opacity(0.16))
+                .frame(height: 7)
+                .overlay(alignment: .leading) {
+                    Capsule()
+                        .fill(gaugeTint)
+                        .scaleEffect(x: gaugeFill, y: 1, anchor: .leading)
+                }
+                .clipShape(Capsule())
+                .accessibilityHidden(true)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("field.percentage")
+        .accessibilityLabel(Text(percentageLabel))
+        .accessibilityValue(accessibilityValue(QuotaDisplayFormatter.percentage(quota.percentage)))
     }
 
     @ViewBuilder
@@ -340,17 +384,32 @@ struct QuotaValueView: View {
         .accessibilityValue(accessibilityValue(value))
     }
 
+    private var remainingPercentage: Decimal? {
+        QuotaDisplayFormatter.remainingPercentage(quota.percentage)
+    }
+
+    private var gaugeFill: Double {
+        guard let remainingPercentage else { return 0 }
+        return NSDecimalNumber(decimal: remainingPercentage / 100).doubleValue
+    }
+
+    private var gaugeTint: Color {
+        guard let remainingPercentage else { return .secondary.opacity(0.3) }
+        let value = NSDecimalNumber(decimal: remainingPercentage).doubleValue
+        if value > 50 {
+            return Color(nsColor: .systemGreen)
+        }
+        if value >= 20 {
+            return Color(nsColor: .systemYellow)
+        }
+        return Color(nsColor: .systemRed)
+    }
+
     private func accessibilityValue(_ value: String?) -> Text {
         if let value {
             return Text(verbatim: value)
         }
         return Text("field.not_provided")
-    }
-
-    private func formatted(_ value: SourceValue?) -> String? {
-        guard let value else { return nil }
-        guard let unit = value.unit, !unit.isEmpty else { return value.rawText }
-        return "\(value.rawText) \(unit)"
     }
 
     private var percentageLabel: LocalizedStringKey {
@@ -359,17 +418,151 @@ struct QuotaValueView: View {
         case .remaining: "quota.percentage.remaining"
         }
     }
+}
 
-    private var formattedPercentage: String? {
-        guard let raw = quota.percentage.rawText else { return nil }
-        return raw.contains("%") ? raw : "\(raw)%"
+enum QuotaDisplayFormatter {
+    static func name(for quota: RawQuotaItem, locale: Locale = .current) -> String {
+        var components = quota.originalName
+            .split(separator: ".", omittingEmptySubsequences: true)
+            .map { readableName(String($0), locale: locale) }
+
+        if let window = quota.sourceFields["window"] {
+            let readableWindow = readableName(window, locale: locale)
+            if !components.contains(where: { $0.localizedCaseInsensitiveContains(readableWindow) }) {
+                components.append(readableWindow)
+            }
+        }
+
+        return components.joined(separator: " · ")
     }
 
-    private var formattedReset: String? {
-        guard let reset = quota.resetsAt else { return nil }
-        let relative = RelativeDateTimeFormatter()
-        relative.unitsStyle = .full
-        return "\(reset.formatted(date: .abbreviated, time: .standard)) (\(relative.localizedString(for: reset, relativeTo: now)))"
+    static func value(_ sourceValue: SourceValue?, locale: Locale = .current) -> String? {
+        guard let sourceValue else { return nil }
+        let unit = sourceValue.unit?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch unit?.lowercased() {
+        case "%":
+            return "\(number(sourceValue.value, locale: locale, maximumFractionDigits: 2))%"
+        case "cents":
+            return currency(sourceValue.value / 100, code: "USD", locale: locale)
+        case "usd":
+            return currency(sourceValue.value, code: "USD", locale: locale)
+        case .some(let unit) where !unit.isEmpty:
+            return "\(number(sourceValue.value, locale: locale, maximumFractionDigits: 2)) \(unit)"
+        default:
+            return number(sourceValue.value, locale: locale, maximumFractionDigits: 2)
+        }
+    }
+
+    static func percentage(_ percentage: SourcePercentage, locale: Locale = .current) -> String? {
+        guard let value = percentage.value else { return nil }
+        return "\(number(value, locale: locale, maximumFractionDigits: 2))%"
+    }
+    static func remainingPercentage(_ percentage: SourcePercentage) -> Decimal? {
+        guard let value = percentage.value else { return nil }
+        let remaining = percentage.meaning == .used ? Decimal(100) - value : value
+        return min(max(remaining, 0), 100)
+    }
+
+    static func percentageValue(_ value: Decimal, locale: Locale = .current) -> String {
+        "\(number(value, locale: locale, maximumFractionDigits: 2))%"
+    }
+
+    static func resetTime(_ date: Date, relativeTo now: Date, locale: Locale = .current) -> String {
+        "\(relativeTime(date, relativeTo: now, locale: locale)) · \(absoluteTime(date, locale: locale))"
+    }
+
+    static func relativeTime(_ date: Date, relativeTo now: Date, locale: Locale = .current) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = locale
+        formatter.dateTimeStyle = .named
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: date, relativeTo: now)
+    }
+
+    private static func absoluteTime(_ date: Date, locale: Locale) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
+    private static func readableName(_ raw: String, locale: Locale) -> String {
+        let language = locale.language.languageCode?.identifier ?? "en"
+        let korean = language == "ko"
+        let knownNames: [String: (en: String, ko: String)] = [
+            "session": ("Session", "세션"),
+            "weekly_all": ("Weekly", "주간"),
+            "weekly_scoped": ("Weekly scoped", "주간 범위"),
+            "five_hour": ("5-hour", "5시간"),
+            "seven_day": ("7-day", "7일"),
+            "5h": ("5-hour", "5시간"),
+            "weekly": ("Weekly", "주간"),
+            "monthly": ("Monthly", "월간"),
+            "credits": ("Credits", "크레딧"),
+            "rateLimitResetCredits": ("Rate-limit reset credits", "한도 리셋 크레딧"),
+            "individualUsage": ("Individual usage", "개인 사용량"),
+            "teamUsage": ("Team usage", "팀 사용량"),
+            "plan": ("Plan", "플랜"),
+            "agent-plan": ("Agent plan", "Agent 플랜"),
+            "coding-plan": ("Coding plan", "코딩 플랜"),
+            "agent-plan-team": ("Team agent plan", "팀 Agent 플랜"),
+            "coding-plan-team": ("Team coding plan", "팀 코딩 플랜"),
+            "personal": ("Personal", "개인"),
+            "team": ("Team", "팀"),
+            "onDemand": ("On-demand", "온디맨드"),
+            "overall": ("Overall", "전체"),
+            "pooled": ("Pooled", "공동"),
+            "breakdown": ("Breakdown", "세부 내역"),
+            "included": ("Included", "포함"),
+            "bonus": ("Bonus", "보너스"),
+            "total": ("Total", "합계"),
+            "autoPercentUsed": ("Auto usage", "자동 사용량"),
+            "apiPercentUsed": ("API usage", "API 사용량"),
+            "totalPercentUsed": ("Total usage", "전체 사용량"),
+            "primary": ("Primary", "기본"),
+            "secondary": ("Secondary", "보조"),
+        ]
+        if let knownName = knownNames[raw] {
+            return korean ? knownName.ko : knownName.en
+        }
+
+        let spaced = raw
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(
+                of: "([a-z0-9])([A-Z])",
+                with: "$1 $2",
+                options: .regularExpression
+            )
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !spaced.isEmpty else { return raw }
+        return spaced.prefix(1).uppercased(with: locale) + spaced.dropFirst()
+    }
+
+    private static func number(
+        _ value: Decimal,
+        locale: Locale,
+        maximumFractionDigits: Int
+    ) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = locale
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = maximumFractionDigits
+        return formatter.string(from: NSDecimalNumber(decimal: value))
+            ?? NSDecimalNumber(decimal: value).stringValue
+    }
+
+    private static func currency(_ value: Decimal, code: String, locale: Locale) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = locale
+        formatter.numberStyle = .currency
+        formatter.currencyCode = code
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 2
+        return formatter.string(from: NSDecimalNumber(decimal: value))
+            ?? "\(code) \(NSDecimalNumber(decimal: value).stringValue)"
     }
 }
 

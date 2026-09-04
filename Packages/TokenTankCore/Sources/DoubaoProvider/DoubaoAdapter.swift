@@ -61,7 +61,12 @@ public struct DoubaoAdapter: ProviderAdapter {
         }
 
         var quotas: [RawQuotaItem] = []
-        if let quotaUsageValue = root["QuotaUsage"] ?? root["quotaUsage"] ?? root["quota_usage"] {
+        if let itemsValue = root["items"] ?? root["Items"] {
+            guard let items = itemsValue as? [Any] else {
+                throw doubaoSchemaError("doubao.items.invalid")
+            }
+            try appendPlanItems(items, to: &quotas)
+        } else if let quotaUsageValue = root["QuotaUsage"] ?? root["quotaUsage"] ?? root["quota_usage"] {
             guard let quotaUsage = quotaUsageValue as? [Any] else {
                 throw doubaoSchemaError("doubao.quota-usage.invalid")
             }
@@ -162,6 +167,31 @@ private func appendNestedPlans(
     }
 }
 
+private func appendPlanItems(
+    _ items: [Any],
+    to quotas: inout [RawQuotaItem]
+) throws {
+    for (index, value) in items.enumerated() {
+        guard let item = value as? [String: Any] else {
+            throw doubaoSchemaError("doubao.items.row-invalid")
+        }
+        if let subscribed = item["subscribed"] as? Bool, subscribed == false {
+            continue
+        }
+        let product = doubaoString(item["product"] ?? item["Product"]) ?? "plan"
+        let edition = doubaoString(item["edition"] ?? item["Edition"])
+        let path = edition.map { "\(product).\($0)" } ?? product
+        guard let periodsValue = item["periods"] ?? item["Periods"] else {
+            try appendQuotaRow(item, path: path, index: index, to: &quotas)
+            continue
+        }
+        guard let periods = periodsValue as? [Any] else {
+            throw doubaoSchemaError("doubao.periods.invalid")
+        }
+        try appendQuotaUsage(periods, path: path, to: &quotas)
+    }
+}
+
 private func objectContainsQuota(_ object: [String: Any]) -> Bool {
     doubaoDecimal(object["Used"] ?? object["used"]) != nil
         || doubaoDecimal(object["Quota"] ?? object["quota"] ?? object["Total"] ?? object["total"]) != nil
@@ -188,8 +218,16 @@ private func appendQuotaRow(
     index: Int,
     to quotas: inout [RawQuotaItem]
 ) throws {
-    let level = doubaoString(row["Level"] ?? row["level"] ?? row["Name"] ?? row["name"] ?? row["product"] ?? row["Product"])
-        ?? "\(path)[\(index)]"
+    let level = doubaoString(
+        row["label"]
+            ?? row["Label"]
+            ?? row["Level"]
+            ?? row["level"]
+            ?? row["Name"]
+            ?? row["name"]
+            ?? row["product"]
+            ?? row["Product"]
+    ) ?? "\(path)[\(index)]"
     let used = doubaoDecimal(row["Used"] ?? row["used"])
     let total = doubaoDecimal(row["Quota"] ?? row["quota"] ?? row["Total"] ?? row["total"])
     let remaining = doubaoDecimal(row["Remaining"] ?? row["remaining"])
@@ -201,6 +239,8 @@ private func appendQuotaRow(
         ?? row["ResetTime"]
         ?? row["resetTime"]
         ?? row["resetsAt"]
+        ?? row["reset_at"]
+        ?? row["resetAt"]
     guard used != nil || total != nil || remaining != nil || percent != nil || resetValue != nil else {
         throw doubaoSchemaError("doubao.quota-usage.values-missing")
     }

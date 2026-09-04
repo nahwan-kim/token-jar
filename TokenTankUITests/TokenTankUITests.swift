@@ -94,11 +94,11 @@ final class TokenTankUITests: XCTestCase {
             .descendants(matching: .any)
             .matching(identifier: "field.percentage")
             .firstMatch
+        XCTAssertTrue(codexPercentage.waitForExistence(timeout: timeout))
         XCTAssertTrue(
-            codexPercentage.waitForExistence(timeout: timeout)
-                && codexPercentage.label.contains("Used percentage")
+            codexPercentage.label.contains("Used percentage")
                 && (codexPercentage.value as? String)?.contains("0%") == true,
-            "Percentage direction and zero must remain explicit"
+            "Percentage direction and zero must remain explicit; label=\(codexPercentage.label), value=\(String(describing: codexPercentage.value))"
         )
         let doubaoPercentage = doubaoQuota.descendants(matching: .any)
             .matching(identifier: "field.percentage")
@@ -158,6 +158,37 @@ final class TokenTankUITests: XCTestCase {
         XCTAssertTrue(app.wait(for: .notRunning, timeout: timeout))
     }
 
+    func testGaugeScrollingRemainsResponsive() {
+        continueAfterFailure = false
+        app.launchArguments = [
+            "-AppleLanguages", "(en)",
+            "-AppleLocale", "en_US",
+        ]
+        app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launch()
+
+        let detailWindow = app.windows["Token Tank UI Test Detail"]
+        XCTAssertTrue(detailWindow.waitForExistence(timeout: timeout))
+        app.activate()
+        detailWindow.click()
+
+        let scrollView = detailWindow.scrollViews.firstMatch
+        XCTAssertTrue(scrollView.waitForExistence(timeout: timeout))
+        for _ in 0..<8 {
+            scrollView.scroll(byDeltaX: 0, deltaY: 240)
+            scrollView.scroll(byDeltaX: 0, deltaY: -240)
+        }
+
+        XCTAssertTrue(
+            app.buttons.matching(identifier: "action.refresh").firstMatch
+                .waitForExistence(timeout: timeout),
+            "Repeated gauge scrolling must leave the popover responsive"
+        )
+
+        app.terminate()
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: timeout))
+    }
     func testKoreanDetailLocalization() {
         continueAfterFailure = false
         app.launchArguments = [

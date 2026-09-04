@@ -231,6 +231,82 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(info["CFBundleLocalizations"] as? [String], ["en", "ko"])
     }
 
+    func testQuotaDisplayNamesHideRawSourceKeys() {
+        let quota = RawQuotaItem(
+            id: "cursor-plan-auto",
+            originalName: "individualUsage.plan.autoPercentUsed",
+            used: nil,
+            remaining: nil,
+            percentage: .missing(meaning: .used),
+            resetsAt: nil
+        )
+        let codexWindow = RawQuotaItem(
+            id: "codex-primary",
+            originalName: "Codex",
+            used: nil,
+            remaining: nil,
+            percentage: .missing(meaning: .used),
+            resetsAt: nil,
+            sourceFields: ["window": "primary"]
+        )
+
+        XCTAssertEqual(
+            QuotaDisplayFormatter.name(for: quota, locale: Locale(identifier: "en_US")),
+            "Individual usage · Plan · Auto usage"
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.name(for: quota, locale: Locale(identifier: "ko_KR")),
+            "개인 사용량 · 플랜 · 자동 사용량"
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.name(for: codexWindow, locale: Locale(identifier: "en_US")),
+            "Codex · Primary"
+        )
+        let doubao = RawQuotaItem(
+            id: "arkcli-agent-weekly",
+            originalName: "agent-plan.personal.weekly",
+            used: nil,
+            remaining: nil,
+            percentage: .missing(meaning: .used),
+            resetsAt: nil
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.name(for: doubao, locale: Locale(identifier: "en_US")),
+            "Agent plan · Personal · Weekly"
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.name(for: doubao, locale: Locale(identifier: "ko_KR")),
+            "Agent 플랜 · 개인 · 주간"
+        )
+    }
+
+    func testQuotaDisplayValuesUseReadableNumbersAndUnits() {
+        let locale = Locale(identifier: "en_US")
+        let tokens = SourceValue(value: 1_234_567.5, rawText: "1234567.5000", unit: "tokens")
+        let cents = SourceValue(value: 125, rawText: "125", unit: "cents")
+        let percentage = SourcePercentage(value: 42.50, rawText: "42.50", meaning: .used)
+
+        XCTAssertEqual(QuotaDisplayFormatter.value(tokens, locale: locale), "1,234,567.5 tokens")
+        XCTAssertEqual(QuotaDisplayFormatter.value(cents, locale: locale), "$1.25")
+        XCTAssertEqual(QuotaDisplayFormatter.percentage(percentage, locale: locale), "42.5%")
+        XCTAssertEqual(QuotaDisplayFormatter.remainingPercentage(percentage), 57.5)
+        XCTAssertEqual(
+            QuotaDisplayFormatter.remainingPercentage(
+                SourcePercentage(value: 18, rawText: "18", meaning: .remaining)
+            ),
+            18
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.remainingPercentage(
+                SourcePercentage(value: 120, rawText: "120", meaning: .used)
+            ),
+            0
+        )
+        XCTAssertNil(
+            QuotaDisplayFormatter.remainingPercentage(.missing(meaning: .remaining))
+        )
+        XCTAssertNil(QuotaDisplayFormatter.value(nil, locale: locale))
+    }
     private func makeContext(credentials: any AppCredentialStore) -> CollectionContext {
         CollectionContext(
             network: UnavailableNetworkClient(),

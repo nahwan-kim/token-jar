@@ -60,6 +60,50 @@ struct DoubaoAdapterTests {
         #expect(await network.requests.isEmpty)
     }
 
+    @Test("maps current arkcli items and periods without copying viewer identity")
+    func decodeCurrentPlanItems() throws {
+        let body = Data(
+            """
+            {
+              "viewer": {"auth_method":"sso","profile":"agent-plan_cn-beijing_personal"},
+              "items": [
+                {
+                  "product": "agent-plan",
+                  "edition": "personal",
+                  "tier": "medium",
+                  "subscribed": true,
+                  "periods": [
+                    {"label":"5h","used":0.098,"total":10000,"percent":0.00098,"reset_at":"2026-09-04T14:06:48+08:00"},
+                    {"label":"weekly","used":7703.7263,"total":35000,"percent":22.010646571428573,"reset_at":"2026-09-07T00:00:00+08:00"},
+                    {"label":"monthly","used":21983.2895,"total":100000,"percent":21.9832895,"reset_at":"2026-09-25T23:59:59+08:00"}
+                  ]
+                },
+                {
+                  "product": "coding-plan",
+                  "edition": "personal",
+                  "subscribed": false,
+                  "periods": [
+                    {"label":"5h","used":0,"total":1,"percent":0}
+                  ]
+                }
+              ]
+            }
+            """.utf8
+        )
+
+        let snapshot = try DoubaoAdapter.decodeSnapshot(from: body)
+        #expect(snapshot.quotas.map(\.originalName) == [
+            "agent-plan.personal.5h",
+            "agent-plan.personal.weekly",
+            "agent-plan.personal.monthly",
+        ])
+        #expect(snapshot.quotas[0].used?.value == Decimal(string: "0.098"))
+        #expect(snapshot.quotas[0].remaining?.value == Decimal(string: "9999.902"))
+        #expect(snapshot.quotas[0].percentage.value == Decimal(string: "0.00098"))
+        #expect(snapshot.quotas[0].resetsAt != nil)
+        #expect(snapshot.quotas.allSatisfy { !$0.sourceFields.values.contains("agent-plan_cn-beijing_personal") })
+    }
+
     @Test("expired arkcli SSO is source-owner setup, not a Token Tank credential")
     func missingSession() throws {
         let body = Data(
