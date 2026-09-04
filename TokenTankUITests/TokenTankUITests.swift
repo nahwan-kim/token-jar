@@ -96,9 +96,9 @@ final class TokenTankUITests: XCTestCase {
             .firstMatch
         XCTAssertTrue(codexPercentage.waitForExistence(timeout: timeout))
         XCTAssertTrue(
-            codexPercentage.label.contains("Used percentage")
-                && (codexPercentage.value as? String)?.contains("0%") == true,
-            "Percentage direction and zero must remain explicit; label=\(codexPercentage.label), value=\(String(describing: codexPercentage.value))"
+            codexPercentage.label.contains("Remaining percentage")
+                && (codexPercentage.value as? String)?.contains("100%") == true,
+            "Gauge accessibility must match the prominently displayed remaining percentage; label=\(codexPercentage.label), value=\(String(describing: codexPercentage.value))"
         )
         let doubaoPercentage = doubaoQuota.descendants(matching: .any)
             .matching(identifier: "field.percentage")
@@ -106,7 +106,7 @@ final class TokenTankUITests: XCTestCase {
         XCTAssertTrue(
             doubaoPercentage.waitForExistence(timeout: timeout)
                 && doubaoPercentage.label.contains("Remaining percentage"),
-            "Missing percentages must retain their source direction"
+            "Missing percentages must retain explicit remaining-percentage semantics"
         )
         let codexQuota = detailWindow.descendants(matching: .any)
             .matching(identifier: "quota.ui-test.codex")

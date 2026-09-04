@@ -137,6 +137,8 @@ struct CursorAdapterTests {
 
         #expect(snapshot.providerID == .cursor)
         #expect(snapshot.quotas.count == 11)
+        #expect(snapshot.quotas.first?.originalName == "individualUsage.plan")
+        #expect(snapshot.quotas.dropFirst().first?.originalName == "individualUsage.plan.breakdown.included")
         let plan = try #require(snapshot.quotas.first { $0.originalName == "individualUsage.plan" })
         #expect(plan.used?.rawText == "100")
         #expect(plan.remaining?.rawText == "0")

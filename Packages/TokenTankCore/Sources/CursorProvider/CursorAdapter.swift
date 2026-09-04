@@ -424,13 +424,14 @@ private func cursorAppendBlock(
         fields["enabled"] = enabled ? "true" : "false"
     }
 
+    var breakdownQuotas: [RawQuotaItem] = []
     let breakdown = try cursorBreakdown(
         from: plan ? object["breakdown"] : nil,
         planPath: path,
         subject: subject,
         metadataFields: fields,
         resetDate: metadata.resetDate,
-        to: &quotas,
+        to: &breakdownQuotas,
         identities: &identities
     )
     let hasDirectQuota = numeric["used"] != nil
@@ -487,6 +488,7 @@ private func cursorAppendBlock(
         to: &quotas,
         identities: &identities
     )
+    quotas.append(contentsOf: breakdownQuotas)
 
     if plan {
         for key in ["autoPercentUsed", "apiPercentUsed", "totalPercentUsed"] {

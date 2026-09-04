@@ -52,46 +52,7 @@ struct DetailPopoverView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("detail.title")
-                    .font(.headline)
-                Spacer()
-                if model.isRefreshing {
-                    ProgressView()
-                        .controlSize(.small)
-                        .accessibilityLabel(Text("state.refreshing"))
-                }
-                Button {
-                    model.refreshAll()
-                } label: {
-                    Label("action.retry", systemImage: "arrow.clockwise")
-                        .labelStyle(.iconOnly)
-                }
-                .keyboardShortcut("r", modifiers: .command)
-                .help(Text("action.refresh.help"))
-                .accessibilityLabel(Text("action.refresh.help"))
-                .accessibilityIdentifier("action.refresh")
-
-                Button {
-                    showSettings()
-                } label: {
-                    Label("settings.title", systemImage: "gearshape")
-                        .labelStyle(.iconOnly)
-                }
-                .help(Text("settings.title"))
-                .accessibilityLabel(Text("settings.title"))
-                .accessibilityIdentifier("action.settings")
-                Button {
-                    NSApp.terminate(nil)
-                } label: {
-                    Label("action.quit", systemImage: "power")
-                        .labelStyle(.iconOnly)
-                }
-                .help(Text("action.quit"))
-                .accessibilityLabel(Text("action.quit"))
-                .accessibilityIdentifier("action.quit")
-            }
-            .padding()
+            header
 
             Divider()
 
@@ -108,11 +69,12 @@ struct DetailPopoverView: View {
                             )
                         }
                     }
-                    .padding()
+                    .padding(14)
                 }
             }
         }
-        .frame(width: 520, height: 620)
+        .frame(width: 480, height: 640)
+        .background(Color(nsColor: .windowBackgroundColor))
         .task {
             #if UITEST
             model.installUITestStates()
@@ -120,6 +82,127 @@ struct DetailPopoverView: View {
             model.ensureStarted()
             #endif
         }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Image(systemName: overview.symbol)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(overview.tint)
+                .frame(width: 34, height: 34)
+                .background(overview.tint.opacity(0.12), in: Circle())
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("detail.title")
+                    .font(.headline)
+                Text(overview.title)
+                    .font(.caption)
+                    .foregroundStyle(overview.tint)
+                    .accessibilityIdentifier("detail.overall-status")
+            }
+
+            Spacer()
+
+            if model.isRefreshing {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel(Text("state.refreshing"))
+            }
+
+            toolbarButton("action.refresh.help", symbol: "arrow.clockwise", identifier: "action.refresh") {
+                model.refreshAll()
+            }
+            .keyboardShortcut("r", modifiers: .command)
+            .help(Text("action.refresh.help"))
+
+            toolbarButton("settings.title", symbol: "gearshape", identifier: "action.settings") {
+                showSettings()
+            }
+            .help(Text("settings.title"))
+
+            toolbarButton("action.quit", symbol: "power", identifier: "action.quit") {
+                NSApp.terminate(nil)
+            }
+            .help(Text("action.quit"))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    private func toolbarButton(
+        _ label: LocalizedStringKey,
+        symbol: String,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(Text(label))
+        .accessibilityIdentifier(identifier)
+    }
+
+    private var overview: StatusPresentation {
+        if model.isRefreshing {
+            return StatusPresentation(
+                title: "state.refreshing",
+                symbol: "arrow.triangle.2.circlepath",
+                tint: .blue
+            )
+        }
+
+        var hasStale = false
+        var hasRefreshing = false
+        var hasUnavailable = false
+        for providerID in ProviderID.allCases {
+            switch model.states[providerID] ?? .neverLoaded {
+            case .authenticationActionRequired:
+                return StatusPresentation(
+                    title: "state.authentication_required",
+                    symbol: "exclamationmark.shield.fill",
+                    tint: .red
+                )
+            case .stale:
+                hasStale = true
+            case .neverLoaded:
+                hasUnavailable = true
+            case .refreshing:
+                hasRefreshing = true
+            case .fresh:
+                break
+            }
+        }
+
+        if hasStale {
+            return StatusPresentation(
+                title: "state.stale",
+                symbol: "exclamationmark.triangle.fill",
+                tint: .orange
+            )
+        }
+        if hasRefreshing {
+            return StatusPresentation(
+                title: "state.refreshing",
+                symbol: "arrow.triangle.2.circlepath",
+                tint: .blue
+            )
+        }
+        if hasUnavailable {
+            return StatusPresentation(
+                title: "state.unavailable",
+                symbol: "questionmark.circle.fill",
+                tint: .secondary
+            )
+        }
+        return StatusPresentation(
+            title: "state.fresh",
+            symbol: "checkmark.circle.fill",
+            tint: .green
+        )
     }
 
     private func showSettings() {
@@ -131,6 +214,12 @@ struct DetailPopoverView: View {
     }
 }
 
+private struct StatusPresentation {
+    let title: LocalizedStringKey
+    let symbol: String
+    let tint: Color
+}
+
 struct ProviderDetailView: View {
     let providerID: ProviderID
     let state: CollectionState
@@ -139,39 +228,63 @@ struct ProviderDetailView: View {
     let configure: () -> Void
 
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
-                statusView
+        VStack(alignment: .leading, spacing: 12) {
+            providerHeader
 
-                if let snapshot = state.snapshot {
-                    if snapshot.quotas.isEmpty {
-                        Text("state.source.empty")
-                            .foregroundStyle(.secondary)
-                    } else {
+            statusView
+
+            if let snapshot = state.snapshot {
+                if snapshot.quotas.isEmpty {
+                    Label("state.source.empty", systemImage: "tray")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(spacing: 10) {
                         ForEach(snapshot.quotas) { quota in
                             QuotaValueView(quota: quota, refreshedAt: snapshot.refreshedAt, now: now)
-                            if quota.id != snapshot.quotas.last?.id {
-                                Divider()
-                            }
                         }
                     }
-                    Text(verbatim: snapshot.source.name)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .accessibilityLabel(Text("detail.source"))
                 }
+
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.down.circle")
+                    Text(verbatim: snapshot.source.name)
+                }
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(Text("detail.source"))
+                .accessibilityValue(Text(verbatim: snapshot.source.name))
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } label: {
-            HStack {
-                Text(verbatim: providerID.displayName)
-                    .font(.headline)
-                Spacer()
-                stateBadge
-            }
+        }
+        .padding(14)
+        .background(presentation.tint.opacity(0.055), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(presentation.tint.opacity(0.2), lineWidth: 1)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("provider.\(providerID.rawValue)")
+    }
+
+    private var providerHeader: some View {
+        HStack(spacing: 10) {
+            Image(systemName: presentation.symbol)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(presentation.tint)
+                .frame(width: 30, height: 30)
+                .background(presentation.tint.opacity(0.13), in: Circle())
+                .accessibilityHidden(true)
+
+            Text(verbatim: providerID.displayName)
+                .font(.headline)
+
+            Spacer()
+
+            Text(presentation.title)
+                .badgeStyle(presentation.badgeColor)
+                .accessibilityIdentifier(presentation.identifier)
+        }
     }
 
     @ViewBuilder
@@ -179,10 +292,16 @@ struct ProviderDetailView: View {
         switch state {
         case .neverLoaded:
             Label("state.never_loaded", systemImage: "hourglass")
+                .font(.callout)
                 .foregroundStyle(.secondary)
         case .refreshing:
-            Label("state.refreshing", systemImage: "arrow.triangle.2.circlepath")
-                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("state.refreshing")
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
         case .fresh:
             EmptyView()
         case let .stale(_, failure, _):
@@ -192,31 +311,58 @@ struct ProviderDetailView: View {
         }
     }
 
-    @ViewBuilder
-    private var stateBadge: some View {
+    private var presentation: ProviderStatusPresentation {
         switch state {
         case .neverLoaded:
-            Text("state.unavailable")
-                .badgeStyle(.secondary)
-                .accessibilityIdentifier("state.unavailable")
+            ProviderStatusPresentation(
+                title: "state.unavailable",
+                symbol: "questionmark.circle.fill",
+                tint: .secondary,
+                badgeColor: .secondary,
+                identifier: "state.unavailable"
+            )
         case .refreshing:
-            Text("state.refreshing")
-                .badgeStyle(.secondary)
-                .accessibilityIdentifier("state.refreshing")
+            ProviderStatusPresentation(
+                title: "state.refreshing",
+                symbol: "arrow.triangle.2.circlepath",
+                tint: .blue,
+                badgeColor: .blue,
+                identifier: "state.refreshing"
+            )
         case .fresh:
-            Text("state.fresh")
-                .badgeStyle(.green)
-                .accessibilityIdentifier("state.fresh")
+            ProviderStatusPresentation(
+                title: "state.fresh",
+                symbol: "checkmark.circle.fill",
+                tint: .green,
+                badgeColor: .green,
+                identifier: "state.fresh"
+            )
         case .stale:
-            Text("state.stale")
-                .badgeStyle(.orange)
-                .accessibilityIdentifier("state.stale")
+            ProviderStatusPresentation(
+                title: "state.stale",
+                symbol: "exclamationmark.triangle.fill",
+                tint: .orange,
+                badgeColor: .orange,
+                identifier: "state.stale"
+            )
         case .authenticationActionRequired:
-            Text("state.authentication_required")
-                .badgeStyle(.red)
-                .accessibilityIdentifier("state.authentication-required")
+            ProviderStatusPresentation(
+                title: "state.authentication_required",
+                symbol: "exclamationmark.shield.fill",
+                tint: .red,
+                badgeColor: .red,
+                identifier: "state.authentication-required"
+            )
         }
     }
+}
+
+private struct ProviderStatusPresentation {
+    let title: LocalizedStringKey
+    let symbol: String
+    let tint: Color
+    let badgeColor: BadgeColor
+    let identifier: String
 }
 
 private struct FailureView: View {
@@ -225,38 +371,52 @@ private struct FailureView: View {
     let configure: () -> Void
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.bubble.fill")
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 4) {
                 Text(errorKey)
-                    .font(.callout)
+                    .font(.callout.weight(.semibold))
                     .accessibilityIdentifier("error.\(failure.kind.rawValue)")
                 Text(verbatim: failure.diagnosticCode)
                     .font(.caption2.monospaced())
                     .foregroundStyle(.secondary)
                     .privacySensitive()
             }
-            Spacer()
-            if failure.recoveryAction == .signInSourceApp
-                || failure.recoveryAction == .waitForNextRefresh
-                || failure.recoveryAction == .allowAccessInSystemSettings {
-                Text(actionKey)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("action.\(failure.recoveryAction.rawValue)")
-            } else if failure.recoveryAction != .none {
-                Button(actionKey) {
-                    switch failure.recoveryAction {
-                    case .retry:
-                        retry()
-                    case .signInTokenTank:
-                        configure()
-                    case .signInSourceApp, .allowAccessInSystemSettings, .waitForNextRefresh, .none:
-                        break
-                    }
-                }
-                .controlSize(.small)
+
+            Spacer(minLength: 8)
+
+            recoveryView
+        }
+        .padding(10)
+        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var recoveryView: some View {
+        if failure.recoveryAction == .signInSourceApp
+            || failure.recoveryAction == .waitForNextRefresh
+            || failure.recoveryAction == .allowAccessInSystemSettings {
+            Text(actionKey)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
                 .accessibilityIdentifier("action.\(failure.recoveryAction.rawValue)")
+        } else if failure.recoveryAction != .none {
+            Button(actionKey) {
+                switch failure.recoveryAction {
+                case .retry:
+                    retry()
+                case .signInTokenTank:
+                    configure()
+                case .signInSourceApp, .allowAccessInSystemSettings, .waitForNextRefresh, .none:
+                    break
+                }
             }
+            .controlSize(.small)
+            .accessibilityIdentifier("action.\(failure.recoveryAction.rawValue)")
         }
     }
 
@@ -290,20 +450,48 @@ private struct FailureView: View {
 }
 
 struct QuotaValueView: View {
-
     let quota: RawQuotaItem
     let refreshedAt: Date
     let now: Date
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(verbatim: QuotaDisplayFormatter.name(for: quota))
-                .font(.body.weight(.medium))
-                .textSelection(.enabled)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(verbatim: QuotaDisplayFormatter.name(for: quota))
+                    .font(.body.weight(.semibold))
+                    .textSelection(.enabled)
+                    .lineLimit(2)
+
+                Spacer(minLength: 12)
+
+                VStack(alignment: .trailing, spacing: 0) {
+                    if let remainingPercentage {
+                        Text(verbatim: QuotaDisplayFormatter.percentageValue(remainingPercentage))
+                            .font(.title2.weight(.bold))
+                            .monospacedDigit()
+                            .foregroundStyle(gaugeTint)
+                    } else {
+                        Text("field.not_provided")
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("quota.remaining")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("field.percentage")
+                .accessibilityLabel(Text("quota.percentage.remaining"))
+                .accessibilityValue(
+                    accessibilityValue(
+                        remainingPercentage.map { QuotaDisplayFormatter.percentageValue($0) }
+                    )
+                )
+            }
 
             percentageGauge
 
-            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 4) {
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
                 valueRow(identifier: "used", label: "quota.used", value: QuotaDisplayFormatter.value(quota.used))
                 valueRow(
                     identifier: "remaining",
@@ -323,42 +511,27 @@ struct QuotaValueView: View {
             }
             .font(.caption)
         }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(.primary.opacity(0.07), lineWidth: 1)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("quota.\(quota.id.rawValue)")
     }
 
     private var percentageGauge: some View {
-        VStack(spacing: 4) {
-            HStack {
-                Text("quota.remaining")
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if let remainingPercentage {
-                    Text(verbatim: QuotaDisplayFormatter.percentageValue(remainingPercentage))
-                        .fontWeight(.semibold)
-                        .monospacedDigit()
-                } else {
-                    Text("field.not_provided")
-                        .foregroundStyle(.secondary)
-                }
+        Capsule()
+            .fill(.secondary.opacity(0.16))
+            .frame(height: 10)
+            .overlay(alignment: .leading) {
+                Capsule()
+                    .fill(gaugeTint)
+                    .scaleEffect(x: gaugeFill, y: 1, anchor: .leading)
             }
-            .font(.caption)
-
-            Capsule()
-                .fill(.secondary.opacity(0.16))
-                .frame(height: 7)
-                .overlay(alignment: .leading) {
-                    Capsule()
-                        .fill(gaugeTint)
-                        .scaleEffect(x: gaugeFill, y: 1, anchor: .leading)
-                }
-                .clipShape(Capsule())
-                .accessibilityHidden(true)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("field.percentage")
-        .accessibilityLabel(Text(percentageLabel))
-        .accessibilityValue(accessibilityValue(QuotaDisplayFormatter.percentage(quota.percentage)))
+            .clipShape(Capsule())
+            .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -372,6 +545,8 @@ struct QuotaValueView: View {
                 .foregroundStyle(.secondary)
             if let value {
                 Text(verbatim: value)
+                    .fontWeight(.medium)
+                    .monospacedDigit()
                     .textSelection(.enabled)
             } else {
                 Text("field.not_provided")
@@ -410,13 +585,6 @@ struct QuotaValueView: View {
             return Text(verbatim: value)
         }
         return Text("field.not_provided")
-    }
-
-    private var percentageLabel: LocalizedStringKey {
-        switch quota.percentage.meaning {
-        case .used: "quota.percentage.used"
-        case .remaining: "quota.percentage.remaining"
-        }
     }
 }
 
@@ -764,6 +932,7 @@ struct ProviderSettingsView: View {
 
 private enum BadgeColor {
     case secondary
+    case blue
     case green
     case orange
     case red
@@ -771,6 +940,7 @@ private enum BadgeColor {
     var foreground: Color {
         switch self {
         case .secondary: .secondary
+        case .blue: .blue
         case .green: .green
         case .orange: .orange
         case .red: .red
