@@ -195,18 +195,23 @@ final class AppModel: ObservableObject {
     func menuValue(for preference: ProviderPreference) -> String {
         guard
             let selectedID = preference.representativeQuotaID,
-            let quota = states[preference.providerID]?.snapshot?.quotas.first(where: { $0.id == selectedID })
+            let quota = states[preference.providerID]?.snapshot?.quotas.first(where: { $0.id == selectedID }),
+            let remaining = QuotaDisplayFormatter.remainingPercentage(quota.percentage)
         else { return "—" }
-        if let raw = quota.percentage.rawText {
-            return raw.contains("%") ? raw : "\(raw)%"
-        }
-        if let used = quota.used {
-            return used.rawText
-        }
-        if let remaining = quota.remaining {
-            return remaining.rawText
-        }
-        return "—"
+        return "\(Self.roundedPercent(remaining))%"
+    }
+
+    private static func roundedPercent(_ value: Decimal) -> Int {
+        var rounded = Decimal()
+        var source = value
+        NSDecimalRound(&rounded, &source, 0, .plain)
+        return NSDecimalNumber(decimal: rounded).intValue
+    }
+
+    func menuBarLabelText() -> String {
+        preferences.visibleProviders.map { preference in
+            "\(preference.abbreviation) \(menuValue(for: preference))"
+        }.joined(separator: "  ")
     }
 
     var orderedPreferences: [ProviderPreference] {

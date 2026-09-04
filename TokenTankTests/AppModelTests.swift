@@ -28,7 +28,7 @@ final class AppModelTests: XCTestCase {
 
         preference.representativeQuotaID = "primary"
         model.updatePreference(preference)
-        XCTAssertEqual(model.menuValue(for: preference), "37.5%")
+        XCTAssertEqual(model.menuValue(for: preference), "63%")
 
         preference.representativeQuotaID = "vanished"
         model.updatePreference(preference)
@@ -36,43 +36,77 @@ final class AppModelTests: XCTestCase {
         await model.stop()
     }
 
-    func testMenuValueUsesSourceScalarWhenPercentageIsMissing() async throws {
-        let usedOnly = makeSnapshot(
+    func testMenuValueShowsIntegerRemainingPercentageOnly() async throws {
+        let usedPercent = makeSnapshot(providerID: .codex, percentage: 37.5)
+        let remainingPercent = makeSnapshot(
             providerID: .claude,
+            percentage: 18,
+            percentageMeaning: .remaining
+        )
+        let missingPercent = makeSnapshot(
+            providerID: .grok,
             used: SourceValue(value: 10, rawText: "10", unit: "tokens")
         )
-        let remainingOnly = makeSnapshot(
-            providerID: .grok,
-            remaining: SourceValue(value: 2500, rawText: "2500", unit: "USD cents")
-        )
-        let claude = TestAppAdapter(id: .claude, results: [.success(usedOnly)])
-        let grok = TestAppAdapter(id: .grok, results: [.success(remainingOnly)])
         let credentials = InMemoryCredentialStore()
         let model = AppModel(
-            adapters: [claude, grok],
+            adapters: [
+                TestAppAdapter(id: .codex, results: [.success(usedPercent)]),
+                TestAppAdapter(id: .claude, results: [.success(remainingPercent)]),
+                TestAppAdapter(id: .grok, results: [.success(missingPercent)]),
+            ],
             credentialStore: credentials,
             preferencesStore: MemoryPreferencesStore(),
             context: makeContext(credentials: credentials)
         )
 
         model.ensureStarted()
-        let bothFresh = await eventually {
-            if case .fresh = model.states[.claude], case .fresh = model.states[.grok] {
+        let allFresh = await eventually {
+            if case .fresh = model.states[.codex],
+               case .fresh = model.states[.claude],
+               case .fresh = model.states[.grok] {
                 return true
             }
             return false
         }
-        XCTAssertTrue(bothFresh)
+        XCTAssertTrue(allFresh)
+
+        var codexPreference = model.preference(for: .codex)
+        codexPreference.representativeQuotaID = "primary"
+        model.updatePreference(codexPreference)
+        XCTAssertEqual(model.menuValue(for: codexPreference), "63%")
 
         var claudePreference = model.preference(for: .claude)
         claudePreference.representativeQuotaID = "primary"
         model.updatePreference(claudePreference)
-        XCTAssertEqual(model.menuValue(for: claudePreference), "10")
+        XCTAssertEqual(model.menuValue(for: claudePreference), "18%")
 
         var grokPreference = model.preference(for: .grok)
         grokPreference.representativeQuotaID = "primary"
         model.updatePreference(grokPreference)
-        XCTAssertEqual(model.menuValue(for: grokPreference), "2500")
+        XCTAssertEqual(model.menuValue(for: grokPreference), "—")
+
+        await model.stop()
+    }
+
+    func testMenuBarLabelJoinsEveryVisibleProvider() async throws {
+        let credentials = InMemoryCredentialStore()
+        let model = AppModel(
+            adapters: [],
+            credentialStore: credentials,
+            preferencesStore: MemoryPreferencesStore(),
+            context: makeContext(credentials: credentials)
+        )
+
+        XCTAssertEqual(model.menuBarLabelText(), "CDX —  CLD —  GRK —  CUR —  DB —")
+
+        var cursor = model.preference(for: .cursor)
+        cursor.isVisible = false
+        model.updatePreference(cursor)
+        var claude = model.preference(for: .claude)
+        claude.representativeQuotaID = "primary"
+        model.updatePreference(claude)
+        XCTAssertEqual(model.menuBarLabelText(), "CDX —  CLD —  GRK —  DB —")
+
         await model.stop()
     }
 
@@ -323,6 +357,7 @@ final class AppModelTests: XCTestCase {
     private func makeSnapshot(
         providerID: ProviderID,
         percentage: Decimal? = nil,
+        percentageMeaning: PercentageMeaning = .used,
         used: SourceValue? = nil,
         remaining: SourceValue? = nil
     ) -> ProviderSnapshot {
@@ -346,7 +381,7 @@ final class AppModelTests: XCTestCase {
                         SourcePercentage(
                             value: $0,
                             rawText: NSDecimalNumber(decimal: $0).stringValue,
-                            meaning: .used
+                            meaning: percentageMeaning
                         )
                     } ?? .missing(meaning: .used),
                     resetsAt: nil

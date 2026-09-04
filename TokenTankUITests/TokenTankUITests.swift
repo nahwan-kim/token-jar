@@ -29,7 +29,7 @@ final class TokenTankUITests: XCTestCase {
             statusItem.value as? String ?? "",
         ].joined(separator: " ")
         XCTAssertFalse(summaryText.contains("\n"), "Menu summary must remain one line")
-        for expected in ["CDX", "0%", "CLD", "10%", "GRK", "CUR", "DB"] {
+        for expected in ["CDX", "100%", "CLD", "90%", "GRK", "CUR", "DB"] {
             XCTAssertTrue(
                 summaryText.contains(expected),
                 "Menu summary is missing \(expected): \(summaryText)"

@@ -6,26 +6,18 @@ struct MenuBarLabelView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        HStack(spacing: 8) {
+        Group {
             if model.preferences.visibleProviders.isEmpty {
                 Image(systemName: "chart.bar.fill")
-                    .accessibilityLabel(Text("menu.summary.empty"))
-            }
-            ForEach(model.preferences.visibleProviders) { preference in
-                HStack(spacing: 3) {
-                    Text(verbatim: preference.abbreviation)
-                    Text(verbatim: model.menuValue(for: preference))
-                    if model.states[preference.providerID]?.isStale == true {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .accessibilityLabel(Text("state.stale"))
-                    }
-                }
-                .accessibilityElement(children: .combine)
+            } else {
+                // MenuBarExtra renders only the first Text in a nested label tree.
+                Text(verbatim: model.menuBarLabelText())
+                    .monospacedDigit()
             }
         }
         .lineLimit(1)
         .fixedSize(horizontal: true, vertical: false)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
         .accessibilityIdentifier("menu-bar.summary")
         .accessibilityLabel(accessibilitySummary)
     }
