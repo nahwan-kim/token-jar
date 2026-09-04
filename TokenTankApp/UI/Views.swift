@@ -9,6 +9,9 @@ struct MenuBarLabelView: View {
         Group {
             if model.preferences.visibleProviders.isEmpty {
                 Image(systemName: "chart.bar.fill")
+            } else if let image = MenuBarSummaryRenderer.image(for: model) {
+                Image(nsImage: image)
+                    .renderingMode(.template)
             } else {
                 // MenuBarExtra renders only the first Text in a nested label tree.
                 Text(verbatim: model.menuBarLabelText())
@@ -231,9 +234,30 @@ struct ProviderDetailView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {
-                    VStack(spacing: 10) {
-                        ForEach(snapshot.quotas) { quota in
-                            QuotaValueView(quota: quota, refreshedAt: snapshot.refreshedAt, now: now)
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(QuotaDisplayFormatter.displayedQuotas(
+                            snapshot.quotas,
+                            providerID: providerID
+                        )) { quota in
+                            QuotaValueView(
+                                quota: quota,
+                                refreshedAt: snapshot.refreshedAt,
+                                now: now,
+                                trailingChip: QuotaDisplayFormatter.claudeFableChip(
+                                    for: quota,
+                                    in: snapshot.quotas
+                                )
+                            )
+                        }
+                        if providerID == .codex,
+                           let resetLine = QuotaDisplayFormatter.codexResetCreditsLine(
+                            snapshot.quotas,
+                            now: now
+                           ) {
+                            Text(verbatim: resetLine)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .accessibilityIdentifier("quota.rateLimitResetCredits")
                         }
                     }
                 }
@@ -250,10 +274,10 @@ struct ProviderDetailView: View {
             }
         }
         .padding(14)
-        .background(presentation.tint.opacity(0.055), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(brandTint.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(presentation.tint.opacity(0.2), lineWidth: 1)
+                .stroke(brandTint.opacity(0.34), lineWidth: 1)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("provider.\(providerID.rawValue)")
@@ -261,15 +285,29 @@ struct ProviderDetailView: View {
 
     private var providerHeader: some View {
         HStack(spacing: 10) {
-            Image(systemName: presentation.symbol)
-                .font(.body.weight(.semibold))
-                .foregroundStyle(presentation.tint)
-                .frame(width: 30, height: 30)
-                .background(presentation.tint.opacity(0.13), in: Circle())
-                .accessibilityHidden(true)
+            ProviderBrandIcon(
+                providerID: providerID,
+                pointSize: 18,
+                color: BrandIcon.hasColorVariant(providerID)
+            )
+            .frame(width: 30, height: 30)
+            .background(brandTint.opacity(0.18), in: Circle())
+            .accessibilityHidden(true)
 
-            Text(verbatim: providerID.displayName)
-                .font(.headline)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(verbatim: providerID.displayName)
+                    .font(.headline)
+                if let planName = QuotaDisplayFormatter.planName(
+                    for: providerID,
+                    quotas: state.snapshot?.quotas ?? []
+                ) {
+                    Text(verbatim: planName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .accessibilityIdentifier("provider.\(providerID.rawValue).plan")
+                }
+            }
 
             Spacer()
 
@@ -278,6 +316,8 @@ struct ProviderDetailView: View {
                 .accessibilityIdentifier(presentation.identifier)
         }
     }
+
+    private var brandTint: Color { BrandIcon.tint(for: providerID) }
 
     @ViewBuilder
     private var statusView: some View {
@@ -445,70 +485,68 @@ struct QuotaValueView: View {
     let quota: RawQuotaItem
     let refreshedAt: Date
     let now: Date
+    var trailingChip: QuotaDisplayFormatter.LimitChip? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(verbatim: QuotaDisplayFormatter.name(for: quota))
-                    .font(.body.weight(.semibold))
-                    .textSelection(.enabled)
-                    .lineLimit(2)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
 
-                Spacer(minLength: 12)
-
-                VStack(alignment: .trailing, spacing: 0) {
-                    if let remainingPercentage {
-                        Text(verbatim: QuotaDisplayFormatter.percentageValue(remainingPercentage))
-                            .font(.title2.weight(.bold))
-                            .monospacedDigit()
-                            .foregroundStyle(gaugeTint)
-                    } else {
-                        Text("field.not_provided")
-                            .font(.callout.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                    }
-                    Text("quota.remaining")
+                if let reset = quota.resetsAt {
+                    Text(verbatim: QuotaDisplayFormatter.relativeTime(reset, relativeTo: now))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .accessibilityIdentifier("field.reset")
+                }
+
+                Spacer(minLength: 6)
+
+                if let remainingPercentage {
+                    Text(verbatim: QuotaDisplayFormatter.percentageValue(remainingPercentage))
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(gaugeTint)
+                } else if let remaining = QuotaDisplayFormatter.value(quota.remaining) {
+                    Text(verbatim: remaining)
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                } else {
+                    Text("field.not_provided")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("field.percentage")
+            .accessibilityLabel(Text("quota.percentage.remaining"))
+            .accessibilityValue(accessibilityValue(headlineValue))
+
+            if remainingPercentage != nil {
+                percentageGauge
+            }
+            if let trailingChip {
+                HStack(spacing: 6) {
+                    Text(verbatim: trailingChip.title)
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(chipTint(for: trailingChip.remaining).opacity(0.16), in: Capsule())
+                        .foregroundStyle(chipTint(for: trailingChip.remaining))
+                    Text(verbatim: QuotaDisplayFormatter.percentageValue(trailingChip.remaining))
+                        .font(.caption.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(chipTint(for: trailingChip.remaining))
+                    Spacer(minLength: 0)
                 }
                 .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("field.percentage")
-                .accessibilityLabel(Text("quota.percentage.remaining"))
-                .accessibilityValue(
-                    accessibilityValue(
-                        remainingPercentage.map { QuotaDisplayFormatter.percentageValue($0) }
-                    )
-                )
+                .accessibilityIdentifier("quota.chip.\(trailingChip.id)")
+                .accessibilityLabel(Text(verbatim: trailingChip.title))
+                .accessibilityValue(Text(verbatim: QuotaDisplayFormatter.percentageValue(trailingChip.remaining)))
             }
-
-            percentageGauge
-
-            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
-                valueRow(identifier: "used", label: "quota.used", value: QuotaDisplayFormatter.value(quota.used))
-                valueRow(
-                    identifier: "remaining",
-                    label: "quota.remaining",
-                    value: QuotaDisplayFormatter.value(quota.remaining)
-                )
-                valueRow(
-                    identifier: "reset",
-                    label: "quota.reset",
-                    value: quota.resetsAt.map { QuotaDisplayFormatter.resetTime($0, relativeTo: now) }
-                )
-                valueRow(
-                    identifier: "refreshed",
-                    label: "quota.refreshed",
-                    value: QuotaDisplayFormatter.relativeTime(refreshedAt, relativeTo: now)
-                )
-            }
-            .font(.caption)
         }
-        .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(.primary.opacity(0.07), lineWidth: 1)
-        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("quota.\(quota.id.rawValue)")
     }
@@ -516,7 +554,7 @@ struct QuotaValueView: View {
     private var percentageGauge: some View {
         Capsule()
             .fill(.secondary.opacity(0.16))
-            .frame(height: 10)
+            .frame(height: 3)
             .overlay(alignment: .leading) {
                 Capsule()
                     .fill(gaugeTint)
@@ -526,33 +564,15 @@ struct QuotaValueView: View {
             .accessibilityHidden(true)
     }
 
-    @ViewBuilder
-    private func valueRow(
-        identifier: String,
-        label: LocalizedStringKey,
-        value: String?
-    ) -> some View {
-        GridRow {
-            Text(label)
-                .foregroundStyle(.secondary)
-            if let value {
-                Text(verbatim: value)
-                    .fontWeight(.medium)
-                    .monospacedDigit()
-                    .textSelection(.enabled)
-            } else {
-                Text("field.not_provided")
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("field.\(identifier)")
-        .accessibilityLabel(Text(label))
-        .accessibilityValue(accessibilityValue(value))
-    }
-
     private var remainingPercentage: Decimal? {
         QuotaDisplayFormatter.remainingPercentage(quota.percentage)
+    }
+
+    private var headlineValue: String? {
+        if let remainingPercentage {
+            return QuotaDisplayFormatter.percentageValue(remainingPercentage)
+        }
+        return QuotaDisplayFormatter.value(quota.remaining)
     }
 
     private var gaugeFill: Double {
@@ -578,10 +598,133 @@ struct QuotaValueView: View {
         }
         return Text("field.not_provided")
     }
+
+    private func chipTint(for remaining: Decimal) -> Color {
+        let value = NSDecimalNumber(decimal: remaining).doubleValue
+        if value > 50 { return Color(nsColor: .systemGreen) }
+        if value >= 20 { return Color(nsColor: .systemYellow) }
+        return Color(nsColor: .systemRed)
+    }
 }
 
 enum QuotaDisplayFormatter {
+    static func displayedQuotas(
+        _ quotas: [RawQuotaItem],
+        providerID: ProviderID
+    ) -> [RawQuotaItem] {
+        let filtered: [RawQuotaItem]
+        switch providerID {
+        case .codex:
+            filtered = quotas.filter(isCodexWeeklyQuota)
+        case .claude:
+            filtered = quotas.filter(isClaudePopupQuota)
+        case .grok:
+            filtered = quotas
+        case .cursor:
+            filtered = quotas.filter(isCursorPopupQuota)
+        case .doubao:
+            filtered = quotas.filter(isDoubaoPopupQuota)
+        }
+        return filtered.isEmpty ? quotas : filtered
+    }
+
+    static func planName(
+        for providerID: ProviderID,
+        quotas: [RawQuotaItem],
+        locale: Locale = .current
+    ) -> String? {
+        let displayed = displayedQuotas(quotas, providerID: providerID)
+        let sample = displayed.first ?? quotas.first
+        switch providerID {
+        case .cursor:
+            guard let membership = quotas.lazy.compactMap({ $0.sourceFields["membershipType"] }).first,
+                  !membership.isEmpty
+            else { return nil }
+            return readableName(membership, locale: locale)
+        case .doubao:
+            guard let sample else { return nil }
+            let rawName = sample.originalName
+            let base: String
+            if rawName.hasSuffix(".weekly") {
+                base = String(rawName.dropLast(7))
+            } else if rawName.hasSuffix(".5h") {
+                base = String(rawName.dropLast(3))
+            } else if rawName.hasSuffix(".monthly") {
+                base = String(rawName.dropLast(8))
+            } else {
+                base = sample.sourceFields["path"] ?? rawName
+            }
+            var parts = [readableNamePath(base, locale: locale)]
+            if let tier = sample.sourceFields["tier"], !tier.isEmpty {
+                parts.append(readableName(tier, locale: locale))
+            }
+            return parts.joined(separator: " · ")
+        case .codex:
+            guard let sample else { return nil }
+            let limitName = sample.sourceFields["limitName"] ?? sample.originalName
+            let normalized = limitName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalized.isEmpty, normalized.caseInsensitiveCompare("Codex") != .orderedSame else {
+                return nil
+            }
+            return readableName(normalized, locale: locale)
+        case .claude, .grok:
+            return nil
+        }
+    }
+
+    struct LimitChip: Equatable {
+        let id: String
+        let title: String
+        let remaining: Decimal
+    }
+
+    static func claudeFableChip(
+        for quota: RawQuotaItem,
+        in quotas: [RawQuotaItem],
+        locale: Locale = .current
+    ) -> LimitChip? {
+        guard quota.originalName == "weekly_all" || quota.originalName == "seven_day" else {
+            return nil
+        }
+        guard let fable = quotas.first(where: { $0.originalName.hasPrefix("weekly_scoped.") }),
+              let remaining = remainingPercentage(fable.percentage)
+        else {
+            return nil
+        }
+        let title = fable.originalName.split(separator: ".").last.map(String.init) ?? "Fable"
+        return LimitChip(id: fable.id.rawValue, title: title, remaining: remaining)
+    }
+
+    static func codexResetCreditsLine(
+        _ quotas: [RawQuotaItem],
+        now: Date,
+        locale: Locale = .current
+    ) -> String? {
+        guard let credits = quotas.first(where: { $0.id.rawValue == "rateLimitResetCredits" }) else {
+            return nil
+        }
+        let remaining = credits.remaining.map { number($0.value, locale: locale, maximumFractionDigits: 0) }
+            ?? "—"
+        let korean = (locale.language.languageCode?.identifier ?? "en") == "ko"
+        let expiry = quotas.compactMap { quota -> Date? in
+            guard quota.id.rawValue.hasPrefix("rateLimitResetCredit.") else { return nil }
+            return quota.resetsAt ?? dateFromSourceFields(quota.sourceFields)
+        }.min()
+        if let expiry {
+            let when = relativeTime(expiry, relativeTo: now, locale: locale)
+            return korean
+                ? "리셋권 \(remaining)개 · \(when)"
+                : "\(remaining) reset credits · \(when)"
+        }
+        return korean
+            ? "리셋권 \(remaining)개"
+            : "\(remaining) reset credits"
+    }
+
     static func name(for quota: RawQuotaItem, locale: Locale = .current) -> String {
+        if let compactName = compactName(for: quota, locale: locale) {
+            return compactName
+        }
         var components = quota.originalName
             .split(separator: ".", omittingEmptySubsequences: true)
             .map { readableName(String($0), locale: locale) }
@@ -648,6 +791,89 @@ enum QuotaDisplayFormatter {
         return formatter.string(from: date)
     }
 
+    private static func isCodexWeeklyQuota(_ quota: RawQuotaItem) -> Bool {
+        let id = quota.id.rawValue
+        if id.hasPrefix("rateLimitReset") { return false }
+        let limitID = quota.sourceFields["limitId"] ?? id.split(separator: ".").first.map(String.init)
+        guard limitID == "codex" || limitID == "rateLimits" else { return false }
+        return quota.sourceFields["window"] == "primary"
+    }
+
+    private static func isClaudePopupQuota(_ quota: RawQuotaItem) -> Bool {
+        switch quota.originalName {
+        case "session", "weekly_all", "five_hour", "seven_day":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func isCursorPopupQuota(_ quota: RawQuotaItem) -> Bool {
+        switch quota.originalName {
+        case "individualUsage.plan.autoPercentUsed", "individualUsage.plan.apiPercentUsed":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func isDoubaoPopupQuota(_ quota: RawQuotaItem) -> Bool {
+        let name = quota.originalName
+        return name == "5h"
+            || name == "weekly"
+            || name.hasSuffix(".5h")
+            || name.hasSuffix(".weekly")
+    }
+
+    private static func compactName(for quota: RawQuotaItem, locale: Locale) -> String? {
+        let korean = (locale.language.languageCode?.identifier ?? "en") == "ko"
+        if isCodexWeeklyQuota(quota) {
+            return korean ? "주간 한도" : "Weekly limit"
+        }
+        switch quota.originalName {
+        case "session", "five_hour", "5h":
+            return korean ? "5시간 한도" : "5-hour limit"
+        case "weekly_all", "seven_day", "weekly", "credits":
+            return korean ? "주간 한도" : "Weekly limit"
+        case "individualUsage.plan.autoPercentUsed":
+            return korean ? "Cursor 모델" : "Cursor Models"
+        case "individualUsage.plan.apiPercentUsed":
+            return korean ? "기타 모델" : "Other Models"
+        default:
+            break
+        }
+        if quota.originalName.hasSuffix(".5h") {
+            let prefix = String(quota.originalName.dropLast(3))
+            return "\(readableNamePath(prefix, locale: locale)) · \(korean ? "5시간" : "5-hour")"
+        }
+        if quota.originalName.hasSuffix(".weekly") {
+            let prefix = String(quota.originalName.dropLast(7))
+            return "\(readableNamePath(prefix, locale: locale)) · \(korean ? "주간" : "Weekly")"
+        }
+        return nil
+    }
+
+    private static func readableNamePath(_ raw: String, locale: Locale) -> String {
+        raw.split(separator: ".", omittingEmptySubsequences: true)
+            .map { readableName(String($0), locale: locale) }
+            .joined(separator: " · ")
+    }
+
+    private static func dateFromSourceFields(_ fields: [String: String]) -> Date? {
+        for key in ["expiresAt", "expires_at", "resetsAt", "resetAt", "reset_at"] {
+            guard let raw = fields[key] else { continue }
+            if let date = ISO8601DateFormatter().date(from: raw) { return date }
+            if let decimal = Decimal(string: raw, locale: Locale(identifier: "en_US_POSIX")) {
+                let seconds = NSDecimalNumber(decimal: decimal).doubleValue
+                if seconds > 0 {
+                    return Date(
+                        timeIntervalSince1970: abs(seconds) > 100_000_000_000 ? seconds / 1_000 : seconds
+                    )
+                }
+            }
+        }
+        return nil
+    }
     private static func readableName(_ raw: String, locale: Locale) -> String {
         let language = locale.language.languageCode?.identifier ?? "en"
         let korean = language == "ko"
@@ -661,7 +887,7 @@ enum QuotaDisplayFormatter {
             "weekly": ("Weekly", "주간"),
             "monthly": ("Monthly", "월간"),
             "credits": ("Credits", "크레딧"),
-            "rateLimitResetCredits": ("Rate-limit reset credits", "한도 리셋 크레딧"),
+            "rateLimitResetCredits": ("Reset credits", "리셋권"),
             "individualUsage": ("Individual usage", "개인 사용량"),
             "teamUsage": ("Team usage", "팀 사용량"),
             "plan": ("Plan", "플랜"),
@@ -670,6 +896,16 @@ enum QuotaDisplayFormatter {
             "agent-plan-team": ("Team agent plan", "팀 Agent 플랜"),
             "coding-plan-team": ("Team coding plan", "팀 코딩 플랜"),
             "personal": ("Personal", "개인"),
+            "pro": ("Pro", "Pro"),
+            "pro_plus": ("Pro+", "Pro+"),
+            "pro-plus": ("Pro+", "Pro+"),
+            "business": ("Business", "Business"),
+            "ultra": ("Ultra", "Ultra"),
+            "free": ("Free", "Free"),
+            "hobby": ("Hobby", "Hobby"),
+            "medium": ("Medium", "Medium"),
+            "lite": ("Lite", "Lite"),
+            "plus": ("Plus", "Plus"),
             "team": ("Team", "팀"),
             "onDemand": ("On-demand", "온디맨드"),
             "overall": ("Overall", "전체"),
@@ -766,7 +1002,15 @@ struct ProviderSettingsView: View {
                             Toggle(
                                 isOn: binding(for: preference, keyPath: \.isVisible)
                             ) {
-                                Text(verbatim: preference.providerID.displayName)
+                                Label {
+                                    Text(verbatim: preference.providerID.displayName)
+                                } icon: {
+                                    ProviderBrandIcon(
+                                        providerID: preference.providerID,
+                                        pointSize: 14,
+                                        color: BrandIcon.hasColorVariant(preference.providerID)
+                                    )
+                                }
                             }
                             TextField(
                                 "settings.abbreviation",

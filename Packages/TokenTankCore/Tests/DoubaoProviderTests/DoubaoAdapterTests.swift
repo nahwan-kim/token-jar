@@ -102,6 +102,26 @@ struct DoubaoAdapterTests {
         #expect(snapshot.quotas[0].percentage.value == Decimal(string: "0.00098"))
         #expect(snapshot.quotas[0].resetsAt != nil)
         #expect(snapshot.quotas.allSatisfy { !$0.sourceFields.values.contains("agent-plan_cn-beijing_personal") })
+        #expect(snapshot.quotas.contains(where: { $0.sourceFields["tier"] == "medium" }))
+        let weekly = try #require(snapshot.quotas.first { $0.originalName == "agent-plan.personal.weekly" })
+        let shifted = Data(
+            """
+            {
+              "items": [
+                {
+                  "product": "agent-plan",
+                  "edition": "personal",
+                  "subscribed": true,
+                  "periods": [
+                    {"label":"weekly","used":1,"total":35000,"percent":1,"reset_at":"2026-09-14T00:00:00+08:00"}
+                  ]
+                }
+              ]
+            }
+            """.utf8
+        )
+        let shiftedSnapshot = try DoubaoAdapter.decodeSnapshot(from: shifted)
+        #expect(shiftedSnapshot.quotas.first?.id == weekly.id)
     }
 
     @Test("expired arkcli SSO is source-owner setup, not a Token Tank credential")

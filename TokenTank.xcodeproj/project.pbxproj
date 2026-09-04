@@ -17,6 +17,8 @@
 		A00000000000000000000108 /* TokenTankProviders in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000204 /* TokenTankProviders */; };
 		A00000000000000000000109 /* AppModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000018 /* AppModelTests.swift */; };
 		A0000000000000000000010A /* TokenTankUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000001A /* TokenTankUITests.swift */; };
+		A0000000000000000000010B /* BrandIcons.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000001C /* BrandIcons.swift */; };
+		A0000000000000000000010C /* BrandIcons in Resources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000001D /* BrandIcons */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -48,6 +50,8 @@
 		A00000000000000000000018 /* AppModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelTests.swift; sourceTree = "<group>"; };
 		A00000000000000000000019 /* TokenTankTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TokenTankTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A0000000000000000000001A /* TokenTankUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenTankUITests.swift; sourceTree = "<group>"; };
+		A0000000000000000000001C /* BrandIcons.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandIcons.swift; sourceTree = "<group>"; };
+		A0000000000000000000001D /* BrandIcons */ = {isa = PBXFileReference; lastKnownFileType = folder; path = BrandIcons; sourceTree = "<group>"; };
 		A0000000000000000000001B /* TokenTankUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TokenTankUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -113,6 +117,7 @@
 			isa = PBXGroup;
 			children = (
 				A00000000000000000000013 /* Views.swift */,
+				A0000000000000000000001C /* BrandIcons.swift */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -121,6 +126,7 @@
 			isa = PBXGroup;
 			children = (
 				A00000000000000000000014 /* Localizable.xcstrings */,
+				A0000000000000000000001D /* BrandIcons */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -277,6 +283,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A00000000000000000000104 /* Localizable.xcstrings in Resources */,
+				A0000000000000000000010C /* BrandIcons in Resources */,
 				A00000000000000000000105 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -305,6 +312,7 @@
 				A00000000000000000000101 /* TokenTankApp.swift in Sources */,
 				A00000000000000000000102 /* AppModel.swift in Sources */,
 				A00000000000000000000103 /* Views.swift in Sources */,
+				A0000000000000000000010B /* BrandIcons.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

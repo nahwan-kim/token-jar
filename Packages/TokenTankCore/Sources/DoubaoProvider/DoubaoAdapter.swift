@@ -154,7 +154,7 @@ private func appendNestedPlans(
     to quotas: inout [RawQuotaItem]
 ) throws {
     if objectContainsQuota(object) {
-        try appendQuotaRow(object, path: path.isEmpty ? "plan" : path, index: 0, to: &quotas)
+        try appendQuotaRow(object, path: path.isEmpty ? "plan" : path, index: 0, to: &quotas, tier: nil)
         return
     }
     for key in object.keys.sorted() {
@@ -162,7 +162,7 @@ private func appendNestedPlans(
         if let nested = object[key] as? [String: Any] {
             try appendNestedPlans(nested, path: nextPath, to: &quotas)
         } else if let rows = object[key] as? [Any] {
-            try appendQuotaUsage(rows, path: nextPath, to: &quotas)
+            try appendQuotaUsage(rows, path: nextPath, to: &quotas, tier: nil)
         }
     }
 }
@@ -180,15 +180,16 @@ private func appendPlanItems(
         }
         let product = doubaoString(item["product"] ?? item["Product"]) ?? "plan"
         let edition = doubaoString(item["edition"] ?? item["Edition"])
+        let tier = doubaoString(item["tier"] ?? item["Tier"])
         let path = edition.map { "\(product).\($0)" } ?? product
         guard let periodsValue = item["periods"] ?? item["Periods"] else {
-            try appendQuotaRow(item, path: path, index: index, to: &quotas)
+            try appendQuotaRow(item, path: path, index: index, to: &quotas, tier: tier)
             continue
         }
         guard let periods = periodsValue as? [Any] else {
             throw doubaoSchemaError("doubao.periods.invalid")
         }
-        try appendQuotaUsage(periods, path: path, to: &quotas)
+        try appendQuotaUsage(periods, path: path, to: &quotas, tier: tier)
     }
 }
 
@@ -202,13 +203,14 @@ private func objectContainsQuota(_ object: [String: Any]) -> Bool {
 private func appendQuotaUsage(
     _ rows: [Any],
     path: String,
-    to quotas: inout [RawQuotaItem]
+    to quotas: inout [RawQuotaItem],
+    tier: String? = nil
 ) throws {
     for (index, value) in rows.enumerated() {
         guard let row = value as? [String: Any] else {
             throw doubaoSchemaError("doubao.quota-usage.row-invalid")
         }
-        try appendQuotaRow(row, path: path, index: index, to: &quotas)
+        try appendQuotaRow(row, path: path, index: index, to: &quotas, tier: tier)
     }
 }
 
@@ -216,7 +218,8 @@ private func appendQuotaRow(
     _ row: [String: Any],
     path: String,
     index: Int,
-    to quotas: inout [RawQuotaItem]
+    to quotas: inout [RawQuotaItem],
+    tier: String? = nil
 ) throws {
     let level = doubaoString(
         row["label"]
@@ -251,11 +254,12 @@ private func appendQuotaRow(
     if let remaining { fields["remaining"] = remaining.raw }
     if let percent { fields["percent"] = percent.raw }
     if let resetValue, let raw = doubaoRawText(resetValue) { fields["reset"] = raw }
+    if let tier { fields["tier"] = tier }
     quotas.append(
         RawQuotaItem(
             id: StableSourceID.make(
                 prefix: "arkcli",
-                components: [path, level, doubaoRawText(resetValue) ?? "row-\(index)"]
+                components: [path, level]
             ),
             originalName: path == "QuotaUsage" || path == "Result.QuotaUsage" ? level : "\(path).\(level)",
             used: used.map { SourceValue(value: $0.value, rawText: $0.raw) },

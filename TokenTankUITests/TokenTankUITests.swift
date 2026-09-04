@@ -72,21 +72,14 @@ final class TokenTankUITests: XCTestCase {
             .matching(identifier: "quota.ui-test.doubao")
             .firstMatch
         XCTAssertTrue(doubaoQuota.waitForExistence(timeout: timeout))
-        let missingUsed = doubaoQuota.descendants(matching: .any)
-            .matching(identifier: "field.used")
+        let doubaoPercentage = doubaoQuota.descendants(matching: .any)
+            .matching(identifier: "field.percentage")
             .firstMatch
+        XCTAssertTrue(doubaoPercentage.waitForExistence(timeout: timeout))
         XCTAssertTrue(
-            missingUsed.waitForExistence(timeout: timeout)
-                && (missingUsed.value as? String)?.contains("Not provided") == true,
-            "Missing source fields must use the frozen label"
-        )
-        let zeroRemaining = doubaoQuota.descendants(matching: .any)
-            .matching(identifier: "field.remaining")
-            .firstMatch
-        XCTAssertTrue(
-            zeroRemaining.waitForExistence(timeout: timeout)
-                && (zeroRemaining.value as? String)?.contains("0 tokens") == true,
-            "Zero must remain distinct from a missing source value"
+            doubaoPercentage.label.contains("Remaining percentage")
+                && (doubaoPercentage.value as? String)?.contains("0 tokens") == true,
+            "Zero remaining must stay distinct from a missing source value; label=\(doubaoPercentage.label), value=\(String(describing: doubaoPercentage.value))"
         )
         let codexPercentage = detailWindow.descendants(matching: .any)
             .matching(identifier: "quota.ui-test.codex")
@@ -100,26 +93,16 @@ final class TokenTankUITests: XCTestCase {
                 && (codexPercentage.value as? String)?.contains("100%") == true,
             "Gauge accessibility must match the prominently displayed remaining percentage; label=\(codexPercentage.label), value=\(String(describing: codexPercentage.value))"
         )
-        let doubaoPercentage = doubaoQuota.descendants(matching: .any)
-            .matching(identifier: "field.percentage")
-            .firstMatch
-        XCTAssertTrue(
-            doubaoPercentage.waitForExistence(timeout: timeout)
-                && doubaoPercentage.label.contains("Remaining percentage"),
-            "Missing percentages must retain explicit remaining-percentage semantics"
-        )
         let codexQuota = detailWindow.descendants(matching: .any)
             .matching(identifier: "quota.ui-test.codex")
             .firstMatch
-        for identifier in ["field.reset", "field.refreshed"] {
-            XCTAssertTrue(
-                codexQuota.descendants(matching: .any)
-                    .matching(identifier: identifier)
-                    .firstMatch
-                    .waitForExistence(timeout: timeout),
-                "Missing detail field: \(identifier)"
-            )
-        }
+        XCTAssertTrue(
+            codexQuota.descendants(matching: .any)
+                .matching(identifier: "field.reset")
+                .firstMatch
+                .waitForExistence(timeout: timeout),
+            "Missing detail field: field.reset"
+        )
         for identifier in [
             "action.refresh",
             "action.waitForNextRefresh",

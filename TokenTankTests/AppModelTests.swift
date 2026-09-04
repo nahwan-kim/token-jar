@@ -24,7 +24,7 @@ final class AppModelTests: XCTestCase {
         }
         XCTAssertTrue(becameFresh)
         var preference = model.preference(for: .codex)
-        XCTAssertEqual(model.menuValue(for: preference), "—")
+        XCTAssertEqual(model.menuValue(for: preference), "63%")
 
         preference.representativeQuotaID = "primary"
         model.updatePreference(preference)
@@ -33,6 +33,47 @@ final class AppModelTests: XCTestCase {
         preference.representativeQuotaID = "vanished"
         model.updatePreference(preference)
         XCTAssertEqual(model.menuValue(for: preference), "—")
+        await model.stop()
+    }
+
+    func testMenuValueFallsBackToPopupQuotaWhenUnselected() async throws {
+        let snapshot = ProviderSnapshot(
+            providerID: .codex,
+            source: ProviderSourceDescriptor(
+                id: "test.codex",
+                name: "Test source",
+                kind: .officialAPI,
+                credentialOwnership: .tokenTank,
+                documentationURL: nil,
+                detail: "Test source"
+            ),
+            quotas: [
+                RawQuotaItem(
+                    id: "codex.primary",
+                    originalName: "Codex",
+                    used: SourceValue(value: 37.5, rawText: "37.5", unit: "%"),
+                    remaining: nil,
+                    percentage: SourcePercentage(value: 37.5, rawText: "37.5", meaning: .used),
+                    resetsAt: nil,
+                    sourceFields: ["limitId": "codex", "window": "primary"]
+                ),
+            ],
+            refreshedAt: Date()
+        )
+        let credentials = InMemoryCredentialStore()
+        let model = AppModel(
+            adapters: [TestAppAdapter(id: .codex, results: [.success(snapshot)])],
+            credentialStore: credentials,
+            preferencesStore: MemoryPreferencesStore(),
+            context: makeContext(credentials: credentials)
+        )
+        model.ensureStarted()
+        let becameFresh = await eventually {
+            if case .fresh = model.states[.codex] { return true }
+            return false
+        }
+        XCTAssertTrue(becameFresh)
+        XCTAssertEqual(model.menuValue(for: model.preference(for: .codex)), "63%")
         await model.stop()
     }
 
@@ -108,6 +149,40 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.menuBarLabelText(), "CDX —  CLD —  GRK —  DB —")
 
         await model.stop()
+    }
+    func testBrandIconsAreBundledAndMenuBarSummaryRenders() {
+        for providerID in ProviderID.allCases {
+            XCTAssertNotNil(
+                BrandIcon.image(for: providerID, pointSize: 16, color: false),
+                "Missing template mark for \(providerID.rawValue)"
+            )
+            if BrandIcon.hasColorVariant(providerID) {
+                XCTAssertNotNil(
+                    BrandIcon.image(for: providerID, pointSize: 16, color: true),
+                    "Missing color mark for \(providerID.rawValue)"
+                )
+            } else {
+                XCTAssertEqual(
+                    BrandIcon.resourceName(for: providerID, color: true),
+                    BrandIcon.resourceName(for: providerID, color: false)
+                )
+            }
+        }
+
+        let tints = ProviderID.allCases.map(BrandIcon.tint(for:))
+        XCTAssertEqual(Set(tints.map(\.description)).count, ProviderID.allCases.count)
+
+        let image = MenuBarSummaryRenderer.compose(
+            items: [
+                (.codex, "63%"),
+                (.claude, "90%"),
+                (.grok, "—"),
+            ]
+        )
+        XCTAssertNotNil(image)
+        XCTAssertEqual(image?.isTemplate, true)
+        XCTAssertGreaterThan(image?.size.width ?? 0, 40)
+        XCTAssertEqual(image?.size.height, 16)
     }
 
     func testVisibilityOrderingAndAbbreviationPersist() async throws {
@@ -217,6 +292,7 @@ final class AppModelTests: XCTestCase {
         for relativePath in [
             "TokenTankApp/App/AppModel.swift",
             "TokenTankApp/UI/Views.swift",
+            "TokenTankApp/UI/BrandIcons.swift",
         ] {
             let source = try String(
                 contentsOf: repositoryRoot.appendingPathComponent(relativePath),
@@ -281,20 +357,176 @@ final class AppModelTests: XCTestCase {
             remaining: nil,
             percentage: .missing(meaning: .used),
             resetsAt: nil,
-            sourceFields: ["window": "primary"]
+            sourceFields: ["limitId": "codex", "window": "primary"]
         )
 
         XCTAssertEqual(
             QuotaDisplayFormatter.name(for: quota, locale: Locale(identifier: "en_US")),
-            "Individual usage · Plan · Auto usage"
+            "Cursor Models"
         )
         XCTAssertEqual(
             QuotaDisplayFormatter.name(for: quota, locale: Locale(identifier: "ko_KR")),
-            "개인 사용량 · 플랜 · 자동 사용량"
+            "Cursor 모델"
         )
         XCTAssertEqual(
             QuotaDisplayFormatter.name(for: codexWindow, locale: Locale(identifier: "en_US")),
-            "Codex · Primary"
+            "Weekly limit"
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.name(for: codexWindow, locale: Locale(identifier: "ko_KR")),
+            "주간 한도"
+        )
+        let extraCodex = RawQuotaItem(
+            id: "codex_other.primary",
+            originalName: "codex_other",
+            used: nil,
+            remaining: nil,
+            percentage: .missing(meaning: .used),
+            resetsAt: nil,
+            sourceFields: ["limitId": "codex_other", "window": "primary"]
+        )
+        let secondary = RawQuotaItem(
+            id: "codex.secondary",
+            originalName: "Codex",
+            used: nil,
+            remaining: nil,
+            percentage: .missing(meaning: .used),
+            resetsAt: nil,
+            sourceFields: ["limitId": "codex", "window": "secondary"]
+        )
+        let resetCredits = RawQuotaItem(
+            id: "rateLimitResetCredits",
+            originalName: "rateLimitResetCredits",
+            used: nil,
+            remaining: SourceValue(value: 2, rawText: "2", unit: "credits"),
+            percentage: .missing(meaning: .remaining),
+            resetsAt: nil
+        )
+        let resetCredit = RawQuotaItem(
+            id: "rateLimitResetCredit.credit-1",
+            originalName: "Rate-limit reset",
+            used: nil,
+            remaining: nil,
+            percentage: .missing(meaning: .remaining),
+            resetsAt: nil,
+            sourceFields: ["expiresAt": "1800000400"]
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.displayedQuotas(
+                [codexWindow, extraCodex, secondary, resetCredits],
+                providerID: .codex
+            ).map(\.id.rawValue),
+            ["codex-primary"]
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.codexResetCreditsLine(
+                [resetCredits, resetCredit],
+                now: Date(timeIntervalSince1970: 1_800_000_000),
+                locale: Locale(identifier: "en_US")
+            )?.hasPrefix("2 reset credits"),
+            true
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.displayedQuotas(
+                [
+                    RawQuotaItem(
+                        id: "session",
+                        originalName: "session",
+                        used: nil,
+                        remaining: nil,
+                        percentage: .missing(meaning: .used),
+                        resetsAt: nil
+                    ),
+                    RawQuotaItem(
+                        id: "weekly_scoped",
+                        originalName: "weekly_scoped.Fable",
+                        used: nil,
+                        remaining: nil,
+                        percentage: .missing(meaning: .used),
+                        resetsAt: nil
+                    ),
+                    RawQuotaItem(
+                        id: "weekly_all",
+                        originalName: "weekly_all",
+                        used: nil,
+                        remaining: nil,
+                        percentage: .missing(meaning: .used),
+                        resetsAt: nil
+                    ),
+                ],
+                providerID: .claude
+            ).map(\.originalName),
+            ["session", "weekly_all"]
+        )
+        let weeklyAll = RawQuotaItem(
+            id: "weekly_all",
+            originalName: "weekly_all",
+            used: nil,
+            remaining: nil,
+            percentage: SourcePercentage(value: 22, rawText: "22", meaning: .used),
+            resetsAt: nil
+        )
+        let fable = RawQuotaItem(
+            id: "weekly_scoped",
+            originalName: "weekly_scoped.Fable",
+            used: nil,
+            remaining: nil,
+            percentage: SourcePercentage(value: 44, rawText: "44", meaning: .used),
+            resetsAt: nil
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.claudeFableChip(for: weeklyAll, in: [weeklyAll, fable])?.title,
+            "Fable"
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.claudeFableChip(for: weeklyAll, in: [weeklyAll, fable])?.remaining,
+            56
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.name(
+                for: RawQuotaItem(
+                    id: "auto",
+                    originalName: "individualUsage.plan.autoPercentUsed",
+                    used: nil,
+                    remaining: nil,
+                    percentage: .missing(meaning: .used),
+                    resetsAt: nil
+                ),
+                locale: Locale(identifier: "en_US")
+            ),
+            "Cursor Models"
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.displayedQuotas(
+                [
+                    RawQuotaItem(
+                        id: "plan",
+                        originalName: "individualUsage.plan",
+                        used: nil,
+                        remaining: nil,
+                        percentage: .missing(meaning: .used),
+                        resetsAt: nil
+                    ),
+                    RawQuotaItem(
+                        id: "auto",
+                        originalName: "individualUsage.plan.autoPercentUsed",
+                        used: nil,
+                        remaining: nil,
+                        percentage: SourcePercentage(value: 8, rawText: "8", meaning: .used),
+                        resetsAt: nil
+                    ),
+                    RawQuotaItem(
+                        id: "api",
+                        originalName: "individualUsage.plan.apiPercentUsed",
+                        used: nil,
+                        remaining: nil,
+                        percentage: SourcePercentage(value: 43, rawText: "43", meaning: .used),
+                        resetsAt: nil
+                    ),
+                ],
+                providerID: .cursor
+            ).map(\.originalName),
+            ["individualUsage.plan.autoPercentUsed", "individualUsage.plan.apiPercentUsed"]
         )
         let doubao = RawQuotaItem(
             id: "arkcli-agent-weekly",
@@ -302,11 +534,70 @@ final class AppModelTests: XCTestCase {
             used: nil,
             remaining: nil,
             percentage: .missing(meaning: .used),
-            resetsAt: nil
+            resetsAt: nil,
+            sourceFields: ["path": "agent-plan.personal", "level": "weekly", "tier": "medium"]
         )
         XCTAssertEqual(
             QuotaDisplayFormatter.name(for: doubao, locale: Locale(identifier: "en_US")),
             "Agent plan · Personal · Weekly"
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.planName(
+                for: .cursor,
+                quotas: [
+                    RawQuotaItem(
+                        id: "auto",
+                        originalName: "individualUsage.plan.autoPercentUsed",
+                        used: nil,
+                        remaining: nil,
+                        percentage: .missing(meaning: .used),
+                        resetsAt: nil,
+                        sourceFields: ["membershipType": "pro"]
+                    ),
+                ],
+                locale: Locale(identifier: "en_US")
+            ),
+            "Pro"
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.planName(
+                for: .doubao,
+                quotas: [doubao],
+                locale: Locale(identifier: "en_US")
+            ),
+            "Agent plan · Personal · Medium"
+        )
+        XCTAssertNil(
+            QuotaDisplayFormatter.planName(
+                for: .claude,
+                quotas: [
+                    RawQuotaItem(
+                        id: "weekly_all",
+                        originalName: "weekly_all",
+                        used: nil,
+                        remaining: nil,
+                        percentage: .missing(meaning: .used),
+                        resetsAt: nil
+                    ),
+                ]
+            )
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.displayedQuotas(
+                [
+                    doubao,
+                    RawQuotaItem(
+                        id: "monthly",
+                        originalName: "agent-plan.personal.monthly",
+                        used: nil,
+                        remaining: nil,
+                        percentage: .missing(meaning: .used),
+                        resetsAt: nil
+                    ),
+                ],
+                providerID: .doubao
+            ).map(\.originalName),
+            ["agent-plan.personal.weekly"]
         )
         XCTAssertEqual(
             QuotaDisplayFormatter.name(for: doubao, locale: Locale(identifier: "ko_KR")),

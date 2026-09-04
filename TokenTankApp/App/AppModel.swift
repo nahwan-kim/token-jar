@@ -194,13 +194,22 @@ final class AppModel: ObservableObject {
 
     func menuValue(for preference: ProviderPreference) -> String {
         guard
-            let selectedID = preference.representativeQuotaID,
-            let quota = states[preference.providerID]?.snapshot?.quotas.first(where: { $0.id == selectedID }),
+            let quota = menuQuota(for: preference),
             let remaining = QuotaDisplayFormatter.remainingPercentage(quota.percentage)
         else { return "—" }
         return "\(Self.roundedPercent(remaining))%"
     }
 
+    func menuQuota(for preference: ProviderPreference) -> RawQuotaItem? {
+        let quotas = states[preference.providerID]?.snapshot?.quotas ?? []
+        if let selectedID = preference.representativeQuotaID {
+            return quotas.first(where: { $0.id == selectedID })
+        }
+        return QuotaDisplayFormatter.displayedQuotas(
+            quotas,
+            providerID: preference.providerID
+        ).first
+    }
     private static func roundedPercent(_ value: Decimal) -> Int {
         var rounded = Decimal()
         var source = value
@@ -309,7 +318,8 @@ final class AppModel: ObservableObject {
             remaining: Decimal?,
             percentage: Decimal?,
             meaning: PercentageMeaning,
-            resetsAt: Date?
+            resetsAt: Date?,
+            sourceFields: [String: String] = [:]
         ) -> ProviderSnapshot {
             let quota = RawQuotaItem(
                 id: RawQuotaID(rawValue: "ui-test.\(providerID.rawValue)"),
@@ -335,7 +345,8 @@ final class AppModel: ObservableObject {
                         meaning: meaning
                     )
                 } ?? .missing(meaning: meaning),
-                resetsAt: resetsAt
+                resetsAt: resetsAt,
+                sourceFields: sourceFields
             )
             return ProviderSnapshot(
                 providerID: providerID,
@@ -365,7 +376,7 @@ final class AppModel: ObservableObject {
         )
         let doubao = snapshot(
             .doubao,
-            originalName: "Coding Plan 5h",
+            originalName: "5h",
             used: nil,
             remaining: 0,
             percentage: nil,
