@@ -613,6 +613,32 @@ struct SystemInfrastructureTests {
         #expect(timeoutFailure.kind == .sourceUnavailable)
         #expect(timeoutFailure.diagnosticCode == "codex.app-server.timeout")
     }
+    @Test("Codex app-server handles an early child exit without terminating the host")
+    func codexEarlyChildExitDoesNotRaiseSIGPIPE() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let executable = directory.appendingPathComponent("codex-early-exit")
+        let script = """
+        #!/bin/sh
+        IFS= read -r initialize
+        exec 0<&-
+        ( /bin/sleep 0.1; printf '%s\\n' '{"jsonrpc":"2.0","id":0,"result":{}}' ) &
+        exit 13
+        """
+        try Data(script.utf8).write(to: executable, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+
+        let reader = CodexAppServerUsageReader(
+            executableCandidates: [executable],
+            accountSources: [.primary],
+            timeout: .seconds(1)
+        )
+        let reads = try await reader.readAccounts()
+        let failure = try #require(reads.first?.failure)
+        #expect(failure.kind == .sourceUnavailable)
+        #expect(failure.diagnosticCode == "codex.app-server.write-failed")
+    }
     @Test("Codex app-server identity RPC failures preserve successful rate limits")
     func codexIdentityFailurePreservesUsage() async throws {
         let directory = try makeTemporaryDirectory()

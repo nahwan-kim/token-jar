@@ -43,6 +43,21 @@ struct DoubaoAdapterTests {
         #expect(snapshot.quotas[1].resetsAt == Date(timeIntervalSince1970: 1_800_000_200))
     }
 
+    @Test("quota row names preserve label precedence and product fallback")
+    func quotaRowNamePrecedence() throws {
+        let body = Data(
+            """
+            {"Result":{"QuotaUsage":[
+              {"label":"primary","Name":"ignored","Used":1},
+              {"Name":"named","Product":"ignored","Used":2},
+              {"Product":"product-only","Used":3}
+            ]}}
+            """.utf8
+        )
+        let snapshot = try DoubaoAdapter.decodeSnapshot(from: body)
+        #expect(snapshot.quotas.map(\.originalName) == ["primary", "named", "product-only"])
+    }
+
     @Test("fetch reads arkcli output and never uses app-owned credentials or network")
     func fetchContract() async throws {
         let credentials = InMemoryCredentialStore(

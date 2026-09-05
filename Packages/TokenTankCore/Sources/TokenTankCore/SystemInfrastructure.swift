@@ -853,6 +853,7 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
     ) async throws -> Data {
         let process = Process()
         let input = Pipe()
+        let inputHandle = input.fileHandleForWriting
         let output = Pipe()
         process.executableURL = executable
         process.arguments = Self.arguments(for: source)
@@ -870,10 +871,11 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
             throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "codex.app-server.launch-failed")
         }
         defer {
-            input.fileHandleForWriting.closeFile()
+            inputHandle.closeFile()
             Self.stop(process)
             output.fileHandleForReading.closeFile()
         }
+        try Self.protectPipeFromSIGPIPE(inputHandle)
 
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
@@ -890,11 +892,11 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
                     ],
                 ],
             ],
-            to: input.fileHandleForWriting
+            to: inputHandle
         )
         _ = try await response(id: 0, from: output.fileHandleForReading, deadline: deadline)
-        try writeJSONLine(["method": "initialized", "params": [:]], to: input.fileHandleForWriting)
-        try writeJSONLine(["method": "account/rateLimits/read", "id": 1], to: input.fileHandleForWriting)
+        try writeJSONLine(["method": "initialized", "params": [:]], to: inputHandle)
+        try writeJSONLine(["method": "account/rateLimits/read", "id": 1], to: inputHandle)
         let rateLimits = try await response(
             id: 1,
             from: output.fileHandleForReading,
@@ -911,7 +913,7 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
                     "id": 2,
                     "params": ["refreshToken": false],
                 ],
-                to: input.fileHandleForWriting
+                to: inputHandle
             )
             let account = try await response(
                 id: 2,
@@ -982,11 +984,26 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
         }
         process.waitUntilExit()
     }
+    private static func protectPipeFromSIGPIPE(_ handle: FileHandle) throws {
+        guard Darwin.fcntl(handle.fileDescriptor, F_SETNOSIGPIPE, 1) == 0 else {
+            throw CollectionError(
+                kind: .sourceUnavailable,
+                diagnosticCode: "codex.app-server.write-failed"
+            )
+        }
+    }
 
     private func writeJSONLine(_ object: [String: Any], to handle: FileHandle) throws {
         var data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         data.append(0x0A)
-        try handle.write(contentsOf: data)
+        do {
+            try handle.write(contentsOf: data)
+        } catch {
+            throw CollectionError(
+                kind: .sourceUnavailable,
+                diagnosticCode: "codex.app-server.write-failed"
+            )
+        }
     }
 
     private func response(

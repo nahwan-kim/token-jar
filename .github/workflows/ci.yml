@@ -267,6 +267,13 @@ jobs:
               r"(?:^|[^A-Za-z])(?:Safari|Browser|CEF)(?:$|[^A-Za-z])",
               re.IGNORECASE,
           )
+          # Prose can describe a rejected browser path without linking a browser.
+          # Keep generic names in dependency scans and standalone lookups.
+          forbidden_string_reference = re.compile(
+              r"WebKit|SafariServices|Chromium|Electron|Sparkle|Squirrel|WKWebView|"
+              r"SUUpdater|Updater|UpdateAgent|UpdateKit|^(?:Safari|Browser|CEF)$",
+              re.IGNORECASE | re.MULTILINE,
+          )
           file_timestamp_import = re.compile(
               r"(?:^|\s)_?(?:stat|fstat|fstatat|lstat|getattrlist|getattrlistbulk|"
               r"fgetattrlist|getattrlistat)(?:$|\s)",
@@ -358,7 +365,10 @@ jobs:
               )
               if file_timestamp_import.search(imports):
                   raise SystemExit(f"direct FileTimestamp API import in {macho.relative_to(app)}")
-              if forbidden_dependency.search(dependencies) or forbidden_dependency.search(symbols):
+              if (
+                  forbidden_dependency.search(dependencies)
+                  or forbidden_string_reference.search(symbols)
+              ):
                   raise SystemExit(f"forbidden browser or updater reference in {macho.relative_to(app)}")
 
           source_commit = os.environ.get("GITHUB_SHA", "")

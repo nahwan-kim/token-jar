@@ -221,16 +221,9 @@ private func appendQuotaRow(
     to quotas: inout [RawQuotaItem],
     tier: String? = nil
 ) throws {
-    let level = doubaoString(
-        row["label"]
-            ?? row["Label"]
-            ?? row["Level"]
-            ?? row["level"]
-            ?? row["Name"]
-            ?? row["name"]
-            ?? row["product"]
-            ?? row["Product"]
-    ) ?? "\(path)[\(index)]"
+    let labelValue: Any? = row["label"] ?? row["Label"] ?? row["Level"] ?? row["level"]
+    let nameValue: Any? = row["Name"] ?? row["name"] ?? row["product"] ?? row["Product"]
+    let level = doubaoString(labelValue ?? nameValue) ?? "\(path)[\(index)]"
     let used = doubaoDecimal(row["Used"] ?? row["used"])
     let total = doubaoDecimal(row["Quota"] ?? row["quota"] ?? row["Total"] ?? row["total"])
     let remaining = doubaoDecimal(row["Remaining"] ?? row["remaining"])
