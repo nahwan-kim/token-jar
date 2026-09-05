@@ -5,6 +5,42 @@ import TokenTankDomain
 
 @MainActor
 final class AppModelTests: XCTestCase {
+    func testWholeProviderFailuresMarkEveryRetainedAccountStale() {
+        let previous = makeSnapshot(providerID: .codex, percentage: 26)
+        let accounts = [CodexAccountSource.primary, .secondary].map {
+            ProviderAccountSnapshot(sourceID: $0.id, quotas: previous.quotas, refreshedAt: previous.refreshedAt)
+        }
+        let snapshot = ProviderSnapshot(providerID: .codex, source: previous.source, accounts: accounts, refreshedAt: previous.refreshedAt)
+        for failure in [
+            CollectionError(kind: .sourceUnavailable, diagnosticCode: "test.executable.missing"),
+            CollectionError(kind: .authenticationRejected, diagnosticCode: "test.auth")
+        ] {
+            let state: CollectionState = failure.kind.requiresAuthenticationAction
+                ? .authenticationActionRequired(snapshot: snapshot, failure: failure)
+                : .stale(snapshot: snapshot, failure: failure, failedAt: previous.refreshedAt)
+            let projected = CodexAccountPresentation.accounts(for: state)
+            XCTAssertEqual(projected.map(\.failure), [failure, failure])
+            XCTAssertEqual(projected.map(\.quotas), accounts.map(\.quotas))
+            XCTAssertTrue(projected.allSatisfy(\.isStale))
+        }
+        XCTAssertTrue(CodexAccountPresentation.accounts(for: .fresh(snapshot)).allSatisfy { !$0.isStale })
+    }
+
+    func testCodexWeeklySelectionUsesDurationNotPrimaryPosition() {
+        func quota(_ id: String, window: String, minutes: String?) -> RawQuotaItem {
+            var fields = ["limitId": "codex", "window": window]
+            fields["windowDurationMins"] = minutes
+            return RawQuotaItem(id: RawQuotaID(rawValue: id), originalName: "Codex", used: nil, remaining: nil,
+                                percentage: .missing(meaning: .used), resetsAt: nil, sourceFields: fields)
+        }
+        let short = quota("codex.primary", window: "primary", minutes: "300")
+        let weekly = quota("codex.secondary", window: "secondary", minutes: "10080")
+        XCTAssertEqual(QuotaDisplayFormatter.defaultCodexQuota([short, weekly])?.id, weekly.id)
+        XCTAssertEqual(QuotaDisplayFormatter.name(for: short, locale: Locale(identifier: "en")), "5-hour limit")
+        XCTAssertEqual(QuotaDisplayFormatter.name(for: weekly, locale: Locale(identifier: "ko")), "주간 한도")
+        let unknown = quota("unknown", window: "primary", minutes: nil)
+        XCTAssertEqual(QuotaDisplayFormatter.name(for: unknown, locale: Locale(identifier: "en")), "Usage limit")
+    }
     func testLanguageSelectionPersistsAndResolvesUnsupportedLanguages() throws {
         let suite = "TokenTankTests.language.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -43,42 +79,47 @@ final class AppModelTests: XCTestCase {
         }
     }
 
-    func testResetTicketsShowEveryExactExpirationInLocalTime() throws {
-        let now = Date(timeIntervalSince1970: 0)
-        let summary = RawQuotaItem(
-            id: "rateLimitResetCredits", originalName: "rateLimitResetCredits",
-            used: nil, remaining: SourceValue(value: 2, rawText: "2", unit: "credits"),
-            percentage: .missing(meaning: .remaining), resetsAt: nil
-        )
-        let tickets = ["2026-09-05T18:00:00Z", "2027-01-01T00:00:00Z"].enumerated().map { index, date in
-            RawQuotaItem(
-                id: RawQuotaID(rawValue: "rateLimitResetCredit.\(index)"), originalName: "ticket",
-                used: nil, remaining: nil, percentage: .missing(meaning: .remaining),
-                resetsAt: nil, sourceFields: ["expiresAt": date]
-            )
+    func testResetTicketsShowOnlyNearestUnexpiredDate() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func summary(_ count: Decimal?) -> RawQuotaItem {
+            RawQuotaItem(id: "rateLimitResetCredits", originalName: "tickets", used: nil,
+                         remaining: count.map { SourceValue(value: $0, rawText: "\($0)", unit: "credits") },
+                         percentage: .missing(meaning: .remaining), resetsAt: nil)
         }
-        let zone = try XCTUnwrap(TimeZone(secondsFromGMT: 9 * 3_600))
-        let korean = try XCTUnwrap(QuotaDisplayFormatter.codexResetCreditsLine(
-            [summary] + tickets, now: now, locale: Locale(identifier: "ko_KR"), timeZone: zone
-        ))
-        XCTAssertTrue(korean.contains("리셋 티켓 2개"))
-        XCTAssertTrue(korean.contains("2026년 9월 6일"), korean)
-        XCTAssertTrue(korean.contains("2027년 1월 1일"), korean)
-        XCTAssertTrue(korean.contains("오전 3시 0분 0초 GMT+9"), korean)
-        XCTAssertEqual(korean.components(separatedBy: "\n").count, 3)
-        let english = try XCTUnwrap(QuotaDisplayFormatter.codexResetCreditsLine(
-            [summary] + tickets, now: .distantFuture, locale: Locale(identifier: "en_US"), timeZone: zone
-        ))
-        XCTAssertTrue(english.contains("Expired Sep 6, 2026"), english)
-        XCTAssertTrue(english.contains("2027"), english)
-        XCTAssertEqual(QuotaDisplayFormatter.codexResetCreditsLine(
-            [summary], now: now, locale: Locale(identifier: "ko")
-        ), "리셋 티켓 2개 · 만료일 제공 안 됨")
-        XCTAssertNil(QuotaDisplayFormatter.codexResetCreditsLine([], now: now))
+        let tickets = [-1.0, 7200, 3600].enumerated().map { index, seconds in
+            RawQuotaItem(id: RawQuotaID(rawValue: "rateLimitResetCredit.\(index)"), originalName: "ticket",
+                         used: nil, remaining: nil, percentage: .missing(meaning: .remaining),
+                         resetsAt: now.addingTimeInterval(seconds))
+        }
+        let result = QuotaDisplayFormatter.codexResetCredits([summary(2)] + tickets, now: now)
+        XCTAssertEqual(result.count, 2)
+        XCTAssertEqual(result.expiresAt, now.addingTimeInterval(3600))
+        XCTAssertFalse(QuotaDisplayFormatter.ticketExpiry(result.expiresAt).contains("\n"))
+        XCTAssertNil(QuotaDisplayFormatter.codexResetCredits([summary(0)] + tickets, now: now).expiresAt)
+        XCTAssertNil(QuotaDisplayFormatter.codexResetCredits([summary(2)], now: now).expiresAt)
+        XCTAssertNil(QuotaDisplayFormatter.codexResetCredits([summary(2)] + tickets, now: now.addingTimeInterval(7200)).expiresAt)
+        XCTAssertNil(QuotaDisplayFormatter.codexResetCredits([], now: now).count)
+        XCTAssertEqual(QuotaDisplayFormatter.ticketExpiry(nil), "—")
+    }
+
+    func testFreshnessUsesLastSuccessAndMinuteBoundaries() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        for (seconds, en, ko) in [(0.0, "now", "방금"), (59, "now", "방금"), (60, "1m ago", "1분 전"),
+                                  (179, "2m ago", "2분 전"), (3600, "60m ago", "60분 전"), (-1, "now", "방금")] {
+            let date = now.addingTimeInterval(-seconds)
+            XCTAssertEqual(QuotaDisplayFormatter.refreshAge(date, now: now, locale: Locale(identifier: "en")), en)
+            XCTAssertEqual(QuotaDisplayFormatter.refreshAge(date, now: now, locale: Locale(identifier: "ko")), ko)
+        }
+        XCTAssertEqual(QuotaDisplayFormatter.refreshAge(nil, now: now), "—")
+    }
+
+    func testAccountIdentityUsesEmailAndPlanWithoutAlias() {
+        let account = ProviderAccountSnapshot(sourceID: "codex.primary", quotas: [], accountEmail: "work@example.com", plan: "pro")
+        XCTAssertEqual(CodexAccountPresentation.identity(for: account, locale: Locale(identifier: "en")), "work@example.com · pro")
     }
     func testRepresentativeQuotaRequiresExplicitSelection() async throws {
-        let snapshot = makeSnapshot(providerID: .codex, percentage: 37.5)
-        let adapter = TestAppAdapter(id: .codex, results: [.success(snapshot)])
+        let snapshot = makeSnapshot(providerID: .claude, percentage: 37.5)
+        let adapter = TestAppAdapter(id: .claude, results: [.success(snapshot)])
         let preferences = MemoryPreferencesStore()
         let credentials = InMemoryCredentialStore()
         let model = AppModel(
@@ -90,11 +131,11 @@ final class AppModelTests: XCTestCase {
 
         model.ensureStarted()
         let becameFresh = await eventually {
-            if case .fresh = model.states[.codex] { return true }
+            if case .fresh = model.states[.claude] { return true }
             return false
         }
         XCTAssertTrue(becameFresh)
-        var preference = model.preference(for: .codex)
+        var preference = model.preference(for: .claude)
         XCTAssertEqual(model.menuValue(for: preference), "63%")
 
         preference.representativeQuotaID = "primary"
@@ -126,7 +167,7 @@ final class AppModelTests: XCTestCase {
                     remaining: nil,
                     percentage: SourcePercentage(value: 37.5, rawText: "37.5", meaning: .used),
                     resetsAt: nil,
-                    sourceFields: ["limitId": "codex", "window": "primary"]
+                    sourceFields: ["limitId": "codex", "window": "primary", "windowDurationMins": "10080"]
                 ),
             ],
             refreshedAt: Date()
@@ -221,6 +262,202 @@ final class AppModelTests: XCTestCase {
 
         await model.stop()
     }
+    func testCodexMenuUsesIndependentAccountValuesInStableSourceOrder() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let primary = makeSnapshot(providerID: .codex, percentage: 26)
+        let secondary = makeSnapshot(providerID: .codex, percentage: 2)
+        let snapshot = ProviderSnapshot(
+            providerID: .codex,
+            source: primary.source,
+            accounts: [
+                ProviderAccountSnapshot(
+                    sourceID: CodexAccountSource.secondary.id,
+                    quotas: secondary.quotas,
+                    refreshedAt: now,
+                    accountEmail: "personal@example.com",
+                    plan: "Plus"
+                ),
+                ProviderAccountSnapshot(
+                    sourceID: CodexAccountSource.primary.id,
+                    quotas: primary.quotas,
+                    refreshedAt: now,
+                    accountEmail: "work@example.com",
+                    plan: "Plus"
+                ),
+            ],
+            refreshedAt: now
+        )
+        let credentials = InMemoryCredentialStore()
+        let model = AppModel(
+            adapters: [TestAppAdapter(id: .codex, results: [.success(snapshot)])],
+            credentialStore: credentials,
+            preferencesStore: MemoryPreferencesStore(),
+            context: makeContext(credentials: credentials)
+        )
+
+        model.ensureStarted()
+        let becameFresh = await eventually {
+            if case .fresh = model.states[.codex] { return true }
+            return false
+        }
+        XCTAssertTrue(becameFresh)
+
+        var preference = model.preference(for: .codex)
+        preference.representativeQuotaID = "primary"
+        model.updatePreference(preference)
+
+        let values = model.codexMenuValues(for: preference)
+        XCTAssertEqual(values.map(\.sourceID), [
+            CodexAccountSource.primary.id,
+            CodexAccountSource.secondary.id,
+        ])
+        XCTAssertEqual(values.map(\.value), ["74%", "98%"])
+        XCTAssertEqual(model.menuValue(for: preference), "74%")
+        XCTAssertTrue(model.menuBarLabelText().hasPrefix("CDX 74% · 98%"))
+        XCTAssertEqual(model.menuBarSummaryItems().first?.text, "74% · 98%")
+        XCTAssertFalse(model.menuBarLabelText().contains("172%"))
+
+        await model.stop()
+    }
+
+    func testCodexMenuDistinguishesMissingAndStaleAccountValues() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let primarySnapshot = makeSnapshot(providerID: .codex, percentage: 10)
+        let missingSnapshot = ProviderSnapshot(
+            providerID: .codex,
+            source: primarySnapshot.source,
+            accounts: [
+                ProviderAccountSnapshot(
+                    sourceID: CodexAccountSource.primary.id,
+                    quotas: primarySnapshot.quotas,
+                    refreshedAt: now,
+                    accountEmail: "work@example.com"
+                ),
+                ProviderAccountSnapshot(
+                    sourceID: CodexAccountSource.secondary.id,
+                    quotas: [],
+                    refreshedAt: nil,
+                    accountEmail: nil
+                ),
+            ],
+            refreshedAt: now
+        )
+        let missingCredentials = InMemoryCredentialStore()
+        let missingModel = AppModel(
+            adapters: [TestAppAdapter(id: .codex, results: [.success(missingSnapshot)])],
+            credentialStore: missingCredentials,
+            preferencesStore: MemoryPreferencesStore(),
+            context: makeContext(credentials: missingCredentials)
+        )
+        missingModel.ensureStarted()
+        let missingBecameFresh = await eventually {
+            if case .fresh = missingModel.states[.codex] { return true }
+            return false
+        }
+        XCTAssertTrue(missingBecameFresh)
+        let missingValues = missingModel.codexMenuValues(for: missingModel.preference(for: .codex))
+        XCTAssertEqual(missingValues.map(\.value), ["90%", "—"])
+        XCTAssertFalse(missingValues[1].isStale)
+        await missingModel.stop()
+
+        let staleSnapshot = ProviderSnapshot(
+            providerID: .codex,
+            source: primarySnapshot.source,
+            accounts: [
+                ProviderAccountSnapshot(
+                    sourceID: CodexAccountSource.primary.id,
+                    quotas: primarySnapshot.quotas,
+                    refreshedAt: now,
+                    accountEmail: "work@example.com"
+                ),
+                ProviderAccountSnapshot(
+                    sourceID: CodexAccountSource.secondary.id,
+                    quotas: primarySnapshot.quotas,
+                    refreshedAt: now.addingTimeInterval(-600),
+                    accountEmail: "personal@example.com",
+                    failure: CollectionError(
+                        kind: .offline,
+                        diagnosticCode: "test.codex.secondary.offline"
+                    ),
+                    failedAt: now
+                ),
+            ],
+            refreshedAt: now
+        )
+        let staleCredentials = InMemoryCredentialStore()
+        let staleModel = AppModel(
+            adapters: [TestAppAdapter(id: .codex, results: [.success(staleSnapshot)])],
+            credentialStore: staleCredentials,
+            preferencesStore: MemoryPreferencesStore(),
+            context: makeContext(credentials: staleCredentials)
+        )
+        staleModel.ensureStarted()
+        let staleBecameFresh = await eventually {
+            if case .fresh = staleModel.states[.codex] { return true }
+            return false
+        }
+        XCTAssertTrue(staleBecameFresh)
+        let stalePreference = staleModel.preference(for: .codex)
+        let staleValues = staleModel.codexMenuValues(for: stalePreference)
+        XCTAssertEqual(staleValues.map(\.value), ["90%", "90%"])
+        XCTAssertFalse(staleValues[0].isStale)
+        XCTAssertTrue(staleValues[1].isStale)
+        XCTAssertTrue(staleModel.menuBarLabelText().contains("Stale"))
+
+        await staleModel.stop()
+    }
+    func testCodexPopupExcludesSparkAndNonWeeklyQuotas() {
+        func quota(
+            id: String,
+            limitID: String,
+            limitName: String,
+            percentage: Decimal
+        ) -> RawQuotaItem {
+            RawQuotaItem(
+                id: RawQuotaID(rawValue: id),
+                originalName: limitName,
+                used: nil,
+                remaining: nil,
+                percentage: SourcePercentage(
+                    value: percentage,
+                    rawText: NSDecimalNumber(decimal: percentage).stringValue,
+                    meaning: .used
+                ),
+                resetsAt: nil,
+                sourceFields: [
+                    "limitId": limitID,
+                    "limitName": limitName,
+                    "window": "primary",
+                    "windowDurationMins": limitID == "codex" ? "10080" : "300",
+                ]
+            )
+        }
+
+        let spark = quota(
+            id: "codex_spark.primary",
+            limitID: "codex_spark",
+            limitName: "Spark",
+            percentage: 12
+        )
+        let general = quota(
+            id: "codex.primary",
+            limitID: "codex",
+            limitName: "Codex",
+            percentage: 8
+        )
+        let displayed = QuotaDisplayFormatter.displayedQuotas(
+            [spark, general],
+            providerID: .codex
+        )
+
+        XCTAssertEqual(displayed.map(\.id.rawValue), ["codex.primary"])
+        XCTAssertNil(QuotaDisplayFormatter.defaultCodexQuota([spark]))
+        XCTAssertEqual(
+            QuotaDisplayFormatter.name(for: displayed[0], locale: Locale(identifier: "en_US")),
+            "Weekly limit"
+        )
+        XCTAssertTrue(QuotaDisplayFormatter.displayedQuotas([spark], providerID: .codex).isEmpty)
+    }
     func testBrandIconsAreBundledAndMenuBarSummaryRenders() {
         for providerID in ProviderID.allCases {
             XCTAssertNotNil(
@@ -254,6 +491,14 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(image?.isTemplate, true)
         XCTAssertGreaterThan(image?.size.width ?? 0, 40)
         XCTAssertEqual(image?.size.height, 16)
+        let dualImage = MenuBarSummaryRenderer.compose(
+            summaryItems: [
+                MenuBarSummaryItem(providerID: .codex, text: "CDX Work 74% · Personal 98%"),
+            ]
+        )
+        XCTAssertNotNil(dualImage)
+        XCTAssertEqual(dualImage?.isTemplate, true)
+        XCTAssertGreaterThan(dualImage?.size.width ?? 0, image?.size.width ?? 0)
     }
 
     func testVisibilityOrderingAndAbbreviationPersist() async throws {
@@ -428,7 +673,7 @@ final class AppModelTests: XCTestCase {
             remaining: nil,
             percentage: .missing(meaning: .used),
             resetsAt: nil,
-            sourceFields: ["limitId": "codex", "window": "primary"]
+            sourceFields: ["limitId": "codex", "window": "primary", "windowDurationMins": "10080"]
         )
 
         XCTAssertEqual(
@@ -489,14 +734,9 @@ final class AppModelTests: XCTestCase {
             ).map(\.id.rawValue),
             ["codex-primary"]
         )
-        XCTAssertEqual(
-            QuotaDisplayFormatter.codexResetCreditsLine(
-                [resetCredits, resetCredit],
-                now: Date(timeIntervalSince1970: 1_800_000_000),
-                locale: Locale(identifier: "en_US")
-            )?.hasPrefix("2 reset credits"),
-            true
-        )
+        XCTAssertEqual(QuotaDisplayFormatter.codexResetCredits(
+            [resetCredits, resetCredit], now: Date(timeIntervalSince1970: 1_800_000_000)
+        ).count, 2)
         XCTAssertEqual(
             QuotaDisplayFormatter.displayedQuotas(
                 [
@@ -746,7 +986,8 @@ final class AppModelTests: XCTestCase {
                             meaning: percentageMeaning
                         )
                     } ?? .missing(meaning: .used),
-                    resetsAt: nil
+                    resetsAt: nil,
+                    sourceFields: providerID == .codex ? ["limitId": "codex", "window": "primary", "windowDurationMins": "10080"] : [:]
                 ),
             ],
             refreshedAt: Date()

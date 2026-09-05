@@ -26,6 +26,21 @@ This is an operator template, not release evidence. A checked item records work 
 | `{{ROLLBACK_DIRECTORY}}` | Explicit local directory retaining the last known-good app. |
 | `{{EVIDENCE_DIRECTORY}}` | Immutable release evidence directory for this candidate. |
 
+## Native Codex account setup
+
+Token Tank collects the existing `~/.codex` login and an optional second login in `~/.codex-secondary` through separate official `codex app-server` processes. GJC is not required. Do not copy or swap authentication files. The Codex CLI owns credential storage and refresh; Token Tank never opens those files.
+
+To add the second account without replacing the first, run the following in a terminal and choose the other ChatGPT account in the browser:
+
+```sh
+mkdir -p "$HOME/.codex-secondary"
+chmod 700 "$HOME/.codex-secondary"
+CODEX_HOME="$HOME/.codex-secondary" codex -c 'cli_auth_credentials_store="file"' login
+CODEX_HOME="$HOME/.codex-secondary" codex -c 'cli_auth_credentials_store="file"' login status
+```
+
+Treat `~/.codex-secondary/auth.json` as a password: never paste, commit, or export it. Verify the two account emails in the popup; login status alone does not establish different identities. Missing secondary directories are not errors, and a failed secondary refresh must not replace the first account's healthy data. The compact Codex panel shows `email · plan`, one general weekly quota in column 1, and remaining reset-ticket count plus only the nearest future expiry in column 2. Spark is not displayed. The menu shows ordered remaining percentages separated by a middle dot, without aliases or email labels; percentages are never added or averaged. Every provider shows elapsed minutes since its last successful refresh beside its status LED; missing timestamps remain unavailable.
+
 ## Preconditions and hard stops
 
 - Use a clean, physical macOS 14+ host and the pinned Xcode/Swift toolchain from CI. Record `sw_vers`, `xcodebuild -version`, `swift --version`, host model, and the candidate source revision in `{{EVIDENCE_DIRECTORY}}`.

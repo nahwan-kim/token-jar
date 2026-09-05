@@ -761,17 +761,33 @@ public actor SQLiteExternalSessionReader: ReadOnlySQLiteReader {
 
 public actor CodexAppServerUsageReader: CodexAccountUsageReader {
     private let executableCandidates: [URL]
+    private let homeDirectory: URL
+    private let accountSources: [CodexAccountSource]
     private let timeout: Duration
+
+    private static let authenticationEnvironmentKeys: Set<String> = [
+        "OPENAI_API_KEY",
+        "OPENAI_ACCESS_TOKEN",
+        "CODEX_API_KEY",
+        "CODEX_ACCESS_TOKEN",
+        "CODEX_AUTH",
+        "CODEX_REFRESH_TOKEN_URL_OVERRIDE"
+    ]
 
     public init(
         executableCandidates: [URL] = CodexAppServerUsageReader.defaultExecutableCandidates,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        accountSources: [CodexAccountSource] = CodexAccountSource.allCases,
         timeout: Duration = .seconds(20)
     ) {
         self.executableCandidates = executableCandidates
+        self.homeDirectory = homeDirectory.standardizedFileURL
+        var seen = Set<CodexAccountSource>()
+        self.accountSources = accountSources.filter { seen.insert($0).inserted }
         self.timeout = timeout
     }
 
-    public func readRateLimits() async throws -> Data {
+    public func readAccounts() async throws -> [CodexAccountRead] {
         guard let executable = executableCandidates.first(where: {
             FileManager.default.isExecutableFile(atPath: $0.path)
         }) else {
@@ -781,11 +797,69 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
             )
         }
 
+        let sources = accountSources.filter { source in
+            !source.isOptional || Self.isDirectory(
+                at: homeDirectory.appendingPathComponent(source.directoryName, isDirectory: true)
+            )
+        }
+        guard !sources.isEmpty else {
+            throw CollectionError(
+                kind: .sourceUnavailable,
+                diagnosticCode: "codex.app-server.account-source-missing"
+            )
+        }
+
+        return try await withThrowingTaskGroup(of: CodexAccountRead.self) { group in
+            for source in sources {
+                group.addTask { [self] in
+                    try await readAccount(source, executable: executable)
+                }
+            }
+            var results: [CodexAccountRead] = []
+            for try await result in group {
+                results.append(result)
+            }
+            return results.sorted { lhs, rhs in
+                lhs.sourceID.rawValue < rhs.sourceID.rawValue
+            }
+        }
+    }
+
+    private func readAccount(
+        _ source: CodexAccountSource,
+        executable: URL
+    ) async throws -> CodexAccountRead {
+        do {
+            let data = try await readRateLimits(for: source, executable: executable)
+            return .success(sourceID: source, data: data)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let failure as CollectionError {
+            return .failed(sourceID: source, failure: failure)
+        } catch {
+            return .failed(
+                sourceID: source,
+                failure: CollectionError(
+                    kind: .sourceUnavailable,
+                    diagnosticCode: "codex.app-server.read-failed"
+                )
+            )
+        }
+    }
+
+    private func readRateLimits(
+        for source: CodexAccountSource,
+        executable: URL
+    ) async throws -> Data {
         let process = Process()
         let input = Pipe()
         let output = Pipe()
         process.executableURL = executable
-        process.arguments = ["app-server"]
+        process.arguments = Self.arguments(for: source)
+        process.environment = Self.environment(
+            for: source,
+            homeDirectory: homeDirectory
+        )
         process.standardInput = input
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
@@ -851,6 +925,37 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
         } catch {
             return rateLimits
         }
+    }
+
+    private static func arguments(for source: CodexAccountSource) -> [String] {
+        switch source {
+        case .primary:
+            ["app-server"]
+        case .secondary:
+            ["-c", "cli_auth_credentials_store=\"file\"", "app-server"]
+        }
+    }
+
+    private static func environment(
+        for source: CodexAccountSource,
+        homeDirectory: URL
+    ) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        for key in authenticationEnvironmentKeys {
+            environment.removeValue(forKey: key)
+        }
+        environment["CODEX_HOME"] = homeDirectory
+            .appendingPathComponent(source.directoryName, isDirectory: true)
+            .path
+        return environment
+    }
+
+    private static func isDirectory(at url: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(
+            atPath: url.path,
+            isDirectory: &isDirectory
+        ) && isDirectory.boolValue
     }
 
     public static var defaultExecutableCandidates: [URL] {

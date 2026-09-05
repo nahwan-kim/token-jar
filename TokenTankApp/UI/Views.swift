@@ -22,22 +22,15 @@ struct MenuBarLabelView: View {
         .fixedSize(horizontal: true, vertical: false)
         .accessibilityElement(children: .ignore)
         .accessibilityIdentifier("menu-bar.summary")
-        .accessibilityLabel(accessibilitySummary)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue(Text(verbatim: model.menuBarLabelText()))
     }
 
-    private var accessibilitySummary: Text {
-        let visibleProviders = model.preferences.visibleProviders
-        guard !visibleProviders.isEmpty else { return Text("menu.summary.empty") }
-        return visibleProviders.enumerated().reduce(Text(verbatim: "")) { result, entry in
-            let (index, preference) = entry
-            var component = Text(
-                verbatim: "\(index == 0 ? "" : ", ")\(preference.abbreviation) \(model.menuValue(for: preference))"
-            )
-            if model.states[preference.providerID]?.isStale == true {
-                component = component + Text(verbatim: " ") + Text("state.stale")
-            }
-            return result + component
+    private var accessibilityLabel: Text {
+        guard !model.preferences.visibleProviders.isEmpty else {
+            return Text("menu.summary.empty")
         }
+        return Text(verbatim: model.menuBarLabelText())
     }
 }
 
@@ -145,6 +138,13 @@ struct DetailPopoverView: View {
         var hasRefreshing = false
         var hasUnavailable = false
         for providerID in ProviderID.allCases {
+            if providerID == .codex {
+                let accounts = model.codexAccounts()
+                if accounts.contains(where: { $0.failure?.kind.requiresAuthenticationAction == true }) {
+                    return StatusPresentation(title: "state.authentication_required", tint: .red)
+                }
+                hasStale = hasStale || accounts.contains(where: \.isStale)
+            }
             switch model.states[providerID] ?? .neverLoaded {
             case .authenticationActionRequired:
                 return StatusPresentation(
@@ -233,48 +233,10 @@ struct ProviderDetailView: View {
             statusView
 
             if let snapshot = state.snapshot {
-                if snapshot.quotas.isEmpty {
-                    Label("state.source.empty", systemImage: "tray")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                if providerID == .codex, !snapshot.accounts.isEmpty {
+                    codexAccountContent(snapshot)
                 } else {
-                    VStack(alignment: .leading, spacing: 8) {
-                        let quotas = QuotaDisplayFormatter.displayedQuotas(
-                            snapshot.quotas,
-                            providerID: providerID
-                        )
-                        LazyVGrid(
-                            columns: Array(
-                                repeating: GridItem(.flexible(), spacing: 8, alignment: .top),
-                                count: quotas.count > 1 ? 2 : 1
-                            ),
-                            alignment: .leading,
-                            spacing: 8
-                        ) {
-                            ForEach(quotas) { quota in
-                                QuotaValueView(
-                                    quota: quota,
-                                    refreshedAt: snapshot.refreshedAt,
-                                    now: now,
-                                    scopedLimit: QuotaDisplayFormatter.claudeFableLimit(
-                                        for: quota,
-                                        in: snapshot.quotas
-                                    )
-                                )
-                            }
-                        }
-                        if providerID == .codex,
-                           let resetLine = QuotaDisplayFormatter.codexResetCreditsLine(
-                            snapshot.quotas,
-                            now: now,
-                            locale: locale
-                           ) {
-                            Text(verbatim: resetLine)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .accessibilityIdentifier("quota.rateLimitResetCredits")
-                        }
-                    }
+                    snapshotContent(snapshot)
                 }
             }
         }
@@ -286,6 +248,59 @@ struct ProviderDetailView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("provider.\(providerID.rawValue)")
+    }
+
+    @ViewBuilder
+    private func snapshotContent(_ snapshot: ProviderSnapshot) -> some View {
+        if providerID == .codex {
+            CodexQuotaColumns(quotas: snapshot.quotas, refreshedAt: snapshot.refreshedAt, now: now)
+        } else if snapshot.quotas.isEmpty {
+            Label("state.source.empty", systemImage: "tray")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                let quotas = QuotaDisplayFormatter.displayedQuotas(
+                    snapshot.quotas,
+                    providerID: providerID
+                )
+                LazyVGrid(
+                    columns: Array(
+                        repeating: GridItem(.flexible(), spacing: 8, alignment: .top),
+                        count: quotas.count > 1 ? 2 : 1
+                    ),
+                    alignment: .leading,
+                    spacing: 8
+                ) {
+                    ForEach(quotas) { quota in
+                        QuotaValueView(
+                            quota: quota,
+                            refreshedAt: snapshot.refreshedAt,
+                            now: now,
+                            scopedLimit: QuotaDisplayFormatter.claudeFableLimit(
+                                for: quota,
+                                in: snapshot.quotas
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func codexAccountContent(_ snapshot: ProviderSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(CodexAccountPresentation.accounts(for: state)) { account in
+                CodexAccountDetailView(
+                    account: account,
+                    fallbackRefreshedAt: snapshot.refreshedAt,
+                    now: now,
+                    retry: retry,
+                    configure: configure
+                )
+            }
+        }
     }
 
     private var providerHeader: some View {
@@ -305,11 +320,12 @@ struct ProviderDetailView: View {
                         .font(.headline)
                         .fixedSize()
                         .accessibilityIdentifier("provider.\(providerID.rawValue).name")
-                    if let planName = QuotaDisplayFormatter.planName(
+                    if !hasAccountCards,
+                       let planName = QuotaDisplayFormatter.planName(
                         for: providerID,
                         quotas: state.snapshot?.quotas ?? [],
                         locale: locale
-                    ) {
+                       ) {
                         Text(verbatim: planName)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
@@ -318,7 +334,7 @@ struct ProviderDetailView: View {
                             .accessibilityIdentifier("provider.\(providerID.rawValue).plan")
                     }
                 }
-                if let email = state.snapshot?.accountEmail {
+                if !hasAccountCards, let email = state.snapshot?.accountEmail {
                     Text(verbatim: email)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -331,12 +347,17 @@ struct ProviderDetailView: View {
 
             Spacer()
 
+            FreshnessText(refreshedAt: state.snapshot?.refreshedAt, now: now)
+                .accessibilityIdentifier("provider.\(providerID.rawValue).refreshed")
             StatusLED(title: presentation.title, tint: presentation.tint)
                 .accessibilityIdentifier(presentation.identifier)
         }
     }
 
     private var brandTint: Color { BrandIcon.tint(for: providerID) }
+    private var hasAccountCards: Bool {
+        providerID == .codex && !(state.snapshot?.accounts.isEmpty ?? true)
+    }
 
     @ViewBuilder
     private var statusView: some View {
@@ -364,11 +385,14 @@ struct ProviderDetailView: View {
                 tint: .blue,
                 identifier: "state.refreshing"
             )
-        case .fresh:
+        case let .fresh(snapshot):
             ProviderStatusPresentation(
-                title: "state.fresh",
-                tint: .green,
-                identifier: "state.fresh"
+                title: snapshot.accounts.contains(where: { $0.failure?.kind.requiresAuthenticationAction == true })
+                    ? "state.authentication_required" : (snapshot.hasStaleAccounts ? "state.stale" : "state.fresh"),
+                tint: snapshot.accounts.contains(where: { $0.failure?.kind.requiresAuthenticationAction == true })
+                    ? .red : (snapshot.hasStaleAccounts ? .orange : .green),
+                identifier: snapshot.accounts.contains(where: { $0.failure?.kind.requiresAuthenticationAction == true })
+                    ? "state.authentication-required" : (snapshot.hasStaleAccounts ? "state.stale" : "state.fresh")
             )
         case .stale:
             ProviderStatusPresentation(
@@ -386,6 +410,120 @@ struct ProviderDetailView: View {
     }
 }
 
+private struct FreshnessText: View {
+    @Environment(\.locale) private var locale
+    let refreshedAt: Date?
+    let now: Date
+
+    var body: some View {
+        Text(verbatim: QuotaDisplayFormatter.refreshAge(refreshedAt, now: now, locale: locale))
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .fixedSize()
+            .help(refreshedAt.map { QuotaDisplayFormatter.timestamp($0, locale: locale) } ?? "—")
+    }
+}
+
+private struct CodexAccountDetailView: View {
+    @Environment(\.locale) private var locale
+    let account: ProviderAccountSnapshot
+    let fallbackRefreshedAt: Date
+    let now: Date
+    let retry: () -> Void
+    let configure: () -> Void
+
+    private var accessibilityID: String { "provider.codex.account.\(account.sourceID)" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(verbatim: CodexAccountPresentation.identity(for: account, locale: locale))
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(CodexAccountPresentation.identity(for: account, locale: locale))
+                    .accessibilityIdentifier("\(accessibilityID).email")
+                Spacer(minLength: 4)
+                FreshnessText(refreshedAt: account.refreshedAt, now: now)
+                    .accessibilityIdentifier("\(accessibilityID).refreshed")
+                StatusLED(title: status.title, tint: status.tint)
+                    .accessibilityIdentifier("\(accessibilityID).status")
+            }
+            if let failure = account.failure {
+                FailureView(failure: failure, retry: retry, configure: configure, identifierPrefix: accessibilityID)
+            }
+            CodexQuotaColumns(quotas: account.quotas,
+                              refreshedAt: account.refreshedAt ?? fallbackRefreshedAt,
+                              now: now, identifierPrefix: accessibilityID)
+        }
+        .padding(8)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(accessibilityID)
+    }
+
+    private var status: StatusPresentation {
+        if let failure = account.failure {
+            return failure.kind.requiresAuthenticationAction
+                ? StatusPresentation(title: "state.authentication_required", tint: .red)
+                : StatusPresentation(title: "state.stale", tint: .orange)
+        }
+        return account.hasData
+            ? StatusPresentation(title: "state.fresh", tint: .green)
+            : StatusPresentation(title: "state.unavailable", tint: .secondary)
+    }
+}
+
+private struct CodexQuotaColumns: View {
+    @Environment(\.locale) private var locale
+    let quotas: [RawQuotaItem]
+    let refreshedAt: Date
+    let now: Date
+    var identifierPrefix: String? = nil
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Group {
+                if let weekly = QuotaDisplayFormatter.defaultCodexQuota(quotas) {
+                    QuotaValueView(quota: weekly, refreshedAt: refreshedAt, now: now,
+                                   identifierPrefix: identifierPrefix)
+                } else {
+                    HStack {
+                        Text("codex.weekly")
+                        Spacer()
+                        Text(verbatim: "—")
+                    }
+                    .font(.caption)
+                    .padding(8)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 3) {
+                let tickets = QuotaDisplayFormatter.codexResetCredits(quotas, now: now)
+                HStack {
+                    Text("codex.tickets")
+                    Spacer(minLength: 4)
+                    Text(verbatim: tickets.count.map {
+                        QuotaDisplayFormatter.number($0, locale: locale, maximumFractionDigits: 0)
+                    } ?? "—")
+                    .monospacedDigit()
+                }
+                .font(.subheadline.weight(.semibold))
+                Text(verbatim: QuotaDisplayFormatter.ticketExpiry(tickets.expiresAt, locale: locale))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .help(tickets.expiresAt.map { QuotaDisplayFormatter.timestamp($0, locale: locale) } ?? "—")
+                    .accessibilityIdentifier("\(identifierPrefix ?? "provider.codex").ticket-expiry")
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("\(identifierPrefix ?? "provider.codex").reset-credits")
+        }
+    }
+}
 private struct ProviderStatusPresentation {
     let title: LocalizedStringKey
     let tint: Color
@@ -396,7 +534,7 @@ private struct FailureView: View {
     let failure: CollectionError
     let retry: () -> Void
     let configure: () -> Void
-
+    var identifierPrefix: String? = nil
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.bubble.fill")
@@ -406,7 +544,7 @@ private struct FailureView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(errorKey)
                     .font(.callout.weight(.semibold))
-                    .accessibilityIdentifier("error.\(failure.kind.rawValue)")
+                    .accessibilityIdentifier(identifier("error.\(failure.kind.rawValue)"))
                 Text(verbatim: failure.diagnosticCode)
                     .font(.caption2.monospaced())
                     .foregroundStyle(.secondary)
@@ -430,7 +568,7 @@ private struct FailureView: View {
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.trailing)
-                .accessibilityIdentifier("action.\(failure.recoveryAction.rawValue)")
+                .accessibilityIdentifier(identifier("action.\(failure.recoveryAction.rawValue)"))
         } else if failure.recoveryAction != .none {
             Button(actionKey) {
                 switch failure.recoveryAction {
@@ -443,7 +581,7 @@ private struct FailureView: View {
                 }
             }
             .controlSize(.small)
-            .accessibilityIdentifier("action.\(failure.recoveryAction.rawValue)")
+            .accessibilityIdentifier(identifier("action.\(failure.recoveryAction.rawValue)"))
         }
     }
 
@@ -474,6 +612,9 @@ private struct FailureView: View {
         case .none: "action.none"
         }
     }
+    private func identifier(_ suffix: String) -> String {
+        identifierPrefix.map { "\($0).\(suffix)" } ?? suffix
+    }
 }
 
 struct QuotaValueView: View {
@@ -482,6 +623,7 @@ struct QuotaValueView: View {
     let refreshedAt: Date
     let now: Date
     var scopedLimit: QuotaDisplayFormatter.ScopedLimit? = nil
+    var identifierPrefix: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -489,6 +631,7 @@ struct QuotaValueView: View {
                 Text(verbatim: QuotaDisplayFormatter.name(for: quota, locale: locale))
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
+                    .help(QuotaDisplayFormatter.name(for: quota, locale: locale))
 
                 if let reset = quota.resetsAt {
                     Text(verbatim: QuotaDisplayFormatter.resetCountdown(reset, relativeTo: now, locale: locale))
@@ -515,7 +658,7 @@ struct QuotaValueView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("field.percentage")
-            .accessibilityLabel(Text("quota.percentage.remaining"))
+            .accessibilityLabel(Text(verbatim: QuotaDisplayFormatter.name(for: quota, locale: locale) + ", ") + Text("quota.percentage.remaining"))
             .accessibilityValue(accessibilityValue(headlineValue))
 
             if let remainingPercentage {
@@ -545,7 +688,7 @@ struct QuotaValueView: View {
         .padding(.vertical, 6)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("quota.\(quota.id.rawValue)")
+        .accessibilityIdentifier(identifierPrefix.map { "\($0).quota.\(quota.id.rawValue)" } ?? "quota.\(quota.id.rawValue)")
     }
 
     private func percentageGauge(for remaining: Decimal) -> some View {
@@ -583,10 +726,10 @@ struct QuotaValueView: View {
     }
 
     private func accessibilityValue(_ value: String?) -> Text {
-        if let value {
-            return Text(verbatim: value)
-        }
-        return Text("field.not_provided")
+        let text = value.map { Text(verbatim: $0) } ?? Text("field.not_provided")
+        guard let reset = quota.resetsAt else { return text }
+        return text + Text(verbatim: ", ") + Text("quota.reset")
+            + Text(verbatim: " " + QuotaDisplayFormatter.resetCountdown(reset, relativeTo: now, locale: locale))
     }
 
     private func percentageTint(for remaining: Decimal) -> Color {
@@ -605,7 +748,7 @@ enum QuotaDisplayFormatter {
         let filtered: [RawQuotaItem]
         switch providerID {
         case .codex:
-            filtered = quotas.filter(isCodexWeeklyQuota)
+            return defaultCodexQuota(quotas).map { [$0] } ?? []
         case .claude:
             filtered = quotas.filter(isClaudePopupQuota)
         case .grok:
@@ -616,6 +759,9 @@ enum QuotaDisplayFormatter {
             filtered = quotas.filter(isDoubaoPopupQuota)
         }
         return filtered.isEmpty ? quotas : filtered
+    }
+    static func defaultCodexQuota(_ quotas: [RawQuotaItem]) -> RawQuotaItem? {
+        quotas.first { isCodexWindowQuota($0) && !isCodexSparkQuota($0) && codexWindowMinutes($0) == 10_080 }
     }
 
     static func planName(
@@ -685,34 +831,37 @@ enum QuotaDisplayFormatter {
         return ScopedLimit(id: fable.id.rawValue, title: title, remaining: remaining)
     }
 
-    static func codexResetCreditsLine(
-        _ quotas: [RawQuotaItem],
-        now: Date,
-        locale: Locale = .current,
-        timeZone: TimeZone = .current
-    ) -> String? {
-        guard let credits = quotas.first(where: { $0.id.rawValue == "rateLimitResetCredits" }) else {
-            return nil
-        }
-        let remaining = credits.remaining.map { number($0.value, locale: locale, maximumFractionDigits: 0) }
-            ?? "—"
-        let korean = (locale.language.languageCode?.identifier ?? "en") == "ko"
-        let expiries = Set(quotas.compactMap { quota -> Date? in
-            guard quota.id.rawValue.hasPrefix("rateLimitResetCredit.") else { return nil }
-            return quota.resetsAt ?? dateFromSourceFields(quota.sourceFields)
-        }).sorted()
-        let title = korean ? "리셋 티켓 \(remaining)개" : "\(remaining) reset credits"
-        guard !expiries.isEmpty else {
-            return title + (korean ? " · 만료일 제공 안 됨" : " · Expiration not provided")
-        }
-        let dates = expiries.map { expiry in
-            let when = absoluteTime(expiry, locale: locale, timeZone: timeZone)
-            if expiry <= now {
-                return korean ? "\(when) 만료됨" : "Expired \(when)"
-            }
-            return korean ? "\(when) 만료" : "Expires \(when)"
-        }
-        return ([title] + dates).joined(separator: "\n")
+    struct ResetCredits: Equatable {
+        let count: Decimal?
+        let expiresAt: Date?
+    }
+
+    static func codexResetCredits(_ quotas: [RawQuotaItem], now: Date) -> ResetCredits {
+        let count = quotas.first { $0.id.rawValue == "rateLimitResetCredits" }?.remaining?.value
+        let expiry = quotas.compactMap { quota -> Date? in
+            guard quota.id.rawValue.hasPrefix("rateLimitResetCredit."),
+                  let expiry = quota.resetsAt ?? dateFromSourceFields(quota.sourceFields),
+                  expiry > now else { return nil }
+            return expiry
+        }.min()
+        return ResetCredits(count: count, expiresAt: count == 0 ? nil : expiry)
+    }
+
+    static func ticketExpiry(_ date: Date?, locale: Locale = .current, timeZone: TimeZone = .current) -> String {
+        guard let date else { return "—" }
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.timeZone = timeZone
+        formatter.setLocalizedDateFormatFromTemplate("MMMdHm")
+        return formatter.string(from: date)
+    }
+
+    static func refreshAge(_ date: Date?, now: Date, locale: Locale = .current) -> String {
+        guard let date else { return "—" }
+        let korean = locale.language.languageCode?.identifier == "ko"
+        let minutes = max(0, Int(now.timeIntervalSince(date) / 60))
+        guard minutes > 0 else { return korean ? "방금" : "now" }
+        return korean ? "\(minutes)분 전" : "\(minutes)m ago"
     }
 
     static func name(for quota: RawQuotaItem, locale: Locale = .current) -> String {
@@ -765,6 +914,18 @@ enum QuotaDisplayFormatter {
         "\(number(value, locale: locale, maximumFractionDigits: 2))%"
     }
 
+    static func timestamp(
+        _ date: Date,
+        locale: Locale = .current,
+        timeZone: TimeZone = .current
+    ) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.timeZone = timeZone
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
     static func resetCountdown(_ date: Date, relativeTo now: Date, locale: Locale = .current) -> String {
         let korean = locale.language.languageCode?.identifier == "ko"
         let seconds = date.timeIntervalSince(now)
@@ -779,20 +940,27 @@ enum QuotaDisplayFormatter {
         return korean ? "\(hours)시간" : "\(hours)h"
     }
 
-    private static func absoluteTime(_ date: Date, locale: Locale, timeZone: TimeZone) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = locale
-        formatter.timeZone = timeZone
-        formatter.setLocalizedDateFormatFromTemplate("yyyyMMMdjmmssz")
-        return formatter.string(from: date)
-    }
-
-    private static func isCodexWeeklyQuota(_ quota: RawQuotaItem) -> Bool {
+    private static func isCodexWindowQuota(_ quota: RawQuotaItem) -> Bool {
         let id = quota.id.rawValue
         if id.hasPrefix("rateLimitReset") { return false }
         let limitID = quota.sourceFields["limitId"] ?? id.split(separator: ".").first.map(String.init)
-        guard limitID == "codex" || limitID == "rateLimits" else { return false }
-        return quota.sourceFields["window"] == "primary"
+        let limitName = quota.sourceFields["limitName"] ?? quota.originalName
+        let window = quota.sourceFields["window"]?.lowercased()
+        guard window == "primary" || (window == "secondary" && codexWindowMinutes(quota) != nil) else { return false }
+        let identity = "\(limitID ?? "") \(limitName)".lowercased()
+        return limitID == "codex"
+            || limitID == "rateLimits"
+            || identity.contains("spark")
+    }
+
+    private static func codexWindowMinutes(_ quota: RawQuotaItem) -> Int? {
+        quota.sourceFields["windowDurationMins"].flatMap(Int.init)
+    }
+
+    private static func isCodexSparkQuota(_ quota: RawQuotaItem) -> Bool {
+        let limitID = quota.sourceFields["limitId"] ?? ""
+        let limitName = quota.sourceFields["limitName"] ?? quota.originalName
+        return "\(limitID) \(limitName)".localizedCaseInsensitiveContains("spark")
     }
 
     private static func isClaudePopupQuota(_ quota: RawQuotaItem) -> Bool {
@@ -823,8 +991,15 @@ enum QuotaDisplayFormatter {
 
     private static func compactName(for quota: RawQuotaItem, locale: Locale) -> String? {
         let korean = (locale.language.languageCode?.identifier ?? "en") == "ko"
-        if isCodexWeeklyQuota(quota) {
-            return korean ? "주간 한도" : "Weekly limit"
+        if isCodexWindowQuota(quota) {
+            let window: String
+            switch codexWindowMinutes(quota) {
+            case 10_080: window = korean ? "주간 한도" : "Weekly limit"
+            case 300: window = korean ? "5시간 한도" : "5-hour limit"
+            case let minutes?: window = korean ? "\(minutes)분 한도" : "\(minutes)-minute limit"
+            case nil: window = korean ? "사용 한도" : "Usage limit"
+            }
+            return window
         }
         switch quota.originalName {
         case "session", "five_hour", "5h":
@@ -932,7 +1107,7 @@ enum QuotaDisplayFormatter {
         return spaced.prefix(1).uppercased(with: locale) + spaced.dropFirst()
     }
 
-    private static func number(
+    static func number(
         _ value: Decimal,
         locale: Locale,
         maximumFractionDigits: Int
@@ -1039,36 +1214,36 @@ struct ProviderSettingsView: View {
                             .accessibilityLabel(Text("settings.move_down"))
                         }
 
-                        Picker(
-                            "settings.representative_quota",
-                            selection: binding(for: preference, keyPath: \.representativeQuotaID)
-                        ) {
+                        if preference.providerID != .codex {
+                            Picker(
+                                "settings.representative_quota",
+                                selection: binding(for: preference, keyPath: \.representativeQuotaID)
+                            ) {
+                                if let selected = preference.representativeQuotaID,
+                                   !model.quotas(for: preference.providerID).contains(where: { $0.id == selected }) {
+                                    Text("state.selected_unavailable").tag(Optional(selected))
+                                }
+                                Text("settings.representative.none").tag(RawQuotaID?.none)
+                                ForEach(model.quotas(for: preference.providerID)) { quota in
+                                    Text(verbatim: QuotaDisplayFormatter.name(for: quota, locale: locale)).tag(Optional(quota.id))
+                                }
+                            }
                             if let selected = preference.representativeQuotaID,
                                !model.quotas(for: preference.providerID).contains(where: { $0.id == selected }) {
-                                Text("state.selected_unavailable").tag(Optional(selected))
-                            }
-                            Text("settings.representative.none").tag(RawQuotaID?.none)
-                            ForEach(model.quotas(for: preference.providerID)) { quota in
-                                Text(verbatim: QuotaDisplayFormatter.name(for: quota, locale: locale)).tag(Optional(quota.id))
-                            }
-                        }
-                        if let selected = preference.representativeQuotaID,
-                           !model.quotas(for: preference.providerID).contains(where: { $0.id == selected }) {
-                            HStack {
-                                Label("state.selected_unavailable", systemImage: "exclamationmark.triangle")
-                                Button("settings.representative.none") {
-                                    var updated = preference
-                                    updated.representativeQuotaID = nil
-                                    model.updatePreference(updated)
+                                HStack {
+                                    Label("state.selected_unavailable", systemImage: "exclamationmark.triangle")
+                                    Button("settings.representative.none") {
+                                        var updated = preference
+                                        updated.representativeQuotaID = nil
+                                        model.updatePreference(updated)
+                                    }
+                                    .controlSize(.small)
+                                    .accessibilityIdentifier("action.choose-another.\(preference.providerID.rawValue)")
                                 }
-                                .controlSize(.small)
-                                .accessibilityIdentifier(
-                                    "action.choose-another.\(preference.providerID.rawValue)"
-                                )
+                                .accessibilityElement(children: .contain)
+                                .font(.caption)
+                                .foregroundStyle(.orange)
                             }
-                            .accessibilityElement(children: .contain)
-                            .font(.caption)
-                            .foregroundStyle(.orange)
                         }
                     }
                     .padding(.vertical, 4)

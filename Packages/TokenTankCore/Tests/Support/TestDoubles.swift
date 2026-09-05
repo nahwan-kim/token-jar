@@ -65,13 +65,13 @@ public actor MemorySQLiteReader: ReadOnlySQLiteReader {
 }
 
 public actor MemoryCodexAccountUsageReader: CodexAccountUsageReader {
-    private var results: [Result<Data, CollectionError>]
+    private var results: [Result<[CodexAccountRead], CollectionError>]
 
-    public init(results: [Result<Data, CollectionError>]) {
+    public init(results: [Result<[CodexAccountRead], CollectionError>]) {
         self.results = results
     }
 
-    public func readRateLimits() throws -> Data {
+    public func readAccounts() async throws -> [CodexAccountRead] {
         guard !results.isEmpty else {
             throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "test.codex.empty-queue")
         }

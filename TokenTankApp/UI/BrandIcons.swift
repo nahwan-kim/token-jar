@@ -91,20 +91,28 @@ struct ProviderBrandIcon: View {
     }
 }
 
+struct MenuBarSummaryItem: Equatable, Sendable {
+    let providerID: ProviderID
+    let text: String
+}
+
 enum MenuBarSummaryRenderer {
     @MainActor
     static func image(for model: AppModel) -> NSImage? {
-        let items = model.preferences.visibleProviders.map { preference in
-            (
-                preference.providerID,
-                model.menuValue(for: preference)
-            )
-        }
+        let items = model.menuBarSummaryItems()
         guard !items.isEmpty else { return nil }
-        return compose(items: items)
+        return compose(summaryItems: items)
     }
 
     static func compose(items: [(ProviderID, String)]) -> NSImage? {
+        compose(
+            summaryItems: items.map { item in
+                MenuBarSummaryItem(providerID: item.0, text: item.1)
+            }
+        )
+    }
+
+    static func compose(summaryItems items: [MenuBarSummaryItem]) -> NSImage? {
         let iconSide: CGFloat = 13
         let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         let textAttributes: [NSAttributedString.Key: Any] = [
@@ -119,14 +127,14 @@ enum MenuBarSummaryRenderer {
         var totalWidth: CGFloat = 0
         for (index, item) in items.enumerated() {
             guard let icon = BrandIcon.image(
-                for: item.0,
+                for: item.providerID,
                 pointSize: iconSide,
                 color: false,
                 template: true
             ) else {
                 return nil
             }
-            let text = NSAttributedString(string: item.1, attributes: textAttributes)
+            let text = NSAttributedString(string: item.text, attributes: textAttributes)
             let textSize = text.size()
             let width = iconSide + iconTextGap + ceil(textSize.width)
             segments.append((icon, text, NSSize(width: width, height: height)))

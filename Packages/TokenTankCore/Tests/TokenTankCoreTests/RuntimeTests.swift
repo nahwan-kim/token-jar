@@ -45,6 +45,111 @@ struct RuntimeTests {
         #expect(events[2].correlationID == events[3].correlationID)
         #expect(events[0].correlationID != events[2].correlationID)
     }
+    @Test("only the failing Codex account retains its last successful data as stale")
+    func codexAccountStalenessIsIsolated() async {
+        let initialDate = Date(timeIntervalSince1970: 1_800_000_000)
+        let latestDate = initialDate.addingTimeInterval(300)
+        let initial = Self.codexSnapshot(
+            refreshedAt: initialDate,
+            accounts: [
+                Self.codexAccount(
+                    sourceID: .primary,
+                    email: "primary-old@example.com",
+                    percentage: 10,
+                    refreshedAt: initialDate
+                ),
+                Self.codexAccount(
+                    sourceID: .secondary,
+                    email: "secondary-old@example.com",
+                    percentage: 20,
+                    refreshedAt: initialDate
+                ),
+            ]
+        )
+        let secondaryFailure = CollectionError(
+            kind: .authenticationRejected,
+            diagnosticCode: "test.codex.secondary-auth"
+        )
+        let latest = Self.codexSnapshot(
+            refreshedAt: latestDate,
+            accounts: [
+                Self.codexAccount(
+                    sourceID: .primary,
+                    email: "primary-new@example.com",
+                    percentage: 30,
+                    refreshedAt: latestDate
+                ),
+                ProviderAccountSnapshot(
+                    sourceID: CodexAccountSource.secondary.id,
+                    quotas: [],
+                    failure: secondaryFailure,
+                    failedAt: latestDate
+                ),
+            ]
+        )
+        let adapter = QueueProviderAdapter(
+            id: .codex,
+            results: [.success(initial), .success(latest)]
+        )
+        let coordinator = RefreshCoordinator(
+            adapters: [adapter],
+            context: TestContextFactory.make()
+        )
+
+        await coordinator.refresh(.codex)
+        await coordinator.refresh(.codex)
+
+        guard case let .fresh(snapshot) = await coordinator.state(for: .codex) else {
+            Issue.record("Expected a fresh provider state with one stale account")
+            return
+        }
+        let primary = snapshot.account(for: CodexAccountSource.primary.id)
+        let secondary = snapshot.account(for: CodexAccountSource.secondary.id)
+        #expect(primary?.accountEmail == "primary-new@example.com")
+        #expect(primary?.quotas.first?.percentage.value == 30)
+        #expect(primary?.failure == nil)
+        #expect(secondary?.accountEmail == "secondary-old@example.com")
+        #expect(secondary?.quotas.first?.percentage.value == 20)
+        #expect(secondary?.failure?.kind == secondaryFailure.kind)
+        #expect(secondary?.failure?.diagnosticCode == secondaryFailure.diagnosticCode)
+        #expect(secondary?.refreshedAt == initialDate)
+        #expect(snapshot.hasStaleAccounts)
+    }
+
+    @Test("cancelled refresh cannot publish a late successful snapshot")
+    func cancelledRefreshDoesNotPublishLateSuccess() async {
+        let previous = TestContextFactory.snapshot(providerID: .codex)
+        let adapter = SuspendedProviderAdapter(id: .codex)
+        let coordinator = RefreshCoordinator(
+            adapters: [adapter],
+            context: TestContextFactory.make()
+        )
+
+        let firstTask = Task { await coordinator.refresh(.codex) }
+        #expect(await eventually { await adapter.fetchCount == 1 })
+        await adapter.complete(with: .success(previous))
+        await firstTask.value
+        guard case .fresh = await coordinator.state(for: .codex) else {
+            Issue.record("Expected a baseline successful snapshot")
+            return
+        }
+
+        let lateSnapshot = TestContextFactory.snapshot(providerID: .codex, percentage: 99)
+        let refreshTask = Task { await coordinator.refresh(.codex) }
+        #expect(await eventually { await adapter.fetchCount == 2 })
+        let stopTask = Task { await coordinator.stop() }
+        #expect(await eventually { await adapter.cancellationCount == 1 })
+        await adapter.complete(with: .success(lateSnapshot))
+        await stopTask.value
+        await refreshTask.value
+
+        guard case let .refreshing(retained) = await coordinator.state(for: .codex) else {
+            Issue.record("Expected cancellation to leave the last state unpublished")
+            return
+        }
+        #expect(retained == previous)
+        #expect(retained != lateSnapshot)
+    }
 
     @Test("temporary Keychain failure never becomes a login prompt")
     func keychainFailureIsStale() async {
@@ -309,7 +414,13 @@ struct RuntimeTests {
             ]
         )
         let credentials = InMemoryCredentialStore()
-        let codex = MemoryCodexAccountUsageReader(results: [.success(Data("codex".utf8))])
+        let codex = MemoryCodexAccountUsageReader(
+            results: [
+                .success([
+                    CodexAccountRead.success(sourceID: .primary, data: Data("codex".utf8)),
+                ]),
+            ]
+        )
         let doubao = MemoryDoubaoPlanUsageReader(results: [.success(Data("doubao".utf8))])
         let context = TestContextFactory.make(
             network: network,
@@ -356,13 +467,13 @@ struct RuntimeTests {
             )
         }?.diagnosticCode == "capability.sqlite.request-denied")
         #expect(await collectionError {
-            _ = try await scoped.codexAccount.readRateLimits()
+            _ = try await scoped.codexAccount.readAccounts()
         }?.diagnosticCode == "capability.codex-account.denied")
         let grokScoped = context.scoped(to: .grok)
         #expect(await grokScoped.externalSessions.exists(grokRequest) == true)
         #expect(try await grokScoped.externalSessions.read(grokRequest) == Data("{\"https://auth.x.ai::fixture\":{\"key\":\"token\"}}".utf8))
         let codexScoped = context.scoped(to: .codex)
-        #expect(try await codexScoped.codexAccount.readRateLimits() == Data("codex".utf8))
+        #expect(try await codexScoped.codexAccount.readAccounts().count == 1)
         let doubaoScoped = context.scoped(to: .doubao)
         #expect(try await doubaoScoped.doubaoPlan.readPlanUsage() == Data("doubao".utf8))
         #expect(await collectionError {
@@ -439,6 +550,45 @@ struct RuntimeTests {
         #expect(!text.contains("token"))
     }
 
+    private static func codexSnapshot(
+        refreshedAt: Date,
+        accounts: [ProviderAccountSnapshot]
+    ) -> ProviderSnapshot {
+        ProviderSnapshot(
+            providerID: .codex,
+            source: TestContextFactory.snapshot(providerID: .codex, refreshedAt: refreshedAt).source,
+            accounts: accounts,
+            refreshedAt: refreshedAt
+        )
+    }
+
+    private static func codexAccount(
+        sourceID: CodexAccountSource,
+        email: String,
+        percentage: Decimal,
+        refreshedAt: Date
+    ) -> ProviderAccountSnapshot {
+        let rawPercentage = NSDecimalNumber(decimal: percentage).stringValue
+        return ProviderAccountSnapshot(
+            sourceID: sourceID.id,
+            quotas: [
+                RawQuotaItem(
+                    id: "codex.primary",
+                    originalName: "Primary",
+                    used: SourceValue(value: percentage, rawText: rawPercentage, unit: "%"),
+                    remaining: nil,
+                    percentage: SourcePercentage(
+                        value: percentage,
+                        rawText: rawPercentage,
+                        meaning: .used
+                    ),
+                    resetsAt: nil
+                ),
+            ],
+            refreshedAt: refreshedAt,
+            accountEmail: email
+        )
+    }
     private func eventually(
         attempts: Int = 200,
         condition: () async -> Bool
@@ -459,6 +609,7 @@ private actor SuspendedProviderAdapter: ProviderAdapter {
 
     private var continuation: CheckedContinuation<ProviderSnapshot, Error>?
     private(set) var fetchCount = 0
+    private(set) var cancellationCount = 0
 
     init(id: ProviderID) {
         self.id = id
@@ -480,7 +631,14 @@ private actor SuspendedProviderAdapter: ProviderAdapter {
 
     func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
         fetchCount += 1
-        return try await withCheckedThrowingContinuation { continuation = $0 }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation = $0 }
+        } onCancel: {
+            Task { await self.recordCancellation() }
+        }
+    }
+    private func recordCancellation() {
+        cancellationCount += 1
     }
 
     func complete(with result: Result<ProviderSnapshot, CollectionError>) {

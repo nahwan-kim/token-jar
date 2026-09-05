@@ -33,6 +33,78 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             ? .korean : .english
     }
 }
+struct CodexAccountMenuValue: Equatable, Identifiable, Sendable {
+    let sourceID: String
+    let value: String
+    let isStale: Bool
+
+    var id: String { sourceID }
+}
+
+@MainActor
+enum CodexAccountPresentation {
+    static func accounts(for state: CollectionState) -> [ProviderAccountSnapshot] {
+        let accounts = ordered(state.snapshot?.accounts ?? [])
+        let failure: CollectionError
+        let failedAt: Date?
+        switch state {
+        case let .stale(_, error, date):
+            failure = error
+            failedAt = date
+        case let .authenticationActionRequired(_, error):
+            failure = error
+            failedAt = nil
+        default:
+            return accounts
+        }
+        return accounts.map { account in
+            ProviderAccountSnapshot(
+                sourceID: account.sourceID,
+                quotas: account.quotas,
+                refreshedAt: account.refreshedAt,
+                accountEmail: account.accountEmail,
+                plan: account.plan,
+                failure: failure,
+                failedAt: failedAt
+            )
+        }
+    }
+
+    static func ordered(_ accounts: [ProviderAccountSnapshot]) -> [ProviderAccountSnapshot] {
+        accounts.sorted { lhs, rhs in
+            let lhsRank = rank(for: lhs.sourceID)
+            let rhsRank = rank(for: rhs.sourceID)
+            if lhsRank == rhsRank {
+                return lhs.sourceID < rhs.sourceID
+            }
+            return lhsRank < rhsRank
+        }
+    }
+
+    static func identity(for account: ProviderAccountSnapshot, locale: Locale) -> String {
+        let email = account.accountEmail ?? localized(
+            account.sourceID == CodexAccountSource.primary.id ? "codex.account.default" : "codex.account.secondary",
+            locale: locale
+        )
+        return [email, account.plan].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    static func localized(_ key: String, locale: Locale) -> String {
+        String(
+            localized: String.LocalizationValue(stringLiteral: key),
+            bundle: Bundle(for: AppModel.self),
+            locale: locale
+        )
+    }
+
+    private static func rank(for sourceID: String) -> Int {
+        switch CodexAccountSource(rawValue: sourceID) {
+        case .primary: 0
+        case .secondary: 1
+        case nil: 2
+        }
+    }
+}
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -216,6 +288,12 @@ final class AppModel: ObservableObject {
     }
 
     func menuValue(for preference: ProviderPreference) -> String {
+        if preference.providerID == .codex,
+           let primary = codexAccounts().first,
+           let quota = menuQuota(for: primary, preference: preference),
+           let remaining = QuotaDisplayFormatter.remainingPercentage(quota.percentage) {
+            return "\(Self.roundedPercent(remaining))%"
+        }
         guard
             let quota = menuQuota(for: preference),
             let remaining = QuotaDisplayFormatter.remainingPercentage(quota.percentage)
@@ -224,7 +302,28 @@ final class AppModel: ObservableObject {
     }
 
     func menuQuota(for preference: ProviderPreference) -> RawQuotaItem? {
+        if preference.providerID == .codex,
+           let primary = codexAccounts().first {
+            return menuQuota(for: primary, preference: preference)
+        }
         let quotas = states[preference.providerID]?.snapshot?.quotas ?? []
+        return menuQuota(in: quotas, preference: preference)
+    }
+
+    private func menuQuota(
+        for account: ProviderAccountSnapshot,
+        preference: ProviderPreference
+    ) -> RawQuotaItem? {
+        menuQuota(in: account.quotas, preference: preference)
+    }
+
+    private func menuQuota(
+        in quotas: [RawQuotaItem],
+        preference: ProviderPreference
+    ) -> RawQuotaItem? {
+        if preference.providerID == .codex {
+            return QuotaDisplayFormatter.defaultCodexQuota(quotas)
+        }
         if let selectedID = preference.representativeQuotaID {
             return quotas.first(where: { $0.id == selectedID })
         }
@@ -233,6 +332,63 @@ final class AppModel: ObservableObject {
             providerID: preference.providerID
         ).first
     }
+
+    func codexAccounts() -> [ProviderAccountSnapshot] {
+        CodexAccountPresentation.accounts(for: states[.codex] ?? .neverLoaded)
+    }
+
+
+    func codexMenuValues(for preference: ProviderPreference) -> [CodexAccountMenuValue] {
+        guard preference.providerID == .codex else { return [] }
+        return codexAccounts().map { account in
+            let quota = menuQuota(for: account, preference: preference)
+            let value = quota.flatMap {
+                QuotaDisplayFormatter.remainingPercentage($0.percentage).map {
+                    "\(Self.roundedPercent($0))%"
+                }
+            } ?? "—"
+            return CodexAccountMenuValue(
+                sourceID: account.sourceID,
+                value: value,
+                isStale: account.isStale
+            )
+        }
+    }
+
+    func menuSummaryText(for preference: ProviderPreference) -> String {
+        let staleLabel = CodexAccountPresentation.localized("state.stale", locale: locale)
+        if preference.providerID == .codex {
+            let values = codexMenuValues(for: preference)
+            if !values.isEmpty {
+                let accounts = values.map { value in
+                    let suffix = value.isStale ? " (\(staleLabel))" : ""
+                    return "\(value.value)\(suffix)"
+                }.joined(separator: " · ")
+                return "\(preference.abbreviation) \(accounts)"
+            }
+        }
+
+        var value = "\(preference.abbreviation) \(menuValue(for: preference))"
+        if states[preference.providerID]?.isStale == true {
+            value += " (\(staleLabel))"
+        }
+        return value
+    }
+
+    func menuBarSummaryItems() -> [MenuBarSummaryItem] {
+        preferences.visibleProviders.map { preference in
+            let text: String
+            if preference.providerID == .codex, !codexAccounts().isEmpty {
+                text = codexMenuValues(for: preference).map {
+                    "\($0.value)\($0.isStale ? "*" : "")"
+                }.joined(separator: " · ")
+            } else {
+                text = menuValue(for: preference)
+            }
+            return MenuBarSummaryItem(providerID: preference.providerID, text: text)
+        }
+    }
+
     private static func roundedPercent(_ value: Decimal) -> Int {
         var rounded = Decimal()
         var source = value
@@ -241,9 +397,7 @@ final class AppModel: ObservableObject {
     }
 
     func menuBarLabelText() -> String {
-        preferences.visibleProviders.map { preference in
-            "\(preference.abbreviation) \(menuValue(for: preference))"
-        }.joined(separator: "  ")
+        preferences.visibleProviders.map { menuSummaryText(for: $0) }.joined(separator: "  ")
     }
 
     var orderedPreferences: [ProviderPreference] {
@@ -324,7 +478,15 @@ final class AppModel: ObservableObject {
     }
 
     func quotas(for providerID: ProviderID) -> [RawQuotaItem] {
-        states[providerID]?.snapshot?.quotas ?? []
+        guard let snapshot = states[providerID]?.snapshot else { return [] }
+        let quotas: [RawQuotaItem]
+        if providerID == .codex, snapshot.quotas.isEmpty, !snapshot.accounts.isEmpty {
+            quotas = CodexAccountPresentation.ordered(snapshot.accounts).flatMap(\.quotas)
+        } else {
+            quotas = snapshot.quotas
+        }
+        guard providerID == .codex else { return quotas }
+        return QuotaDisplayFormatter.displayedQuotas(quotas, providerID: .codex)
     }
 
     func sourceDescriptor(for providerID: ProviderID) -> ProviderSourceDescriptor? {
@@ -373,17 +535,22 @@ final class AppModel: ObservableObject {
                 sourceFields: sourceFields
             )
             var quotas = [quota]
-            if providerID == .codex,
-               let count = Int(ProcessInfo.processInfo.environment["TOKENTANK_UI_QUOTA_COUNT"] ?? ""),
-               (2...3).contains(count) {
-                for index in 2...count {
+            if providerID == .codex {
+                quotas.append(RawQuotaItem(
+                    id: "ui-test.codex.spark", originalName: "Spark", used: nil, remaining: nil,
+                    percentage: SourcePercentage(value: 0, rawText: "0", meaning: .used), resetsAt: nil,
+                    sourceFields: ["limitId": "codex_spark", "window": "primary", "windowDurationMins": "300"]
+                ))
+                quotas.append(RawQuotaItem(
+                    id: "rateLimitResetCredits", originalName: "tickets", used: nil,
+                    remaining: SourceValue(value: 2, rawText: "2", unit: "credits"),
+                    percentage: .missing(meaning: .remaining), resetsAt: nil
+                ))
+                for index in 1...2 {
                     quotas.append(RawQuotaItem(
-                        id: RawQuotaID(rawValue: "ui-test.codex.\(index)"),
-                        originalName: "Window \(index)",
-                        used: quota.used,
-                        remaining: quota.remaining,
-                        percentage: quota.percentage,
-                        resetsAt: quota.resetsAt
+                        id: RawQuotaID(rawValue: "rateLimitResetCredit.\(index)"), originalName: "ticket",
+                        used: nil, remaining: nil, percentage: .missing(meaning: .remaining),
+                        resetsAt: now.addingTimeInterval(Double(index) * 3600)
                     ))
                 }
             }
@@ -406,7 +573,7 @@ final class AppModel: ObservableObject {
             )
         }
 
-        let codex = snapshot(
+        let baseCodex = snapshot(
             .codex,
             originalName: "Primary window",
             used: 0,
@@ -414,8 +581,70 @@ final class AppModel: ObservableObject {
             percentage: 0,
             meaning: .used,
             resetsAt: now.addingTimeInterval(3_600),
+            sourceFields: ["limitId": "codex", "window": "primary", "windowDurationMins": "10080"],
             accountEmail: "codex@example.com"
         )
+        let codex: ProviderSnapshot
+        if ProcessInfo.processInfo.environment["TOKENTANK_UI_CODEX_ACCOUNTS"] == "1" {
+            let primary = snapshot(
+                .codex,
+                originalName: "Codex",
+                used: 26,
+                remaining: nil,
+                percentage: 26,
+                meaning: .used,
+                resetsAt: now.addingTimeInterval(3_600),
+                sourceFields: [
+                    "limitId": "codex",
+                    "limitName": "Codex",
+                    "window": "primary",
+                    "windowDurationMins": "10080"
+                ],
+                accountEmail: "work@example.com"
+            )
+            let secondary = snapshot(
+                .codex,
+                originalName: "Codex",
+                used: 2,
+                remaining: nil,
+                percentage: 2,
+                meaning: .used,
+                resetsAt: now.addingTimeInterval(7_200),
+                sourceFields: [
+                    "limitId": "codex",
+                    "limitName": "Codex",
+                    "window": "primary",
+                    "windowDurationMins": "10080"
+                ],
+                accountEmail: "personal@example.com"
+            )
+            codex = ProviderSnapshot(
+                providerID: .codex,
+                source: sourceDescriptors[.codex]!,
+                accounts: [
+                    ProviderAccountSnapshot(
+                        sourceID: CodexAccountSource.primary.id,
+                        quotas: primary.quotas,
+                        refreshedAt: primary.refreshedAt,
+                        accountEmail: "work@example.com",
+                        plan: "Plus"
+                    ),
+                    ProviderAccountSnapshot(
+                        sourceID: CodexAccountSource.secondary.id,
+                        quotas: secondary.quotas,
+                        refreshedAt: secondary.refreshedAt,
+                        accountEmail: "personal@example.com",
+                        plan: "Plus",
+                        failure: ProcessInfo.processInfo.environment["TOKENTANK_UI_CODEX_SECONDARY_FAILURE"] == "1"
+                            ? CollectionError(kind: .authenticationRejected, diagnosticCode: "ui-test.codex.secondary.auth", recoveryAction: .signInSourceApp) : nil,
+                        failedAt: ProcessInfo.processInfo.environment["TOKENTANK_UI_CODEX_SECONDARY_FAILURE"] == "1" ? now : nil
+                    ),
+                ],
+                refreshedAt: now.addingTimeInterval(-30)
+            )
+        } else {
+            codex = baseCodex
+        }
         let claude = snapshot(
             .claude,
             originalName: "weekly_all",
@@ -430,7 +659,7 @@ final class AppModel: ObservableObject {
             .doubao,
             originalName: "5h",
             used: nil,
-            remaining: 0,
+            remaining: ProcessInfo.processInfo.environment["TOKENTANK_UI_MISSING_QUOTA"] == "1" ? nil : 0,
             percentage: nil,
             meaning: .remaining,
             resetsAt: nil
@@ -449,7 +678,8 @@ final class AppModel: ObservableObject {
                 snapshot: nil,
                 failure: CollectionError(
                     kind: .authenticationRejected,
-                    diagnosticCode: "ui-test.grok.authentication"
+                    diagnosticCode: "ui-test.grok.authentication",
+                    recoveryAction: .signInSourceApp
                 )
             ),
             .cursor: .stale(

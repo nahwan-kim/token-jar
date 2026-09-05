@@ -50,7 +50,7 @@ struct TokenTankApp: App {
         WindowGroup("Token Tank UI Test Detail", id: "ui-test-detail") {
             DetailPopoverView(model: model)
                 .environment(\.locale, model.locale)
-                .frame(width: 420, height: 520)
+                .frame(width: 480, height: 640)
         }
 
         WindowGroup("Token Tank UI Test Settings", id: "ui-test-settings") {
@@ -76,7 +76,6 @@ private struct TokenTankUITestMenuBarLabel: View {
                 }
                 openWindow(id: "ui-test-detail")
                 if ProcessInfo.processInfo.environment["TOKENTANK_UI_SETTINGS"] == "1" {
-                    try? await Task.sleep(for: .seconds(30))
                     openWindow(id: "ui-test-settings")
                 }
             }

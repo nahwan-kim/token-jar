@@ -29,6 +29,34 @@ public enum ProviderID: String, CaseIterable, Codable, Hashable, Identifiable, S
         }
     }
 }
+public enum CodexAccountSource: String, CaseIterable, Codable, Hashable, Identifiable, Sendable {
+    case primary = "codex.primary"
+    case secondary = "codex.secondary"
+
+    public var id: String { rawValue }
+
+    public var directoryName: String {
+        switch self {
+        case .primary:
+            ".codex"
+        case .secondary:
+            ".codex-secondary"
+        }
+    }
+
+    public var displayName: String {
+        switch self {
+        case .primary:
+            "Default"
+        case .secondary:
+            "Secondary"
+        }
+    }
+
+    public var isOptional: Bool {
+        self == .secondary
+    }
+}
 
 public struct RawQuotaID: RawRepresentable, Codable, Hashable, Sendable, ExpressibleByStringLiteral {
     public let rawValue: String
@@ -139,25 +167,166 @@ public struct RawQuotaItem: Identifiable, Codable, Equatable, Hashable, Sendable
     }
 }
 
+public struct ProviderAccountSnapshot: Identifiable, Codable, Equatable, Sendable {
+    public let sourceID: String
+    public let quotas: [RawQuotaItem]
+    public let refreshedAt: Date?
+    public let accountEmail: String?
+    public let plan: String?
+    public let failure: CollectionError?
+    public let failedAt: Date?
+
+    public var id: String { sourceID }
+    public var isStale: Bool { failure != nil }
+    public var hasData: Bool {
+        !quotas.isEmpty || accountEmail != nil || plan != nil || refreshedAt != nil
+    }
+
+    public init(
+        sourceID: String,
+        quotas: [RawQuotaItem],
+        refreshedAt: Date? = nil,
+        accountEmail: String? = nil,
+        plan: String? = nil,
+        failure: CollectionError? = nil,
+        failedAt: Date? = nil
+    ) {
+        self.sourceID = sourceID.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.quotas = quotas
+        self.refreshedAt = refreshedAt
+        self.accountEmail = ProviderSnapshot.validatedAccountEmail(accountEmail)
+        self.plan = Self.validatedPlan(plan)
+        self.failure = failure
+        self.failedAt = failedAt
+    }
+
+    public static func validatedPlan(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let plan = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !plan.isEmpty, plan.utf8.count <= 128,
+              !plan.unicodeScalars.contains(where: {
+                  CharacterSet.controlCharacters.contains($0)
+                      || CharacterSet.illegalCharacters.contains($0)
+                      || $0.properties.generalCategory == .format
+              }) else { return nil }
+        return plan
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sourceID
+        case quotas
+        case refreshedAt
+        case accountEmail
+        case plan
+        case failure
+        case failedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.sourceID = try container.decode(String.self, forKey: .sourceID)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        self.quotas = try container.decodeIfPresent([RawQuotaItem].self, forKey: .quotas) ?? []
+        self.refreshedAt = try container.decodeIfPresent(Date.self, forKey: .refreshedAt)
+        self.accountEmail = ProviderSnapshot.validatedAccountEmail(
+            try container.decodeIfPresent(String.self, forKey: .accountEmail)
+        )
+        self.plan = Self.validatedPlan(
+            try container.decodeIfPresent(String.self, forKey: .plan)
+        )
+        self.failure = try container.decodeIfPresent(CollectionError.self, forKey: .failure)
+        self.failedAt = try container.decodeIfPresent(Date.self, forKey: .failedAt)
+    }
+}
+
 public struct ProviderSnapshot: Codable, Equatable, Sendable {
     public let providerID: ProviderID
     public let source: ProviderSourceDescriptor
     public let quotas: [RawQuotaItem]
     public let refreshedAt: Date
     public let accountEmail: String?
+    public let accounts: [ProviderAccountSnapshot]
 
     public init(
         providerID: ProviderID,
         source: ProviderSourceDescriptor,
         quotas: [RawQuotaItem],
         refreshedAt: Date,
-        accountEmail: String? = nil
+        accountEmail: String? = nil,
+        accounts: [ProviderAccountSnapshot] = []
     ) {
         self.providerID = providerID
         self.source = source
         self.quotas = quotas
         self.refreshedAt = refreshedAt
         self.accountEmail = Self.validatedAccountEmail(accountEmail)
+        self.accounts = accounts.sorted { lhs, rhs in
+            if lhs.sourceID == rhs.sourceID {
+                return lhs.id < rhs.id
+            }
+            return lhs.sourceID < rhs.sourceID
+        }
+    }
+
+    public init(
+        providerID: ProviderID,
+        source: ProviderSourceDescriptor,
+        accounts: [ProviderAccountSnapshot],
+        refreshedAt: Date
+    ) {
+        let primaryEmail = accounts.first {
+            $0.sourceID == CodexAccountSource.primary.id
+        }?.accountEmail ?? accounts.first?.accountEmail
+        self.init(
+            providerID: providerID,
+            source: source,
+            quotas: accounts.count == 1 ? accounts[0].quotas : [],
+            refreshedAt: refreshedAt,
+            accountEmail: primaryEmail,
+            accounts: accounts
+        )
+    }
+
+    public func account(for sourceID: String) -> ProviderAccountSnapshot? {
+        accounts.first { $0.sourceID == sourceID }
+    }
+
+    public var hasStaleAccounts: Bool {
+        accounts.contains(where: \.isStale)
+    }
+
+    public func retainingAccountData(from previous: ProviderSnapshot?) -> ProviderSnapshot {
+        guard providerID == .codex, !accounts.isEmpty else { return self }
+        var previousBySourceID: [String: ProviderAccountSnapshot] = [:]
+        for account in previous?.accounts ?? [] {
+            previousBySourceID[account.sourceID] = account
+        }
+        let mergedAccounts = accounts.map { current in
+            guard let failure = current.failure,
+                  let previous = previousBySourceID[current.sourceID]
+            else {
+                return current
+            }
+            return ProviderAccountSnapshot(
+                sourceID: current.sourceID,
+                quotas: previous.quotas,
+                refreshedAt: previous.refreshedAt,
+                accountEmail: previous.accountEmail,
+                plan: previous.plan,
+                failure: failure,
+                failedAt: current.failedAt
+            )
+        }
+        return ProviderSnapshot(
+            providerID: providerID,
+            source: source,
+            quotas: mergedAccounts.count == 1 ? mergedAccounts[0].quotas : [],
+            refreshedAt: refreshedAt,
+            accountEmail: mergedAccounts.first {
+                $0.sourceID == CodexAccountSource.primary.id
+            }?.accountEmail ?? accountEmail,
+            accounts: mergedAccounts
+        )
     }
 
     public static func validatedAccountEmail(_ value: String?) -> String? {
@@ -173,6 +342,35 @@ public struct ProviderSnapshot: Codable, Equatable, Sendable {
                       || $0.properties.generalCategory == .format
               }) else { return nil }
         return email
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case providerID
+        case source
+        case quotas
+        case refreshedAt
+        case accountEmail
+        case accounts
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.providerID = try container.decode(ProviderID.self, forKey: .providerID)
+        self.source = try container.decode(ProviderSourceDescriptor.self, forKey: .source)
+        self.quotas = try container.decodeIfPresent([RawQuotaItem].self, forKey: .quotas) ?? []
+        self.refreshedAt = try container.decode(Date.self, forKey: .refreshedAt)
+        self.accountEmail = Self.validatedAccountEmail(
+            try container.decodeIfPresent(String.self, forKey: .accountEmail)
+        )
+        self.accounts = (try container.decodeIfPresent(
+            [ProviderAccountSnapshot].self,
+            forKey: .accounts
+        ) ?? []).sorted { lhs, rhs in
+            if lhs.sourceID == rhs.sourceID {
+                return lhs.id < rhs.id
+            }
+            return lhs.sourceID < rhs.sourceID
+        }
     }
 }
 
@@ -307,6 +505,7 @@ public struct ProviderPreference: Codable, Equatable, Sendable, Identifiable {
         self.representativeQuotaID = representativeQuotaID
     }
 
+
     public func normalized() -> ProviderPreference {
         var normalized = self
         let sanitized = abbreviation.unicodeScalars.reduce(into: "") { result, scalar in
@@ -321,6 +520,29 @@ public struct ProviderPreference: Codable, Equatable, Sendable, Identifiable {
             ? providerID.defaultAbbreviation
             : String(trimmed.prefix(8))
         return normalized
+    }
+
+
+    private enum CodingKeys: String, CodingKey {
+        case providerID
+        case isVisible
+        case order
+        case abbreviation
+        case representativeQuotaID
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            providerID: try container.decode(ProviderID.self, forKey: .providerID),
+            isVisible: try container.decodeIfPresent(Bool.self, forKey: .isVisible) ?? true,
+            order: try container.decodeIfPresent(Int.self, forKey: .order) ?? 0,
+            abbreviation: try container.decodeIfPresent(String.self, forKey: .abbreviation),
+            representativeQuotaID: try container.decodeIfPresent(
+                RawQuotaID.self,
+                forKey: .representativeQuotaID
+            )
+        )
     }
 }
 

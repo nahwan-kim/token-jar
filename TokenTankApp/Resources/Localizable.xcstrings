@@ -1,6 +1,20 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "codex.weekly" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Weekly" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "주간" } }
+      }
+    },
+    "codex.tickets" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Reset tickets" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "리셋 티켓" } }
+      }
+    },
     "settings.language" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -62,6 +76,20 @@
       "localizations" : {
         "en" : { "stringUnit" : { "state" : "translated", "value" : "Wait for next refresh" } },
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "다음 갱신까지 대기" } }
+      }
+    },
+    "codex.account.default" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Default" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "기본" } }
+      }
+    },
+    "codex.account.secondary" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Secondary" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "보조" } }
       }
     },
     "detail.source" : {

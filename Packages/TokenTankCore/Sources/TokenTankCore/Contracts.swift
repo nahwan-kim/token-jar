@@ -117,8 +117,43 @@ public protocol ReadOnlySQLiteReader: Sendable {
     ) async throws -> [String: String]
 }
 
+public struct CodexAccountRead: Equatable, Sendable {
+    public let sourceID: CodexAccountSource
+    public let data: Data?
+    public let failure: CollectionError?
+
+    public init(
+        sourceID: CodexAccountSource,
+        data: Data? = nil,
+        failure: CollectionError? = nil
+    ) {
+        self.sourceID = sourceID
+        self.data = data
+        self.failure = failure
+    }
+
+    public init(
+        source: CodexAccountSource,
+        data: Data? = nil,
+        failure: CollectionError? = nil
+    ) {
+        self.init(sourceID: source, data: data, failure: failure)
+    }
+
+    public static func success(sourceID: CodexAccountSource, data: Data) -> CodexAccountRead {
+        CodexAccountRead(sourceID: sourceID, data: data)
+    }
+
+    public static func failed(
+        sourceID: CodexAccountSource,
+        failure: CollectionError
+    ) -> CodexAccountRead {
+        CodexAccountRead(sourceID: sourceID, failure: failure)
+    }
+}
+
 public protocol CodexAccountUsageReader: Sendable {
-    func readRateLimits() async throws -> Data
+    func readAccounts() async throws -> [CodexAccountRead]
 }
 public protocol DoubaoPlanUsageReader: Sendable {
     func readPlanUsage() async throws -> Data
@@ -264,7 +299,7 @@ public struct NoSQLiteReader: ReadOnlySQLiteReader {
 public struct NoCodexAccountUsageReader: CodexAccountUsageReader {
     public init() {}
 
-    public func readRateLimits() async throws -> Data {
+    public func readAccounts() async throws -> [CodexAccountRead] {
         throw CollectionError(
             kind: .sourceUnavailable,
             diagnosticCode: "codex.app-server.disabled"

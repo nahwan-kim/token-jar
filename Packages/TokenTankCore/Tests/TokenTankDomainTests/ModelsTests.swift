@@ -103,4 +103,58 @@ struct ModelsTests {
         #expect(decoded == snapshot)
         #expect(decoded.quotas[0].used?.rawText == "0.10")
     }
+    @Test("Codex account snapshots preserve source boundaries for shared quota IDs")
+    func accountSnapshotsPreserveSourceBoundaries() throws {
+        let source = ProviderSourceDescriptor(
+            id: "codex.fixture",
+            name: "Codex fixture",
+            kind: .officialCLI,
+            credentialOwnership: .externalProvider,
+            documentationURL: nil,
+            detail: "Fixture source"
+        )
+        let quota = RawQuotaItem(
+            id: "codex.primary",
+            originalName: "Primary",
+            used: SourceValue(value: 25, rawText: "25", unit: "%"),
+            remaining: SourceValue(value: 75, rawText: "75", unit: "%"),
+            percentage: SourcePercentage(value: 25, rawText: "25", meaning: .used),
+            resetsAt: nil
+        )
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let snapshot = ProviderSnapshot(
+            providerID: .codex,
+            source: source,
+            accounts: [
+                ProviderAccountSnapshot(
+                    sourceID: CodexAccountSource.secondary.id,
+                    quotas: [quota],
+                    refreshedAt: date,
+                    accountEmail: "secondary@example.com"
+                ),
+                ProviderAccountSnapshot(
+                    sourceID: CodexAccountSource.primary.id,
+                    quotas: [quota],
+                    refreshedAt: date,
+                    accountEmail: "primary@example.com"
+                ),
+            ],
+            refreshedAt: date
+        )
+
+        #expect(snapshot.accounts.map(\.sourceID) == [
+            CodexAccountSource.primary.id,
+            CodexAccountSource.secondary.id,
+        ])
+        #expect(snapshot.account(for: CodexAccountSource.primary.id)?.quotas == [quota])
+        #expect(snapshot.account(for: CodexAccountSource.secondary.id)?.quotas == [quota])
+        #expect(snapshot.quotas.isEmpty)
+
+        let decoded = try JSONDecoder().decode(
+            ProviderSnapshot.self,
+            from: JSONEncoder().encode(snapshot)
+        )
+        #expect(decoded.accounts == snapshot.accounts)
+        #expect(decoded.account(for: CodexAccountSource.secondary.id)?.accountEmail == "secondary@example.com")
+    }
 }

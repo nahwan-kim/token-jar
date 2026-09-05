@@ -14,7 +14,7 @@ public struct CodexAdapter: ProviderAdapter {
             kind: .officialCLI,
             credentialOwnership: .externalProvider,
             documentationURL: URL(string: "https://developers.openai.com/codex/app-server/"),
-            detail: "Official Codex app-server account/rateLimits/read source. Token Tank starts only the documented stdio server and never reads, copies, or refreshes Codex credentials."
+            detail: "Official Codex app-server account/rateLimits/read source. Token Tank starts one isolated stdio server per native account source and never reads, copies, or refreshes Codex credentials."
         )
     }
 
@@ -25,9 +25,9 @@ public struct CodexAdapter: ProviderAdapter {
     }
 
     public func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
-        let data: Data
+        let reads: [CodexAccountRead]
         do {
-            data = try await context.codexAccount.readRateLimits()
+            reads = try await context.codexAccount.readAccounts()
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as CollectionError {
@@ -39,14 +39,105 @@ public struct CodexAdapter: ProviderAdapter {
             )
         }
 
+        guard !reads.isEmpty else {
+            throw codexMalformedError("codex.accounts.empty-success")
+        }
+
         let refreshedAt = await context.clock.now()
-        return try Self.decodeSnapshot(from: data, refreshedAt: refreshedAt)
+        var accounts: [ProviderAccountSnapshot] = []
+        accounts.reserveCapacity(reads.count)
+        for read in reads.sorted(by: { $0.sourceID.rawValue < $1.sourceID.rawValue }) {
+            if let failure = read.failure {
+                accounts.append(
+                    ProviderAccountSnapshot(
+                        sourceID: read.sourceID.id,
+                        quotas: [],
+                        failure: failure,
+                        failedAt: refreshedAt
+                    )
+                )
+                continue
+            }
+
+            guard let data = read.data else {
+                accounts.append(
+                    ProviderAccountSnapshot(
+                        sourceID: read.sourceID.id,
+                        quotas: [],
+                        failure: codexMalformedError("codex.account.payload-missing"),
+                        failedAt: refreshedAt
+                    )
+                )
+                continue
+            }
+
+            do {
+                accounts.append(
+                    try Self.decodeAccountSnapshot(
+                        from: data,
+                        sourceID: read.sourceID,
+                        refreshedAt: refreshedAt
+                    )
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let failure as CollectionError {
+                accounts.append(
+                    ProviderAccountSnapshot(
+                        sourceID: read.sourceID.id,
+                        quotas: [],
+                        failure: failure,
+                        failedAt: refreshedAt
+                    )
+                )
+            } catch {
+                accounts.append(
+                    ProviderAccountSnapshot(
+                        sourceID: read.sourceID.id,
+                        quotas: [],
+                        failure: codexMalformedError("codex.account.decode-failed"),
+                        failedAt: refreshedAt
+                    )
+                )
+            }
+        }
+
+        guard Set(accounts.map(\.sourceID)).count == accounts.count else {
+            throw codexSchemaError("codex.accounts.duplicate-identity")
+        }
+
+        return ProviderSnapshot(
+            providerID: .codex,
+            source: sourceDescriptor,
+            accounts: accounts,
+            refreshedAt: refreshedAt
+        )
     }
 
     public static func decodeSnapshot(
         from data: Data,
         refreshedAt: Date = Date()
     ) throws -> ProviderSnapshot {
+        let account = try decodeAccountSnapshot(
+            from: data,
+            sourceID: .primary,
+            refreshedAt: refreshedAt
+        )
+        return ProviderSnapshot(
+            providerID: .codex,
+            source: CodexAdapter().sourceDescriptor,
+            quotas: account.quotas,
+            refreshedAt: refreshedAt,
+            accountEmail: account.accountEmail,
+            accounts: [account]
+        )
+    }
+
+    public static func decodeAccountSnapshot(
+        from data: Data,
+        sourceID: CodexAccountSource,
+        refreshedAt: Date = Date()
+    ) throws -> ProviderAccountSnapshot {
         let rawRoot = try codexObject(from: data, code: "codex.response.invalid-json")
         let root: [String: Any]
         if let result = rawRoot["result"] as? [String: Any],
@@ -91,12 +182,12 @@ public struct CodexAdapter: ProviderAdapter {
             throw codexSchemaError("codex.quota.duplicate-identity")
         }
 
-        return ProviderSnapshot(
-            providerID: .codex,
-            source: CodexAdapter().sourceDescriptor,
+        return ProviderAccountSnapshot(
+            sourceID: sourceID.id,
             quotas: quotas,
             refreshedAt: refreshedAt,
-            accountEmail: codexAccountEmail(from: root)
+            accountEmail: codexAccountEmail(from: root),
+            plan: codexAccountPlan(from: root)
         )
     }
 
@@ -271,6 +362,34 @@ public struct CodexAdapter: ProviderAdapter {
             return nil
         }
         return email
+    }
+    private static func codexAccountPlan(from root: [String: Any]) -> String? {
+        let account = root["account"] as? [String: Any]
+        let candidates: [Any?] = [
+            account?["plan"],
+            account?["planType"],
+            account?["plan_type"],
+            account?["planName"],
+            account?["plan_name"],
+            account?["subscriptionPlan"],
+            account?["subscription_plan"],
+            root["plan"],
+            root["planType"],
+            root["plan_type"]
+        ]
+        for candidate in candidates {
+            if let value = codexString(candidate) {
+                return value
+            }
+            if let object = candidate as? [String: Any] {
+                for key in ["name", "planName", "plan_name", "type", "id"] {
+                    if let value = codexString(object[key]) {
+                        return value
+                    }
+                }
+            }
+        }
+        return nil
     }
 }
 

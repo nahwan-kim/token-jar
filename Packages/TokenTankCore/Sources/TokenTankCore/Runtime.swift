@@ -238,10 +238,11 @@ public actor RefreshCoordinator {
                     diagnosticCode: "collection.snapshot-identity-mismatch"
                 )
             }
+            let mergedSnapshot = snapshot.retainingAccountData(from: previous)
             guard operationGeneration == generation else { return }
-            await snapshotStore.store(snapshot)
+            await snapshotStore.store(mergedSnapshot)
             guard operationGeneration == generation else { return }
-            states[providerID] = .fresh(snapshot)
+            states[providerID] = .fresh(mergedSnapshot)
             nextAllowedRefresh.removeValue(forKey: providerID)
             await context.diagnostics.record(
                 DiagnosticEvent(
@@ -482,14 +483,14 @@ private struct ProviderScopedCodexAccountReader: CodexAccountUsageReader {
     let providerID: ProviderID
     let base: any CodexAccountUsageReader
 
-    func readRateLimits() async throws -> Data {
+    func readAccounts() async throws -> [CodexAccountRead] {
         guard providerID == .codex else {
             throw CollectionError(
                 kind: .sourceUnavailable,
                 diagnosticCode: "capability.codex-account.denied"
             )
         }
-        return try await base.readRateLimits()
+        return try await base.readAccounts()
     }
 }
 private struct ProviderScopedDoubaoPlanReader: DoubaoPlanUsageReader {

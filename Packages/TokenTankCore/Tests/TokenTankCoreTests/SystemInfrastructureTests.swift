@@ -538,9 +538,11 @@ struct SystemInfrastructureTests {
 
         let reader = CodexAppServerUsageReader(
             executableCandidates: [successExecutable],
+            accountSources: [.primary],
             timeout: .seconds(1)
         )
-        let result = try await reader.readRateLimits()
+        let reads = try await reader.readAccounts()
+        let result = try #require(reads.first?.data)
         let object = try #require(JSONSerialization.jsonObject(with: result) as? [String: Any])
         #expect(object["rate_limits"] != nil)
         let account = try #require(object["account"] as? [String: Any])
@@ -560,9 +562,11 @@ struct SystemInfrastructureTests {
 
         let currentReader = CodexAppServerUsageReader(
             executableCandidates: [currentExecutable],
+            accountSources: [.primary],
             timeout: .seconds(1)
         )
-        let currentResult = try await currentReader.readRateLimits()
+        let currentReads = try await currentReader.readAccounts()
+        let currentResult = try #require(currentReads.first?.data)
         let currentObject = try #require(
             JSONSerialization.jsonObject(with: currentResult) as? [String: Any]
         )
@@ -584,16 +588,12 @@ struct SystemInfrastructureTests {
         )
         let fractionalReader = CodexAppServerUsageReader(
             executableCandidates: [fractionalExecutable],
+            accountSources: [.primary],
             timeout: .seconds(1)
         )
-        do {
-            _ = try await fractionalReader.readRateLimits()
-            Issue.record("Expected fractional JSON-RPC ID rejection")
-        } catch let error as CollectionError {
-            #expect(error.diagnosticCode == "codex.app-server.closed")
-        } catch {
-            Issue.record("Unexpected error: \(error)")
-        }
+        let fractionalReads = try await fractionalReader.readAccounts()
+        let fractionalFailure = try #require(fractionalReads.first?.failure)
+        #expect(fractionalFailure.diagnosticCode == "codex.app-server.closed")
 
         let timeoutExecutable = directory.appendingPathComponent("codex-timeout")
         let timeoutScript = """
@@ -605,17 +605,13 @@ struct SystemInfrastructureTests {
 
         let timeoutReader = CodexAppServerUsageReader(
             executableCandidates: [timeoutExecutable],
+            accountSources: [.primary],
             timeout: .milliseconds(25)
         )
-        do {
-            _ = try await timeoutReader.readRateLimits()
-            Issue.record("Expected bounded app-server timeout")
-        } catch let error as CollectionError {
-            #expect(error.kind == .sourceUnavailable)
-            #expect(error.diagnosticCode == "codex.app-server.timeout")
-        } catch {
-            Issue.record("Unexpected error: \(error)")
-        }
+        let timeoutReads = try await timeoutReader.readAccounts()
+        let timeoutFailure = try #require(timeoutReads.first?.failure)
+        #expect(timeoutFailure.kind == .sourceUnavailable)
+        #expect(timeoutFailure.diagnosticCode == "codex.app-server.timeout")
     }
     @Test("Codex app-server identity RPC failures preserve successful rate limits")
     func codexIdentityFailurePreservesUsage() async throws {
@@ -638,12 +634,163 @@ struct SystemInfrastructureTests {
 
         let reader = CodexAppServerUsageReader(
             executableCandidates: [executable],
+            accountSources: [.primary],
             timeout: .seconds(1)
         )
-        let result = try await reader.readRateLimits()
+        let reads = try await reader.readAccounts()
+        let result = try #require(reads.first?.data)
         let object = try #require(JSONSerialization.jsonObject(with: result) as? [String: Any])
         #expect(object["rate_limits"] != nil)
         #expect(object["account"] == nil)
+    }
+    @Test("omits an absent optional secondary source without failing the primary")
+    func absentOptionalSecondaryIsNotAnError() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let primaryHome = directory.appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: primaryHome, withIntermediateDirectories: true)
+
+        let executable = directory.appendingPathComponent("codex-primary-only")
+        let script = """
+        #!/bin/sh
+        IFS= read -r initialize
+        printf '%s\\n' '{"id":0,"result":{}}'
+        IFS= read -r initialized
+        IFS= read -r rateLimitsRequest
+        printf '%s\\n' '{"id":1,"result":{"rate_limits":{"primary":{"used_percent":25}}}}'
+        IFS= read -r accountRequest
+        printf '%s\\n' '{"id":2,"result":{"account":{"type":"chatgpt","email":"primary@example.com"}}}'
+        sleep 1
+        """
+        try Data(script.utf8).write(to: executable, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+
+        let reader = CodexAppServerUsageReader(
+            executableCandidates: [executable],
+            homeDirectory: directory,
+            accountSources: CodexAccountSource.allCases,
+            timeout: .seconds(1)
+        )
+        let reads = try await reader.readAccounts()
+
+        #expect(reads.map(\.sourceID) == [.primary])
+        #expect(reads.first?.failure == nil)
+        #expect(reads.first?.data != nil)
+    }
+
+    @Test("separates Codex source homes and secondary fixed credential configuration")
+    func codexSourceEnvironmentIsIsolated() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for source in CodexAccountSource.allCases {
+            try FileManager.default.createDirectory(
+                at: directory.appendingPathComponent(source.directoryName, isDirectory: true),
+                withIntermediateDirectories: true
+            )
+        }
+
+        let executable = directory.appendingPathComponent("codex-isolated-sources")
+        let script = """
+        #!/bin/sh
+        set -eu
+        if [ -n "${OPENAI_API_KEY:-}" ] ||
+           [ -n "${OPENAI_ACCESS_TOKEN:-}" ] ||
+           [ -n "${CODEX_API_KEY:-}" ] ||
+           [ -n "${CODEX_ACCESS_TOKEN:-}" ] ||
+           [ -n "${CODEX_AUTH:-}" ] ||
+           [ -n "${CODEX_REFRESH_TOKEN_URL_OVERRIDE:-}" ]; then
+            exit 90
+        fi
+        case "$CODEX_HOME" in
+          */.codex-secondary)
+            [ "$1" = "-c" ] || exit 91
+            [ "$2" = 'cli_auth_credentials_store="file"' ] || exit 92
+            [ "$3" = "app-server" ] || exit 93
+            used=75
+            email=secondary@example.com
+            ;;
+          */.codex)
+            [ "$1" = "app-server" ] || exit 94
+            [ "$#" -eq 1 ] || exit 95
+            used=25
+            email=primary@example.com
+            ;;
+          *)
+            exit 96
+            ;;
+        esac
+        printf 'arg1=%s\\narg2=%s\\narg3=%s\\n' "$1" "${2-}" "${3-}" > "$CODEX_HOME/observed-environment"
+        IFS= read -r initialize
+        printf '%s\\n' '{"id":0,"result":{}}'
+        IFS= read -r initialized
+        IFS= read -r rateLimitsRequest
+        printf '{"id":1,"result":{"rate_limits":{"primary":{"used_percent":%s}}}}\\n' "$used"
+        IFS= read -r accountRequest
+        printf '{"id":2,"result":{"account":{"type":"chatgpt","email":"%s"}}}\\n' "$email"
+        sleep 1
+        """
+        try Data(script.utf8).write(to: executable, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let authKeys = [
+            "OPENAI_API_KEY",
+            "OPENAI_ACCESS_TOKEN",
+            "CODEX_API_KEY",
+            "CODEX_ACCESS_TOKEN",
+            "CODEX_AUTH",
+            "CODEX_REFRESH_TOKEN_URL_OVERRIDE",
+        ]
+        let originalValues = authKeys.map {
+            ($0, ProcessInfo.processInfo.environment[$0])
+        }
+        for key in authKeys {
+            #expect(setenv(key, "cross-account-secret", 1) == 0)
+        }
+        defer {
+            for (key, value) in originalValues {
+                if let value {
+                    _ = setenv(key, value, 1)
+                } else {
+                    _ = unsetenv(key)
+                }
+            }
+        }
+
+        let reader = CodexAppServerUsageReader(
+            executableCandidates: [executable],
+            homeDirectory: directory,
+            accountSources: CodexAccountSource.allCases,
+            timeout: .seconds(2)
+        )
+        let reads = try await reader.readAccounts()
+        #expect(Set(reads.map(\.sourceID)) == Set(CodexAccountSource.allCases))
+        #expect(reads.allSatisfy { $0.failure == nil })
+
+        let primaryObservation = try #require(
+            String(
+                data: try Data(
+                    contentsOf: directory
+                        .appendingPathComponent(CodexAccountSource.primary.directoryName)
+                        .appendingPathComponent("observed-environment")
+                ),
+                encoding: .utf8
+            )
+        )
+        let secondaryObservation = try #require(
+            String(
+                data: try Data(
+                    contentsOf: directory
+                        .appendingPathComponent(CodexAccountSource.secondary.directoryName)
+                        .appendingPathComponent("observed-environment")
+                ),
+                encoding: .utf8
+            )
+        )
+        #expect(primaryObservation.contains("arg1=app-server"))
+        #expect(primaryObservation.contains("arg2=\n"))
+        #expect(primaryObservation.contains("arg3=\n"))
+        #expect(secondaryObservation.contains("arg1=-c"))
+        #expect(secondaryObservation.contains("arg2=cli_auth_credentials_store=\"file\""))
+        #expect(secondaryObservation.contains("arg3=app-server"))
     }
     @Test("stable source IDs are deterministic and do not persist raw account identifiers")
     func stableSourceIDs() {

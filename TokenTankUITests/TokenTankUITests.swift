@@ -4,6 +4,33 @@ import XCTest
 final class TokenTankUITests: XCTestCase {
     private let app = XCUIApplication(bundleIdentifier: "com.tokentank.TokenTank")
     private let timeout: TimeInterval = 10
+    private func accessibilityText(_ element: XCUIElement) -> String {
+        let ownValues = [
+            element.label,
+            element.title,
+            element.value as? String ?? "",
+        ]
+        let childValues = element.descendants(matching: .any)
+            .allElementsBoundByIndex
+            .flatMap { child in
+                [
+                    child.label,
+                    child.title,
+                    child.value as? String ?? "",
+                ]
+            }
+        return (ownValues + childValues).joined(separator: " ")
+    }
+
+    private func reveal(_ element: XCUIElement, in window: XCUIElement, deltaY: CGFloat = -400) {
+        app.activate()
+        window.click()
+        let scrollView = window.scrollViews.firstMatch
+        for _ in 0..<12 {
+            if element.exists && element.isHittable { return }
+            scrollView.scroll(byDeltaX: 0, deltaY: deltaY)
+        }
+    }
 
     func testLanguageSwitcherUpdatesOpenWindows() {
         continueAfterFailure = false
@@ -15,17 +42,19 @@ final class TokenTankUITests: XCTestCase {
         defer { app.terminate() }
         let settings = app.windows["Token Tank UI Test Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 45))
+        app.activate()
+        settings.click()
         let picker = settings.popUpButtons["settings.language.picker"]
         XCTAssertTrue(picker.waitForExistence(timeout: timeout), settings.debugDescription)
         picker.click()
         app.menuItems["한국어"].click()
         let detail = app.windows["Token Tank UI Test Detail"]
         XCTAssertTrue(detail.buttons["action.quit"].waitForExistence(timeout: timeout))
-        XCTAssertEqual(detail.buttons["action.quit"].label, "Token Tank 종료")
+        XCTAssertTrue(detail.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "action.quit", "Token Tank 종료")).firstMatch.waitForExistence(timeout: timeout))
         XCTAssertTrue(settings.popUpButtons.matching(NSPredicate(format: "value == %@", "주간 한도")).firstMatch.exists)
         picker.click()
         app.menuItems["English"].click()
-        XCTAssertEqual(detail.buttons["action.quit"].label, "Quit Token Tank")
+        XCTAssertTrue(detail.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "action.quit", "Quit Token Tank")).firstMatch.waitForExistence(timeout: timeout))
         XCTAssertTrue(settings.popUpButtons.matching(NSPredicate(format: "value == %@", "Weekly limit")).firstMatch.exists)
     }
     func testFableUsesWeeklyGaugeLayout() {
@@ -71,36 +100,46 @@ final class TokenTankUITests: XCTestCase {
         XCTAssertTrue(window.staticTexts["error.offline"].exists, "Actionable error details remain visible")
     }
 
-    func testMultipleQuotasUseTwoColumns() {
+    func testCodexWeeklyAndTicketsUseTwoCompactColumns() {
         continueAfterFailure = false
-        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appLanguage", "en"]
         app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
         app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launch()
         defer { app.terminate() }
+        let window = app.windows["Token Tank UI Test Detail"]
+        XCTAssertTrue(window.waitForExistence(timeout: timeout))
+        let weekly = window.descendants(matching: .any)["quota.ui-test.codex"]
+        let tickets = window.descendants(matching: .any)["provider.codex.reset-credits"]
+        XCTAssertTrue(weekly.waitForExistence(timeout: timeout))
+        XCTAssertTrue(tickets.exists)
+        XCTAssertEqual(weekly.frame.minY, tickets.frame.minY, accuracy: 1)
+        XCTAssertEqual(weekly.frame.width, tickets.frame.width, accuracy: 1)
+        XCTAssertGreaterThan(tickets.frame.minX, weekly.frame.maxX)
+        XCTAssertTrue(accessibilityText(tickets).contains("2"))
+        XCTAssertEqual(tickets.descendants(matching: .any).matching(identifier: "provider.codex.ticket-expiry").count, 1)
+        XCTAssertFalse(window.descendants(matching: .any)["quota.ui-test.codex.spark"].exists)
+        XCTAssertLessThan(weekly.frame.height, 60)
+    }
 
-        for count in [2, 3] {
-            app.launchEnvironment["TOKENTANK_UI_QUOTA_COUNT"] = String(count)
-            app.launch()
-            let window = app.windows["Token Tank UI Test Detail"]
-            XCTAssertTrue(window.waitForExistence(timeout: timeout))
-            let first = window.descendants(matching: .any)["quota.ui-test.codex"]
-            let second = window.descendants(matching: .any)["quota.ui-test.codex.2"]
-            XCTAssertTrue(first.waitForExistence(timeout: timeout))
-            XCTAssertTrue(second.waitForExistence(timeout: timeout))
-            XCTAssertEqual(first.frame.minY, second.frame.minY, accuracy: 1)
-            XCTAssertEqual(first.frame.width, second.frame.width, accuracy: 1)
-            XCTAssertGreaterThan(second.frame.minX, first.frame.maxX)
-
-            let single = window.descendants(matching: .any)["quota.ui-test.claude"]
-            XCTAssertTrue(single.exists)
-            XCTAssertGreaterThan(single.frame.width, first.frame.width * 1.9)
-            if count == 3 {
-                let third = window.descendants(matching: .any)["quota.ui-test.codex.3"]
-                XCTAssertTrue(third.exists)
-                XCTAssertEqual(third.frame.minX, first.frame.minX, accuracy: 1)
-                XCTAssertGreaterThan(third.frame.minY, first.frame.maxY)
-            }
-            app.terminate()
+    func testEveryProviderShowsCompactRefreshAgeNextToStatus() {
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appLanguage", "en"]
+        app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launch()
+        defer { app.terminate() }
+        let window = app.windows["Token Tank UI Test Detail"]
+        XCTAssertTrue(window.waitForExistence(timeout: timeout))
+        for (provider, statusID) in [("codex", "state.fresh"), ("claude", "state.stale"),
+                                     ("grok", "state.authentication-required"), ("cursor", "state.stale"), ("doubao", "state.fresh")] {
+            let group = window.descendants(matching: .any)["provider.\(provider)"]
+            let age = group.descendants(matching: .any)["provider.\(provider).refreshed"]
+            let status = group.descendants(matching: .any).matching(identifier: statusID).firstMatch
+            XCTAssertTrue(age.waitForExistence(timeout: timeout))
+            XCTAssertTrue(status.exists)
+            XCTAssertLessThanOrEqual(age.frame.maxX, status.frame.minX)
+            XCTAssertLessThan(age.frame.height, 20)
+            XCTAssertFalse(accessibilityText(age).isEmpty)
         }
     }
 
@@ -134,6 +173,136 @@ final class TokenTankUITests: XCTestCase {
         XCTAssertFalse(detailWindow.staticTexts["provider.doubao.account"].exists)
         XCTAssertFalse(detailWindow.staticTexts["provider.cursor.account"].exists)
     }
+    func testDualCodexAccountsShowLabelsEmailsAndDistinctPercentages() {
+        continueAfterFailure = false
+        app.launchArguments = [
+            "-AppleLanguages", "(en)",
+            "-AppleLocale", "en_US",
+            "-appLanguage", "en",
+        ]
+        app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_CODEX_ACCOUNTS"] = "1"
+        app.launch()
+
+        let detailWindow = app.windows["Token Tank UI Test Detail"]
+        XCTAssertTrue(detailWindow.waitForExistence(timeout: timeout))
+        defer { app.terminate() }
+
+        let codexQuery = detailWindow.descendants(matching: .any)
+            .matching(identifier: "provider.codex")
+        let codex = codexQuery.firstMatch
+        XCTAssertTrue(codex.waitForExistence(timeout: timeout))
+        XCTAssertEqual(codexQuery.count, 1, "Dual-account Codex must remain one provider group")
+
+        let accountIDs = [
+            "provider.codex.account.codex.primary",
+            "provider.codex.account.codex.secondary",
+        ]
+        let accounts = accountIDs.map { accountID in
+            codex.descendants(matching: .any)
+                .matching(identifier: accountID)
+                .firstMatch
+        }
+        for account in accounts {
+            XCTAssertTrue(account.waitForExistence(timeout: timeout))
+        }
+
+        let descendantIDs = codex.descendants(matching: .any)
+            .allElementsBoundByIndex
+            .map { $0.identifier }
+        guard
+            let primaryIndex = descendantIDs.firstIndex(of: accountIDs[0]),
+            let secondaryIndex = descendantIDs.firstIndex(of: accountIDs[1])
+        else {
+            XCTFail("Codex account IDs must be present in the provider accessibility tree")
+            return
+        }
+        XCTAssertLessThan(primaryIndex, secondaryIndex, "Codex accounts must keep stable primary-then-secondary order")
+
+        let expectedAccounts = [
+            (email: "work@example.com", remaining: "74%"),
+            (email: "personal@example.com", remaining: "98%"),
+        ]
+        for (index, expected) in expectedAccounts.enumerated() {
+            let account = accounts[index]
+            XCTAssertFalse(account.descendants(matching: .any)["\(accountIDs[index]).alias"].exists)
+
+            let email = account.descendants(matching: .any)
+                .matching(identifier: "\(accountIDs[index]).email")
+                .firstMatch
+            XCTAssertTrue(email.waitForExistence(timeout: timeout))
+            XCTAssertTrue(
+                accessibilityText(email).contains("\(expected.email) · Plus"),
+                "Missing account email \(expected.email)"
+            )
+
+            let percentage = account.descendants(matching: .any)
+                .matching(identifier: "field.percentage")
+                .firstMatch
+            XCTAssertTrue(percentage.waitForExistence(timeout: timeout))
+            XCTAssertTrue(
+                accessibilityText(percentage).contains(expected.remaining),
+                "Missing remaining percentage \(expected.remaining) for \(expected.email)"
+            )
+        }
+    }
+
+    func testDualCodexAccountStatusesAreIsolatedAndMenuContainsAliasesAndValues() {
+        continueAfterFailure = false
+        app.launchArguments = [
+            "-AppleLanguages", "(en)",
+            "-AppleLocale", "en_US",
+            "-appLanguage", "en",
+        ]
+        app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_CODEX_ACCOUNTS"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_CODEX_SECONDARY_FAILURE"] = "1"
+        app.launch()
+
+        let detailWindow = app.windows["Token Tank UI Test Detail"]
+        XCTAssertTrue(detailWindow.waitForExistence(timeout: timeout))
+        defer { app.terminate() }
+
+        let codex = detailWindow.descendants(matching: .any)
+            .matching(identifier: "provider.codex")
+            .firstMatch
+        XCTAssertTrue(codex.waitForExistence(timeout: timeout))
+
+        let accountIDs = [
+            "provider.codex.account.codex.primary",
+            "provider.codex.account.codex.secondary",
+        ]
+        for accountID in accountIDs {
+            let account = codex.descendants(matching: .any)
+                .matching(identifier: accountID)
+                .firstMatch
+            XCTAssertTrue(account.waitForExistence(timeout: timeout))
+
+            let statusQuery = account.descendants(matching: .any)
+                .matching(identifier: "\(accountID).status")
+            let status = statusQuery.firstMatch
+            XCTAssertTrue(status.waitForExistence(timeout: timeout))
+            XCTAssertEqual(statusQuery.count, 1, "Each Codex account must expose one isolated status element")
+            XCTAssertFalse(accessibilityText(status).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            XCTAssertEqual(status.label, accountID.hasSuffix("primary") ? "Fresh" : "Authentication required")
+        }
+
+        let summary = app.statusItems
+            .matching(identifier: "menu-bar.summary")
+            .firstMatch
+        XCTAssertTrue(summary.waitForExistence(timeout: timeout))
+        let summaryText = accessibilityText(summary)
+        XCTAssertFalse(summaryText.contains("Work"))
+        XCTAssertFalse(summaryText.contains("Personal"))
+        for expected in ["74% · 98%"] {
+            XCTAssertTrue(
+                summaryText.contains(expected),
+                "Menu accessibility summary is missing \(expected): \(summaryText)"
+            )
+        }
+    }
 
     func testMenuBarAccessibilityAndTermination() {
         continueAfterFailure = false
@@ -143,7 +312,6 @@ final class TokenTankUITests: XCTestCase {
         ]
         app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
         app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
-        app.launchEnvironment["TOKENTANK_UI_SETTINGS"] = "1"
         app.launch()
 
         let statusItem = app.statusItems
@@ -201,6 +369,7 @@ final class TokenTankUITests: XCTestCase {
         let doubaoQuota = detailWindow.descendants(matching: .any)
             .matching(identifier: "quota.ui-test.doubao")
             .firstMatch
+        reveal(doubaoQuota, in: detailWindow)
         XCTAssertTrue(doubaoQuota.waitForExistence(timeout: timeout))
         let doubaoPercentage = doubaoQuota.descendants(matching: .any)
             .matching(identifier: "field.percentage")
@@ -211,6 +380,8 @@ final class TokenTankUITests: XCTestCase {
                 && (doubaoPercentage.value as? String)?.contains("0 tokens") == true,
             "Zero remaining must stay distinct from a missing source value; label=\(doubaoPercentage.label), value=\(String(describing: doubaoPercentage.value))"
         )
+        reveal(detailWindow.descendants(matching: .any).matching(identifier: "quota.ui-test.codex").firstMatch,
+               in: detailWindow, deltaY: 400)
         let codexPercentage = detailWindow.descendants(matching: .any)
             .matching(identifier: "quota.ui-test.codex")
             .firstMatch
@@ -223,20 +394,12 @@ final class TokenTankUITests: XCTestCase {
                 && (codexPercentage.value as? String)?.contains("100%") == true,
             "Gauge accessibility must match the prominently displayed remaining percentage; label=\(codexPercentage.label), value=\(String(describing: codexPercentage.value))"
         )
-        let codexQuota = detailWindow.descendants(matching: .any)
-            .matching(identifier: "quota.ui-test.codex")
-            .firstMatch
-        XCTAssertTrue(
-            codexQuota.descendants(matching: .any)
-                .matching(identifier: "field.reset")
-                .firstMatch
-                .waitForExistence(timeout: timeout),
-            "Missing detail field: field.reset"
-        )
+        XCTAssertTrue((codexPercentage.value as? String)?.contains("Reset") == true,
+                      "The combined quota accessibility value must include its visible reset countdown")
         for identifier in [
             "action.refresh",
             "action.waitForNextRefresh",
-            "action.signInTokenTank",
+            "action.signInSourceApp",
             "action.allowAccessInSystemSettings",
         ] {
             XCTAssertTrue(
@@ -247,9 +410,10 @@ final class TokenTankUITests: XCTestCase {
                 "Missing recovery control: \(identifier)"
             )
         }
-        let settingsWindow = app.windows["Token Tank UI Test Settings"]
+        detailWindow.buttons["action.settings"].click()
+        let settingsWindow = app.windows.containing(.any, identifier: "settings.providers.content").firstMatch
         XCTAssertTrue(
-            settingsWindow.waitForExistence(timeout: timeout),
+            settingsWindow.waitForExistence(timeout: 45),
             "The UITest configuration must host the real Settings surface"
         )
         let unavailableState = settingsWindow.staticTexts
@@ -302,14 +466,60 @@ final class TokenTankUITests: XCTestCase {
         app.terminate()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: timeout))
     }
+    func testDualCodexGaugeScrollingReachesLowerProviders() {
+        continueAfterFailure = false
+        app.launchArguments = [
+            "-AppleLanguages", "(en)",
+            "-AppleLocale", "en_US",
+            "-appLanguage", "en",
+        ]
+        app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_CODEX_ACCOUNTS"] = "1"
+        app.launch()
+
+        let detailWindow = app.windows["Token Tank UI Test Detail"]
+        XCTAssertTrue(detailWindow.waitForExistence(timeout: timeout))
+        defer { app.terminate() }
+
+        let codex = detailWindow.descendants(matching: .any)
+            .matching(identifier: "provider.codex")
+            .firstMatch
+        XCTAssertTrue(codex.waitForExistence(timeout: timeout))
+        XCTAssertTrue(
+            codex.descendants(matching: .any)
+                .matching(identifier: "field.percentage")
+                .firstMatch
+                .waitForExistence(timeout: timeout),
+            "Dual-account Codex quota gauge must remain present before scrolling"
+        )
+
+        app.activate()
+        detailWindow.click()
+        let scrollView = detailWindow.scrollViews.firstMatch
+        XCTAssertTrue(scrollView.waitForExistence(timeout: timeout))
+
+        let lowerProvider = detailWindow.descendants(matching: .any)
+            .matching(identifier: "provider.doubao")
+            .firstMatch
+        XCTAssertTrue(lowerProvider.waitForExistence(timeout: timeout))
+        XCTAssertFalse(lowerProvider.isHittable, "Lower provider should begin below the popup viewport")
+
+        for _ in 0..<8 where !lowerProvider.isHittable {
+            scrollView.scroll(byDeltaX: 0, deltaY: -240)
+        }
+        XCTAssertTrue(lowerProvider.isHittable, "Scrolling over the quota gauge must reveal lower providers")
+    }
     func testKoreanDetailLocalization() {
         continueAfterFailure = false
         app.launchArguments = [
             "-AppleLanguages", "(ko)",
             "-AppleLocale", "ko_KR",
+            "-appLanguage", "ko",
         ]
         app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
         app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MISSING_QUOTA"] = "1"
         app.launch()
 
         XCTAssertTrue(
@@ -321,9 +531,10 @@ final class TokenTankUITests: XCTestCase {
         let doubaoQuota = detailWindow.descendants(matching: .any)
             .matching(identifier: "quota.ui-test.doubao")
             .firstMatch
+        reveal(doubaoQuota, in: detailWindow)
         XCTAssertTrue(doubaoQuota.waitForExistence(timeout: timeout))
         let missingUsed = doubaoQuota.descendants(matching: .any)
-            .matching(identifier: "field.used")
+            .matching(identifier: "field.percentage")
             .firstMatch
         XCTAssertTrue(
             missingUsed.waitForExistence(timeout: timeout)
@@ -346,9 +557,11 @@ final class TokenTankUITests: XCTestCase {
         app.launchArguments = [
             "-AppleLanguages", "(ja)",
             "-AppleLocale", "ja_JP",
+            "-appLanguage", "",
         ]
         app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
         app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MISSING_QUOTA"] = "1"
         app.launch()
 
         let detailWindow = app.windows["Token Tank UI Test Detail"]
@@ -357,8 +570,9 @@ final class TokenTankUITests: XCTestCase {
             .matching(identifier: "quota.ui-test.doubao")
             .firstMatch
             .descendants(matching: .any)
-            .matching(identifier: "field.used")
+            .matching(identifier: "field.percentage")
             .firstMatch
+        reveal(missingUsed, in: detailWindow)
         XCTAssertTrue(
             missingUsed.waitForExistence(timeout: timeout)
                 && (missingUsed.value as? String)?.contains("Not provided") == true,

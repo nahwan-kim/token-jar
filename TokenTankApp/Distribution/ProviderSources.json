@@ -25,20 +25,22 @@
       "credentialOwner": "Codex CLI",
       "credentialPersistence": "Codex-owned store; Token Tank does not read, copy, write, or rotate it",
       "tokenTankIO": [
-        "Launch one allowlisted codex executable candidate with the literal app-server argument",
+        "Launch an allowlisted codex app-server per native account source: explicit CODEX_HOME ~/.codex, and optional ~/.codex-secondary with -c cli_auth_credentials_store=\"file\"",
         "Exchange initialize, initialized, account/rateLimits/read, and optional account/read (refreshToken: false) JSONL over stdio",
-        "Read size-bounded responses, then terminate the child after the responses or exact timeout; optional identity failure never replaces successful usage"
+        "Read size-bounded responses, then terminate each child after the responses or exact timeout; keep quota data, freshness and failures independent per account source"
       ],
       "externalPaths": [
         "/opt/homebrew/bin/codex",
         "/usr/local/bin/codex",
         "~/.local/bin/codex",
         "~/.local/share/mise/shims/codex",
-        "~/.bun/bin/codex"
+        "~/.bun/bin/codex",
+        "~/.codex (Codex-owned home; no credential file opens by Token Tank)",
+        "~/.codex-secondary (optional Codex-owned home; directory discovery only)"
       ],
       "tccClass": "none",
       "fdaRequired": false,
-      "liveValidation": "Owner-managed live app-server returned rateLimits, rateLimitsByLimitId, two keyed primary/secondary/credits buckets, and rateLimitResetCredits without exposing raw values or account identifiers.",
+      "liveValidation": "Two independent native CODEX_HOME environments returned distinct ChatGPT account emails and successful general weekly rate limits on 2026-09-05. No GJC credential or usage dependency. Final application-candidate validation remains a separate gate.",
       "mutationRisk": "The app-server owner may maintain its own credential; Token Tank sends no auth mutation method.",
       "releaseBlocker": "Revalidate the owner session and sanitized shape through the final frozen candidate"
     },
