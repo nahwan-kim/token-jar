@@ -307,8 +307,23 @@ struct ProviderDetailView: View {
             .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(verbatim: providerID.displayName)
-                    .font(.headline)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(verbatim: providerID.displayName)
+                        .font(.headline)
+                        .fixedSize()
+                        .accessibilityIdentifier("provider.\(providerID.rawValue).name")
+                    if let planName = QuotaDisplayFormatter.planName(
+                        for: providerID,
+                        quotas: state.snapshot?.quotas ?? []
+                    ) {
+                        Text(verbatim: planName)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .help(planName)
+                            .accessibilityIdentifier("provider.\(providerID.rawValue).plan")
+                    }
+                }
                 if let email = state.snapshot?.accountEmail {
                     Text(verbatim: email)
                         .font(.caption2)
@@ -317,16 +332,6 @@ struct ProviderDetailView: View {
                         .truncationMode(.middle)
                         .help(email)
                         .accessibilityIdentifier("provider.\(providerID.rawValue).account")
-                }
-                if let planName = QuotaDisplayFormatter.planName(
-                    for: providerID,
-                    quotas: state.snapshot?.quotas ?? []
-                ) {
-                    Text(verbatim: planName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .accessibilityIdentifier("provider.\(providerID.rawValue).plan")
                 }
             }
 

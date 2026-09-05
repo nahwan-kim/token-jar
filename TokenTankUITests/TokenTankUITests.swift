@@ -51,6 +51,13 @@ final class TokenTankUITests: XCTestCase {
         let codexAccount = detailWindow.staticTexts["provider.codex.account"]
         XCTAssertTrue(codexAccount.waitForExistence(timeout: timeout))
         XCTAssertEqual(codexAccount.value as? String ?? codexAccount.label, "codex@example.com")
+        let codexName = detailWindow.staticTexts["provider.codex.name"]
+        let codexPlan = detailWindow.staticTexts["provider.codex.plan"]
+        XCTAssertTrue(codexName.exists)
+        XCTAssertTrue(codexPlan.exists)
+        XCTAssertGreaterThan(codexPlan.frame.minX, codexName.frame.maxX)
+        XCTAssertLessThan(codexPlan.frame.minY, codexName.frame.maxY)
+        XCTAssertLessThanOrEqual(codexPlan.frame.maxY, codexAccount.frame.minY)
         let claudeAccount = detailWindow.staticTexts["provider.claude.account"]
         XCTAssertTrue(claudeAccount.exists, "Stale snapshots retain their associated account")
         XCTAssertEqual(
