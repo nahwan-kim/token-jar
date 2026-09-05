@@ -95,7 +95,8 @@ public struct CodexAdapter: ProviderAdapter {
             providerID: .codex,
             source: CodexAdapter().sourceDescriptor,
             quotas: quotas,
-            refreshedAt: refreshedAt
+            refreshedAt: refreshedAt,
+            accountEmail: codexAccountEmail(from: root)
         )
     }
 
@@ -260,6 +261,16 @@ public struct CodexAdapter: ProviderAdapter {
                 )
             )
         }
+    }
+
+    private static func codexAccountEmail(from root: [String: Any]) -> String? {
+        guard
+            let account = root["account"] as? [String: Any],
+            let email = account["email"] as? String
+        else {
+            return nil
+        }
+        return email
     }
 }
 

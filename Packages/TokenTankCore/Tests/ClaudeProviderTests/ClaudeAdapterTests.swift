@@ -10,6 +10,9 @@ struct ClaudeAdapterTests {
     private let fixture = Data(
         """
         {
+          "oauthAccount": {
+            "emailAddress": "fixture@example.com"
+          },
           "cachedUsageUtilization": {
             "fetchedAtMs": 1788415439629,
             "accountUuid": "synthetic-account",
@@ -61,6 +64,7 @@ struct ClaudeAdapterTests {
         let fable = try #require(snapshot.quotas.first { $0.originalName == "weekly_scoped.Fable" })
 
         #expect(snapshot.providerID == .claude)
+        #expect(snapshot.accountEmail == "fixture@example.com")
         #expect(snapshot.source.id == "claude.code.local-usage-cache")
         #expect(snapshot.source.kind == .localSession)
         #expect(snapshot.source.credentialOwnership == .externalProvider)
@@ -89,6 +93,7 @@ struct ClaudeAdapterTests {
 
         let snapshot = try await ClaudeAdapter().fetchSnapshot(context: context)
         #expect(snapshot.quotas.map(\.originalName) == ["session", "weekly_all", "weekly_scoped.Fable"])
+        #expect(snapshot.accountEmail == "fixture@example.com")
         #expect(await network.requests.isEmpty)
     }
 
@@ -121,6 +126,41 @@ struct ClaudeAdapterTests {
         #expect(snapshot.quotas.map(\.originalName) == ["five_hour", "seven_day"])
         #expect(snapshot.quotas[0].percentage.rawText == "11")
         #expect(snapshot.quotas[1].percentage.rawText == "0")
+    }
+
+    @Test("invalid or absent account metadata does not suppress Claude quotas")
+    func optionalAccountEmail() throws {
+        let bodies = [
+            Data(
+                """
+                {
+                  "cachedUsageUtilization": {
+                    "utilization": {
+                      "five_hour": {"utilization": 11}
+                    }
+                  }
+                }
+                """.utf8
+            ),
+            Data(
+                """
+                {
+                  "oauthAccount": {"emailAddress": "not-an-email"},
+                  "cachedUsageUtilization": {
+                    "utilization": {
+                      "five_hour": {"utilization": 11}
+                    }
+                  }
+                }
+                """.utf8
+            ),
+        ]
+
+        for body in bodies {
+            let snapshot = try ClaudeAdapter.decodeSnapshot(from: body)
+            #expect(snapshot.accountEmail == nil)
+            #expect(snapshot.quotas.count == 1)
+        }
     }
 
     @Test("schema drift fails closed")

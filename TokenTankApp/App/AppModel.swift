@@ -319,7 +319,8 @@ final class AppModel: ObservableObject {
             percentage: Decimal?,
             meaning: PercentageMeaning,
             resetsAt: Date?,
-            sourceFields: [String: String] = [:]
+            sourceFields: [String: String] = [:],
+            accountEmail: String? = nil
         ) -> ProviderSnapshot {
             let quota = RawQuotaItem(
                 id: RawQuotaID(rawValue: "ui-test.\(providerID.rawValue)"),
@@ -352,7 +353,8 @@ final class AppModel: ObservableObject {
                 providerID: providerID,
                 source: sourceDescriptors[providerID]!,
                 quotas: [quota],
-                refreshedAt: now.addingTimeInterval(-30)
+                refreshedAt: now.addingTimeInterval(-30),
+                accountEmail: accountEmail
             )
         }
 
@@ -363,7 +365,8 @@ final class AppModel: ObservableObject {
             remaining: 100,
             percentage: 0,
             meaning: .used,
-            resetsAt: now.addingTimeInterval(3_600)
+            resetsAt: now.addingTimeInterval(3_600),
+            accountEmail: "codex@example.com"
         )
         let claude = snapshot(
             .claude,
@@ -372,7 +375,8 @@ final class AppModel: ObservableObject {
             remaining: nil,
             percentage: 10,
             meaning: .used,
-            resetsAt: nil
+            resetsAt: nil,
+            accountEmail: "claude.long.account.name.for.compact.layout@example.com"
         )
         let doubao = snapshot(
             .doubao,

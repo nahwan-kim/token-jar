@@ -68,12 +68,24 @@ public struct GrokAdapter: ProviderAdapter {
             throw CollectionError(kind: .transientNetwork, diagnosticCode: "grok.credits.network-failed")
         }
         try grokValidate(response, now: now)
-        return try Self.decodeSnapshot(from: response.body, refreshedAt: now)
+        return try Self.decodeSnapshot(
+            from: response.body,
+            refreshedAt: now,
+            accountEmail: session.accountEmail
+        )
     }
 
     public static func decodeSnapshot(
         from data: Data,
         refreshedAt: Date = Date()
+    ) throws -> ProviderSnapshot {
+        try decodeSnapshot(from: data, refreshedAt: refreshedAt, accountEmail: nil)
+    }
+
+    private static func decodeSnapshot(
+        from data: Data,
+        refreshedAt: Date,
+        accountEmail: String?
     ) throws -> ProviderSnapshot {
         let root = try grokObject(from: data)
         let config = (root["config"] as? [String: Any]) ?? root
@@ -120,7 +132,8 @@ public struct GrokAdapter: ProviderAdapter {
             providerID: .grok,
             source: GrokAdapter().sourceDescriptor,
             quotas: [quota],
-            refreshedAt: refreshedAt
+            refreshedAt: refreshedAt,
+            accountEmail: accountEmail
         )
     }
 
@@ -137,6 +150,7 @@ let grokAuthFileRequest = ExternalFileRequest(
 
 private struct GrokSession {
     let token: String
+    let accountEmail: String?
 }
 
 private struct GrokDecimalValue {
@@ -171,7 +185,7 @@ private func grokSession(from data: Data, now: Date) throws -> GrokSession {
     if let expiry = grokDate(preferred["expires_at"]), expiry.timeIntervalSince1970 <= now.timeIntervalSince1970 + 60 {
         throw CollectionError(kind: .authenticationRevoked, diagnosticCode: "grok.cli-session.expired")
     }
-    return GrokSession(token: token)
+    return GrokSession(token: token, accountEmail: preferred["email"] as? String)
 }
 
 private func grokPreferredEntry(from root: [String: Any]) -> [String: Any] {

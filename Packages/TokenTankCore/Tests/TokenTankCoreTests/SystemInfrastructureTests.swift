@@ -528,8 +528,10 @@ struct SystemInfrastructureTests {
         IFS= read -r initialize
         printf '%s\\n' '{"jsonrpc":"2.0","id":0,"result":{}}'
         IFS= read -r initialized
-        IFS= read -r request
+        IFS= read -r rateLimitsRequest
         printf '%s\\n' '{"jsonrpc":"2.0","id":1,"result":{"rate_limits":{"primary":{"used_percent":25,"limit_window_seconds":3600,"reset_at":1800000000}}}}'
+        IFS= read -r accountRequest
+        printf '%s\\n' '{"jsonrpc":"2.0","id":2,"result":{"account":{"type":"chatgpt","email":"owner@example.com"}}}'
         """
         try Data(successScript.utf8).write(to: successExecutable, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: successExecutable.path)
@@ -541,6 +543,8 @@ struct SystemInfrastructureTests {
         let result = try await reader.readRateLimits()
         let object = try #require(JSONSerialization.jsonObject(with: result) as? [String: Any])
         #expect(object["rate_limits"] != nil)
+        let account = try #require(object["account"] as? [String: Any])
+        #expect(account["email"] as? String == "owner@example.com")
 
         let currentExecutable = directory.appendingPathComponent("codex-current")
         let currentScript = """
@@ -612,6 +616,34 @@ struct SystemInfrastructureTests {
         } catch {
             Issue.record("Unexpected error: \(error)")
         }
+    }
+    @Test("Codex app-server identity RPC failures preserve successful rate limits")
+    func codexIdentityFailurePreservesUsage() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let executable = directory.appendingPathComponent("codex-account-failure")
+        let script = """
+        #!/bin/sh
+        IFS= read -r initialize
+        printf '%s\\n' '{"id":0,"result":{}}'
+        IFS= read -r initialized
+        IFS= read -r rateLimitsRequest
+        printf '%s\\n' '{"id":1,"result":{"rate_limits":{"primary":{"used_percent":12}}}}'
+        IFS= read -r accountRequest
+        printf '%s\\n' '{"id":2,"error":{"code":401,"message":"account unavailable"}}'
+        """
+        try Data(script.utf8).write(to: executable, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+
+        let reader = CodexAppServerUsageReader(
+            executableCandidates: [executable],
+            timeout: .seconds(1)
+        )
+        let result = try await reader.readRateLimits()
+        let object = try #require(JSONSerialization.jsonObject(with: result) as? [String: Any])
+        #expect(object["rate_limits"] != nil)
+        #expect(object["account"] == nil)
     }
     @Test("stable source IDs are deterministic and do not persist raw account identifiers")
     func stableSourceIDs() {

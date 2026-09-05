@@ -70,7 +70,8 @@ public struct CursorAdapter: ProviderAdapter {
         return try Self.decodeSnapshot(
             from: response.body,
             subject: session.identity,
-            refreshedAt: now
+            refreshedAt: now,
+            accountEmail: session.accountEmail
         )
     }
 
@@ -88,7 +89,8 @@ public struct CursorAdapter: ProviderAdapter {
     public static func decodeSnapshot(
         from data: Data,
         subject: String,
-        refreshedAt: Date = Date()
+        refreshedAt: Date = Date(),
+        accountEmail: String? = nil
     ) throws -> ProviderSnapshot {
         let normalizedSubject = try cursorNormalizedSubject(subject)
         let root = try cursorObject(from: data)
@@ -164,7 +166,8 @@ public struct CursorAdapter: ProviderAdapter {
             providerID: .cursor,
             source: CursorAdapter().sourceDescriptor,
             quotas: quotas,
-            refreshedAt: refreshedAt
+            refreshedAt: refreshedAt,
+            accountEmail: accountEmail
         )
     }
 
@@ -177,6 +180,7 @@ private struct CursorSession {
     let userID: String
     let identity: String
     let token: String
+    let accountEmail: String?
 }
 
 private struct CursorDecimalValue {
@@ -197,6 +201,7 @@ private let cursorSQLiteRequest = ExternalFileRequest(
 )
 
 private let cursorSQLiteKey = "cursorAuth/accessToken"
+private let cursorSQLiteEmailKey = "cursorAuth/cachedEmail"
 private let cursorSourceID = "cursor.app-session.usage-summary"
 
 private func cursorSession(
@@ -210,7 +215,7 @@ private func cursorSession(
             table: "ItemTable",
             keyColumn: "key",
             valueColumn: "value",
-            keys: [cursorSQLiteKey]
+            keys: [cursorSQLiteKey, cursorSQLiteEmailKey]
         )
     } catch is CancellationError {
         throw CancellationError()
@@ -226,10 +231,14 @@ private func cursorSession(
     guard let token = values[cursorSQLiteKey], !token.isEmpty else {
         throw cursorSessionMissing()
     }
-    return try cursorParseJWT(token, now: now)
+    return try cursorParseJWT(token, now: now, accountEmail: values[cursorSQLiteEmailKey])
 }
 
-private func cursorParseJWT(_ token: String, now: Date) throws -> CursorSession {
+private func cursorParseJWT(
+    _ token: String,
+    now: Date,
+    accountEmail: String? = nil
+) throws -> CursorSession {
     guard token.utf8.count <= 32 * 1024 else {
         throw cursorJWTMalformed()
     }
@@ -266,7 +275,12 @@ private func cursorParseJWT(_ token: String, now: Date) throws -> CursorSession 
     guard expiry.timeIntervalSince1970 > now.timeIntervalSince1970 + 60 else {
         throw CollectionError(kind: .authenticationRevoked, diagnosticCode: "cursor.app-session.expired")
     }
-    return CursorSession(userID: userID, identity: userID.lowercased(), token: token)
+    return CursorSession(
+        userID: userID,
+        identity: userID.lowercased(),
+        token: token,
+        accountEmail: accountEmail
+    )
 }
 
 private func cursorBase64URLData(from segment: Substring) -> Data? {

@@ -56,6 +56,7 @@ struct GrokAdapterTests {
         let quota = try #require(snapshot.quotas.first)
 
         #expect(snapshot.providerID == .grok)
+        #expect(snapshot.accountEmail == nil)
         #expect(snapshot.quotas.count == 1)
         #expect(quota.id.rawValue == "credits")
         #expect(quota.originalName == "credits")
@@ -103,7 +104,8 @@ struct GrokAdapterTests {
             externalSessions: MemoryExternalSessionReader(files: [request: authFile])
         )
 
-        _ = try await GrokAdapter().fetchSnapshot(context: context)
+        let snapshot = try await GrokAdapter().fetchSnapshot(context: context)
+        #expect(snapshot.accountEmail == "fixture@example.com")
         let sent = try #require(await network.requests.first)
         #expect(sent.method == .get)
         #expect(sent.providerID == .grok)
@@ -111,6 +113,52 @@ struct GrokAdapterTests {
         #expect(sent.headers["Authorization"] == "Bearer synthetic-grok-session-token")
         #expect(sent.headers["x-xai-token-auth"] == "xai-grok-cli")
         #expect(sent.body == nil)
+    }
+
+    @Test("missing or malformed auth email keeps Grok quotas available")
+    func optionalAccountEmail() async throws {
+        let bodies = [
+            Data(
+                """
+                {
+                  "https://auth.x.ai::fixture": {
+                    "key": "synthetic-grok-session-token",
+                    "expires_at": "2099-01-01T00:00:00Z"
+                  }
+                }
+                """.utf8
+            ),
+            Data(
+                """
+                {
+                  "https://auth.x.ai::fixture": {
+                    "key": "synthetic-grok-session-token",
+                    "expires_at": "2099-01-01T00:00:00Z",
+                    "email": "not-an-email"
+                  }
+                }
+                """.utf8
+            ),
+        ]
+
+        for body in bodies {
+            let request = ExternalFileRequest(
+                providerID: .grok,
+                relativePath: ".grok/auth.json",
+                maximumBytes: 64 * 1024
+            )
+            let network = QueueNetworkClient(
+                results: [.success(NetworkResponse(statusCode: 200, headers: [:], body: fixture))]
+            )
+            let context = TestContextFactory.make(
+                network: network,
+                externalSessions: MemoryExternalSessionReader(files: [request: body])
+            )
+
+            let snapshot = try await GrokAdapter().fetchSnapshot(context: context)
+            #expect(snapshot.accountEmail == nil)
+            #expect(snapshot.quotas.count == 1)
+        }
     }
 
     @Test("missing auth file is source-owner setup, not a Token Tank credential")

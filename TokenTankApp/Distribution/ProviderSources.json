@@ -15,7 +15,7 @@
     {
       "provider": "codex",
       "surface": "ChatGPT Codex subscription rate-limit windows",
-      "selectedSource": "Official Codex app-server JSON-RPC account/rateLimits/read",
+      "selectedSource": "Official Codex app-server account/rateLimits/read plus optional account/read (refreshToken: false)",
       "sourceStatus": "clear",
       "productionComposition": true,
       "sourceStatusReason": "The user approved the reviewed process boundary. Token Tank starts only the official stdio server, advertises no filesystem or terminal capability, and never reads or mutates Codex credentials.",
@@ -26,8 +26,8 @@
       "credentialPersistence": "Codex-owned store; Token Tank does not read, copy, write, or rotate it",
       "tokenTankIO": [
         "Launch one allowlisted codex executable candidate with the literal app-server argument",
-        "Exchange initialize, initialized, and account/rateLimits/read JSONL over stdio",
-        "Read one size-bounded response line, then terminate the child after the response or exact timeout"
+        "Exchange initialize, initialized, account/rateLimits/read, and optional account/read (refreshToken: false) JSONL over stdio",
+        "Read size-bounded responses, then terminate the child after the responses or exact timeout; optional identity failure never replaces successful usage"
       ],
       "externalPaths": [
         "/opt/homebrew/bin/codex",
@@ -57,7 +57,8 @@
       "credentialPersistence": "Claude-owned ~/.claude.json; Token Tank does not persist, copy, write, or refresh credentials",
       "tokenTankIO": [
         "Open only ~/.claude.json with the exact external-session capability",
-        "Expose cachedUsageUtilization limits and named windows under stable opaque IDs"
+        "Expose cachedUsageUtilization limits and named windows under stable opaque IDs",
+        "Display optional oauthAccount.emailAddress from the same cache in memory only"
       ],
       "externalPaths": [
         "~/.claude.json"
@@ -84,7 +85,8 @@
       "tokenTankIO": [
         "Open only ~/.grok/auth.json with the exact external-session capability",
         "HTTPS GET https://cli-chat-proxy.grok.com/v1/billing?format=credits with the ephemeral owner bearer",
-        "Expose published creditUsagePercent or the same-row onDemandUsed/onDemandCap ratio under the credits quota"
+        "Expose published creditUsagePercent or the same-row onDemandUsed/onDemandCap ratio under the credits quota",
+        "Display only the selected auth entry's optional email in memory; never infer identity from another entry or token"
       ],
       "externalPaths": [
         "~/.grok/auth.json"
@@ -109,9 +111,10 @@
       "credentialOwner": "Cursor.app",
       "credentialPersistence": "Cursor-owned state.vscdb; Token Tank does not persist, copy, write, or refresh the JWT",
       "tokenTankIO": [
-        "Open only Cursor/User/globalStorage/state.vscdb with O_NOFOLLOW, verify the opened descriptor identity, bind immutable=1 SQLite to that descriptor, and query only ItemTable cursorAuth/accessToken",
+        "Open only Cursor/User/globalStorage/state.vscdb with O_NOFOLLOW, verify the opened descriptor identity, bind immutable=1 SQLite to that descriptor, and query only ItemTable cursorAuth/accessToken and cursorAuth/cachedEmail",
         "Require a canonical token envelope, bounded allowed subject, and unexpired timestamp; use it only in an ephemeral owner-session cookie whose authority is decided by cursor.com/api/usage-summary",
-        "Expose individual and team usage blocks, plan breakdowns, and percentages independently with opaque identities"
+        "Expose individual and team usage blocks, plan breakdowns, and percentages independently with opaque identities",
+        "Display optional cachedEmail from the same SQLite read in memory only; absent or invalid email does not suppress usage"
       ],
       "externalPaths": [
         "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb",

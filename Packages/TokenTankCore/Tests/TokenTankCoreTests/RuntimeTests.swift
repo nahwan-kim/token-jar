@@ -315,7 +315,10 @@ struct RuntimeTests {
             network: network,
             credentials: credentials,
             externalSessions: external,
-            sqlite: MemorySQLiteReader(values: ["cursorAuth/accessToken": "value"]),
+            sqlite: MemorySQLiteReader(values: [
+                "cursorAuth/accessToken": "value",
+                "cursorAuth/cachedEmail": "owner@example.com",
+            ]),
             codexAccount: codex,
             doubaoPlan: doubao
         )
@@ -377,15 +380,24 @@ struct RuntimeTests {
             table: "ItemTable",
             keyColumn: "key",
             valueColumn: "value",
-            keys: ["cursorAuth/accessToken"]
-        ) == ["cursorAuth/accessToken": "value"])
+            keys: ["cursorAuth/accessToken", "cursorAuth/cachedEmail"]
+        ) == ["cursorAuth/accessToken": "value", "cursorAuth/cachedEmail": "owner@example.com"])
+        #expect(await collectionError {
+            _ = try await cursorScoped.sqlite.values(
+                in: cursorRequest,
+                table: "ItemTable",
+                keyColumn: "key",
+                valueColumn: "value",
+                keys: ["cursorAuth/accessToken", "cursorAuth/cachedEmail", "cursorAuth/refreshToken"]
+            )
+        }?.diagnosticCode == "capability.sqlite.request-denied")
         #expect(await collectionError {
             _ = try await cursorScoped.sqlite.values(
                 in: ExternalFileRequest(providerID: .cursor, relativePath: "other.vscdb"),
                 table: "ItemTable",
                 keyColumn: "key",
                 valueColumn: "value",
-                keys: ["cursorAuth/accessToken"]
+                keys: ["cursorAuth/accessToken", "cursorAuth/cachedEmail"]
             )
         }?.diagnosticCode == "capability.sqlite.request-denied")
 }

@@ -144,17 +144,35 @@ public struct ProviderSnapshot: Codable, Equatable, Sendable {
     public let source: ProviderSourceDescriptor
     public let quotas: [RawQuotaItem]
     public let refreshedAt: Date
+    public let accountEmail: String?
 
     public init(
         providerID: ProviderID,
         source: ProviderSourceDescriptor,
         quotas: [RawQuotaItem],
-        refreshedAt: Date
+        refreshedAt: Date,
+        accountEmail: String? = nil
     ) {
         self.providerID = providerID
         self.source = source
         self.quotas = quotas
         self.refreshedAt = refreshedAt
+        self.accountEmail = Self.validatedAccountEmail(accountEmail)
+    }
+
+    public static func validatedAccountEmail(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let email = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = email.split(separator: "@", omittingEmptySubsequences: false)
+        guard email.utf8.count <= 254, parts.count == 2,
+              !parts[0].isEmpty, !parts[1].isEmpty,
+              !email.unicodeScalars.contains(where: {
+                  CharacterSet.whitespacesAndNewlines.contains($0)
+                      || CharacterSet.controlCharacters.contains($0)
+                      || CharacterSet.illegalCharacters.contains($0)
+                      || $0.properties.generalCategory == .format
+              }) else { return nil }
+        return email
     }
 }
 

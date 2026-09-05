@@ -64,7 +64,7 @@ struct CursorAdapterTests {
         #expect(descriptor.detail.localizedCaseInsensitiveContains("fail closed"))
     }
 
-    @Test("reads only the allowlisted SQLite key and sends an ephemeral owner cookie")
+    @Test("reads allowlisted SQLite keys and sends an ephemeral owner cookie")
     func requestContract() async throws {
         let network = QueueNetworkClient(
             results: [.success(NetworkResponse(statusCode: 200, headers: [:], body: fixture))]
@@ -95,7 +95,56 @@ struct CursorAdapterTests {
         #expect(await sqlite.tables == ["ItemTable"])
         #expect(await sqlite.keyColumns == ["key"])
         #expect(await sqlite.valueColumns == ["value"])
-        #expect(await sqlite.keys == [["cursorAuth/accessToken"]])
+        #expect(await sqlite.keys == [["cursorAuth/accessToken", "cursorAuth/cachedEmail"]])
+    }
+
+    @Test("carries a valid cached email from the same SQLite source")
+    func cachedEmail() async throws {
+        let network = QueueNetworkClient(
+            results: [.success(NetworkResponse(statusCode: 200, headers: [:], body: fixture))]
+        )
+        let sqlite = RecordingSQLiteReader(token: token, accountEmail: "cursor@example.com")
+        let snapshot = try await CursorAdapter().fetchSnapshot(
+            context: TestContextFactory.make(
+                network: network,
+                sqlite: sqlite,
+                clock: ManualClock(now: now)
+            )
+        )
+
+        #expect(snapshot.accountEmail == "cursor@example.com")
+        #expect(!snapshot.quotas.isEmpty)
+    }
+
+    @Test("missing or malformed cached emails do not break quotas")
+    func optionalCachedEmail() async throws {
+        let values: [[String: String]] = [
+            ["cursorAuth/accessToken": token],
+            [
+                "cursorAuth/accessToken": token,
+                "cursorAuth/cachedEmail": "not-an-email",
+            ],
+            [
+                "cursorAuth/accessToken": token,
+                "cursorAuth/cachedEmail": "cursor @example.com",
+            ],
+        ]
+
+        for sqliteValues in values {
+            let network = QueueNetworkClient(
+                results: [.success(NetworkResponse(statusCode: 200, headers: [:], body: fixture))]
+            )
+            let snapshot = try await CursorAdapter().fetchSnapshot(
+                context: TestContextFactory.make(
+                    network: network,
+                    sqlite: MemorySQLiteReader(values: sqliteValues),
+                    clock: ManualClock(now: now)
+                )
+            )
+
+            #expect(snapshot.accountEmail == nil)
+            #expect(!snapshot.quotas.isEmpty)
+        }
     }
 
     @Test("rejects expired, malformed, and oversized session tokens before network access")
@@ -276,14 +325,16 @@ struct CursorAdapterTests {
 
     private actor RecordingSQLiteReader: ReadOnlySQLiteReader {
         let token: String
+        let accountEmail: String?
         private(set) var requests: [ExternalFileRequest] = []
         private(set) var tables: [String] = []
         private(set) var keyColumns: [String] = []
         private(set) var valueColumns: [String] = []
         private(set) var keys: [[String]] = []
 
-        init(token: String) {
+        init(token: String, accountEmail: String? = nil) {
             self.token = token
+            self.accountEmail = accountEmail
         }
 
         func values(
@@ -298,7 +349,11 @@ struct CursorAdapterTests {
             keyColumns.append(keyColumn)
             valueColumns.append(valueColumn)
             self.keys.append(keys)
-            return ["cursorAuth/accessToken": token]
+            var values = ["cursorAuth/accessToken": token]
+            if let accountEmail {
+                values["cursorAuth/cachedEmail"] = accountEmail
+            }
+            return values
         }
     }
     private func makeJWT(subject: String, exp: Int) throws -> String {

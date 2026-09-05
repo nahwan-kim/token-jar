@@ -76,7 +76,8 @@ public struct ClaudeAdapter: ProviderAdapter {
             providerID: .claude,
             source: ClaudeAdapter().sourceDescriptor,
             quotas: quotas,
-            refreshedAt: refreshedAt
+            refreshedAt: refreshedAt,
+            accountEmail: claudeAccountEmail(from: root)
         )
     }
 
@@ -201,6 +202,11 @@ private func claudeQuota(
         resetsAt: resetsAt,
         sourceFields: fields
     )
+}
+
+private func claudeAccountEmail(from root: [String: Any]) -> String? {
+    guard let oauthAccount = root["oauthAccount"] as? [String: Any] else { return nil }
+    return oauthAccount["emailAddress"] as? String
 }
 
 private func claudeScopeName(_ value: Any?) -> String? {

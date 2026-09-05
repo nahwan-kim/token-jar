@@ -801,6 +801,9 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
             output.fileHandleForReading.closeFile()
         }
 
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+
         try writeJSONLine(
             [
                 "method": "initialize",
@@ -815,10 +818,39 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
             ],
             to: input.fileHandleForWriting
         )
-        _ = try await response(id: 0, from: output.fileHandleForReading)
+        _ = try await response(id: 0, from: output.fileHandleForReading, deadline: deadline)
         try writeJSONLine(["method": "initialized", "params": [:]], to: input.fileHandleForWriting)
         try writeJSONLine(["method": "account/rateLimits/read", "id": 1], to: input.fileHandleForWriting)
-        return try await response(id: 1, from: output.fileHandleForReading)
+        let rateLimits = try await response(
+            id: 1,
+            from: output.fileHandleForReading,
+            deadline: deadline
+        )
+
+        try Task.checkCancellation()
+        guard process.isRunning, clock.now < deadline else { return rateLimits }
+
+        do {
+            try writeJSONLine(
+                [
+                    "method": "account/read",
+                    "id": 2,
+                    "params": ["refreshToken": false],
+                ],
+                to: input.fileHandleForWriting
+            )
+            let account = try await response(
+                id: 2,
+                from: output.fileHandleForReading,
+                deadline: deadline
+            )
+            try Task.checkCancellation()
+            return Self.enrichRateLimits(rateLimits, with: account)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return rateLimits
+        }
     }
 
     public static var defaultExecutableCandidates: [URL] {
@@ -852,11 +884,14 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
         try handle.write(contentsOf: data)
     }
 
-    private func response(id: Int, from handle: FileHandle) async throws -> Data {
+    private func response(
+        id: Int,
+        from handle: FileHandle,
+        deadline: ContinuousClock.Instant
+    ) async throws -> Data {
         let fileDescriptor = handle.fileDescriptor
-        let timeout = timeout
         let reader = Task.detached(priority: .utility) {
-            try Self.readResponse(fileDescriptor: fileDescriptor, id: id, timeout: timeout)
+            try Self.readResponse(fileDescriptor: fileDescriptor, id: id, deadline: deadline)
         }
         return try await withTaskCancellationHandler {
             try await reader.value
@@ -868,10 +903,9 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
     private nonisolated static func readResponse(
         fileDescriptor: Int32,
         id: Int,
-        timeout: Duration
+        deadline: ContinuousClock.Instant
     ) throws -> Data {
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
         var line = Data()
         var descriptor = pollfd(
             fd: fileDescriptor,
@@ -938,6 +972,22 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
                 )
             }
         }
+    }
+
+    private nonisolated static func enrichRateLimits(_ rateLimits: Data, with account: Data) -> Data {
+        guard
+            let rawRateLimits = try? JSONSerialization.jsonObject(with: rateLimits, options: []),
+            var rateLimitsObject = rawRateLimits as? [String: Any],
+            let rawAccount = try? JSONSerialization.jsonObject(with: account, options: []),
+            let accountObject = rawAccount as? [String: Any],
+            let accountValue = accountObject["account"]
+        else {
+            return rateLimits
+        }
+
+        rateLimitsObject["account"] = accountValue
+        return (try? JSONSerialization.data(withJSONObject: rateLimitsObject, options: [.sortedKeys]))
+            ?? rateLimits
     }
 
     private nonisolated static func responseResult(from line: Data, id: Int) throws -> Data? {

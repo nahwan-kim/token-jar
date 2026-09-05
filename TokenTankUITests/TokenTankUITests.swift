@@ -5,6 +5,30 @@ final class TokenTankUITests: XCTestCase {
     private let app = XCUIApplication(bundleIdentifier: "com.tokentank.TokenTank")
     private let timeout: TimeInterval = 10
 
+    func testCompactAccountEmails() {
+        continueAfterFailure = false
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launch()
+        defer { app.terminate() }
+
+        let detailWindow = app.windows["Token Tank UI Test Detail"]
+        XCTAssertTrue(detailWindow.waitForExistence(timeout: timeout))
+        let codexAccount = detailWindow.staticTexts["provider.codex.account"]
+        XCTAssertTrue(codexAccount.waitForExistence(timeout: timeout))
+        XCTAssertEqual(codexAccount.value as? String ?? codexAccount.label, "codex@example.com")
+        let claudeAccount = detailWindow.staticTexts["provider.claude.account"]
+        XCTAssertTrue(claudeAccount.exists, "Stale snapshots retain their associated account")
+        XCTAssertEqual(
+            claudeAccount.value as? String ?? claudeAccount.label,
+            "claude.long.account.name.for.compact.layout@example.com"
+        )
+        XCTAssertLessThanOrEqual(claudeAccount.frame.height, 20, "Account stays on one compact line")
+        XCTAssertFalse(detailWindow.staticTexts["provider.doubao.account"].exists)
+        XCTAssertFalse(detailWindow.staticTexts["provider.cursor.account"].exists)
+    }
+
     func testMenuBarAccessibilityAndTermination() {
         continueAfterFailure = false
         app.launchArguments = [

@@ -461,7 +461,7 @@ private struct ProviderScopedSQLiteReader: ReadOnlySQLiteReader {
             table == "ItemTable",
             keyColumn == "key",
             valueColumn == "value",
-            keys == ["cursorAuth/accessToken"]
+            keys == ["cursorAuth/accessToken", "cursorAuth/cachedEmail"]
         else {
             throw CollectionError(
                 kind: .sourceUnavailable,

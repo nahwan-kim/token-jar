@@ -308,6 +308,15 @@ struct ProviderDetailView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(verbatim: providerID.displayName)
                     .font(.headline)
+                if let email = state.snapshot?.accountEmail {
+                    Text(verbatim: email)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(email)
+                        .accessibilityIdentifier("provider.\(providerID.rawValue).account")
+                }
                 if let planName = QuotaDisplayFormatter.planName(
                     for: providerID,
                     quotas: state.snapshot?.quotas ?? []

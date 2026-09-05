@@ -81,11 +81,80 @@ struct CodexAdapterTests {
         }
     }
 
+    @Test("decodes a documented ChatGPT account email alongside rate limits")
+    func accountEmail() throws {
+        let data = Data(
+            """
+            {
+              "account": {
+                "type": "chatgpt",
+                "email": "  owner@example.com  "
+              },
+              "rateLimits": {
+                "limitId": "codex",
+                "primary": {"usedPercent": 12}
+              }
+            }
+            """.utf8
+        )
+
+        let snapshot = try CodexAdapter.decodeSnapshot(from: data)
+
+        #expect(snapshot.accountEmail == "owner@example.com")
+        #expect(snapshot.quotas.count == 1)
+    }
+
+    @Test("omits account email when account metadata is missing or has the wrong shape")
+    func malformedAccountMetadata() throws {
+        let payloads = [
+            """
+            {
+              "rateLimits": {
+                "limitId": "codex",
+                "primary": {"usedPercent": 12}
+              }
+            }
+            """,
+            """
+            {
+              "account": "owner@example.com",
+              "rateLimits": {
+                "limitId": "codex",
+                "primary": {"usedPercent": 12}
+              }
+            }
+            """,
+            """
+            {
+              "account": {"email": 42},
+              "rateLimits": {
+                "limitId": "codex",
+                "primary": {"usedPercent": 12}
+              }
+            }
+            """,
+        ]
+
+        for payload in payloads {
+            let snapshot = try CodexAdapter.decodeSnapshot(from: Data(payload.utf8))
+            #expect(snapshot.accountEmail == nil)
+            #expect(snapshot.quotas.count == 1)
+        }
+    }
     @Test("fetch reads only the injected app-server capability")
     func injectedReader() async throws {
         let payload = Data(
             """
-            {"rateLimits":{"limitId":"codex","primary":{"usedPercent":12,"windowDurationMins":300,"resetsAt":1800000100}}}
+            {
+              "account": {
+                "type": "chatgpt",
+                "email": "codex@example.com"
+              },
+              "rateLimits": {
+                "limitId": "codex",
+                "primary": {"usedPercent": 12, "windowDurationMins": 300, "resetsAt": 1800000100}
+              }
+            }
             """.utf8
         )
         let reader = MemoryCodexAccountUsageReader(results: [.success(payload)])
@@ -93,5 +162,6 @@ struct CodexAdapterTests {
 
         let snapshot = try await CodexAdapter().fetchSnapshot(context: context)
         #expect(snapshot.quotas.first?.percentage.value == 12)
+        #expect(snapshot.accountEmail == "codex@example.com")
     }
 }

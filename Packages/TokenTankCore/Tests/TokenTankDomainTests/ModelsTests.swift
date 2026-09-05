@@ -4,6 +4,19 @@ import Testing
 
 @Suite("Token Tank domain semantics")
 struct ModelsTests {
+    @Test("account metadata is normalized without exposing invalid display values")
+    func accountEmailValidation() {
+        #expect(ProviderSnapshot.validatedAccountEmail("  owner+work@example.com \n") == "owner+work@example.com")
+        for invalid: String? in [nil, "", "not-an-email", "@example.com", "owner@", "a@b@c",
+                                "owner name@example.com", "owner\n@example.com",
+                                "owner\t@example.com", String(UnicodeScalar(0x202E)!) + "owner@example.com",
+                                String(repeating: "a", count: 243) + "@example.com"] {
+            #expect(ProviderSnapshot.validatedAccountEmail(invalid) == nil)
+        }
+        let longest = String(repeating: "a", count: 242) + "@example.com"
+        #expect(ProviderSnapshot.validatedAccountEmail(longest) == longest)
+    }
+
     @Test("zero remains distinct from a missing source value")
     func zeroIsNotMissing() {
         let zero = SourceValue(value: 0, rawText: "0", unit: "requests")
@@ -81,7 +94,8 @@ struct ModelsTests {
                     sourceFields: ["currency": "USD"]
                 ),
             ],
-            refreshedAt: Date(timeIntervalSince1970: 1_800_000_000)
+            refreshedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            accountEmail: "owner@example.com"
         )
 
         let data = try JSONEncoder().encode(snapshot)
