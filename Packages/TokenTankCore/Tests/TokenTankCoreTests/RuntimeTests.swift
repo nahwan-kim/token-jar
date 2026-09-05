@@ -219,6 +219,16 @@ struct RuntimeTests {
         #expect(actual == snapshot)
     }
 
+    @Test("a suspended adapter does not lose completion delivered before fetch")
+    func suspendedAdapterEarlyCompletion() async throws {
+        let snapshot = TestContextFactory.snapshot(providerID: .claude)
+        let adapter = SuspendedProviderAdapter(id: .claude)
+        await adapter.complete(with: .success(snapshot))
+        let result = try await adapter.fetchSnapshot(context: TestContextFactory.make())
+        #expect(result == snapshot)
+        #expect(await adapter.fetchCount == 1)
+    }
+
     @Test("Retry-After is a lower bound for later refresh attempts")
     func retryAfterLowerBound() async {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -590,12 +600,13 @@ struct RuntimeTests {
         )
     }
     private func eventually(
-        attempts: Int = 200,
         condition: () async -> Bool
     ) async -> Bool {
-        for _ in 0..<attempts {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(5))
+        while clock.now < deadline {
             if await condition() { return true }
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(1))
         }
         return false
     }
@@ -608,6 +619,7 @@ private actor SuspendedProviderAdapter: ProviderAdapter {
     nonisolated let sourceDescriptor: ProviderSourceDescriptor
 
     private var continuation: CheckedContinuation<ProviderSnapshot, Error>?
+    private var pendingResult: Result<ProviderSnapshot, CollectionError>?
     private(set) var fetchCount = 0
     private(set) var cancellationCount = 0
 
@@ -632,7 +644,13 @@ private actor SuspendedProviderAdapter: ProviderAdapter {
     func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
         fetchCount += 1
         return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation = $0 }
+            try await withCheckedThrowingContinuation {
+                continuation = $0
+                if let result = pendingResult {
+                    pendingResult = nil
+                    complete(with: result)
+                }
+            }
         } onCancel: {
             Task { await self.recordCancellation() }
         }
@@ -642,7 +660,10 @@ private actor SuspendedProviderAdapter: ProviderAdapter {
     }
 
     func complete(with result: Result<ProviderSnapshot, CollectionError>) {
-        guard let continuation else { return }
+        guard let continuation else {
+            pendingResult = result
+            return
+        }
         self.continuation = nil
         switch result {
         case let .success(snapshot): continuation.resume(returning: snapshot)
