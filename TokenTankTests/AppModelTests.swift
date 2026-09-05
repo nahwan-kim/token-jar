@@ -475,11 +475,11 @@ final class AppModelTests: XCTestCase {
             resetsAt: nil
         )
         XCTAssertEqual(
-            QuotaDisplayFormatter.claudeFableChip(for: weeklyAll, in: [weeklyAll, fable])?.title,
+            QuotaDisplayFormatter.claudeFableLimit(for: weeklyAll, in: [weeklyAll, fable])?.title,
             "Fable"
         )
         XCTAssertEqual(
-            QuotaDisplayFormatter.claudeFableChip(for: weeklyAll, in: [weeklyAll, fable])?.remaining,
+            QuotaDisplayFormatter.claudeFableLimit(for: weeklyAll, in: [weeklyAll, fable])?.remaining,
             56
         )
         XCTAssertEqual(

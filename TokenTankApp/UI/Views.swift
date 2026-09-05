@@ -255,7 +255,7 @@ struct ProviderDetailView: View {
                                     quota: quota,
                                     refreshedAt: snapshot.refreshedAt,
                                     now: now,
-                                    trailingChip: QuotaDisplayFormatter.claudeFableChip(
+                                    scopedLimit: QuotaDisplayFormatter.claudeFableLimit(
                                         for: quota,
                                         in: snapshot.quotas
                                     )
@@ -477,7 +477,7 @@ struct QuotaValueView: View {
     let quota: RawQuotaItem
     let refreshedAt: Date
     let now: Date
-    var trailingChip: QuotaDisplayFormatter.LimitChip? = nil
+    var scopedLimit: QuotaDisplayFormatter.ScopedLimit? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -514,26 +514,27 @@ struct QuotaValueView: View {
             .accessibilityLabel(Text("quota.percentage.remaining"))
             .accessibilityValue(accessibilityValue(headlineValue))
 
-            if remainingPercentage != nil {
-                percentageGauge
+            if let remainingPercentage {
+                percentageGauge(for: remainingPercentage)
             }
-            if let trailingChip {
-                HStack(spacing: 6) {
-                    Text(verbatim: trailingChip.title)
-                        .font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(chipTint(for: trailingChip.remaining).opacity(0.16), in: Capsule())
-                        .foregroundStyle(chipTint(for: trailingChip.remaining))
-                    Text(verbatim: QuotaDisplayFormatter.percentageValue(trailingChip.remaining))
-                        .font(.caption.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(chipTint(for: trailingChip.remaining))
-                    Spacer(minLength: 0)
+            if let scopedLimit {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(verbatim: scopedLimit.title)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        Spacer(minLength: 6)
+                        Text(verbatim: QuotaDisplayFormatter.percentageValue(scopedLimit.remaining))
+                            .font(.subheadline.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(percentageTint(for: scopedLimit.remaining))
+                    }
+                    percentageGauge(for: scopedLimit.remaining)
                 }
+                .padding(.top, 4)
                 .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("quota.chip.\(trailingChip.id)")
-                .accessibilityLabel(Text(verbatim: trailingChip.title))
-                .accessibilityValue(Text(verbatim: QuotaDisplayFormatter.percentageValue(trailingChip.remaining)))
+                .accessibilityIdentifier("quota.scoped.\(scopedLimit.id)")
+                .accessibilityLabel(Text(verbatim: "\(scopedLimit.title), ") + Text("quota.percentage.remaining"))
+                .accessibilityValue(Text(verbatim: QuotaDisplayFormatter.percentageValue(scopedLimit.remaining)))
             }
         }
         .padding(.horizontal, 8)
@@ -543,14 +544,18 @@ struct QuotaValueView: View {
         .accessibilityIdentifier("quota.\(quota.id.rawValue)")
     }
 
-    private var percentageGauge: some View {
+    private func percentageGauge(for remaining: Decimal) -> some View {
         Capsule()
             .fill(.secondary.opacity(0.16))
             .frame(height: 3)
             .overlay(alignment: .leading) {
                 Capsule()
-                    .fill(gaugeTint)
-                    .scaleEffect(x: gaugeFill, y: 1, anchor: .leading)
+                    .fill(percentageTint(for: remaining))
+                    .scaleEffect(
+                        x: min(1, max(0, NSDecimalNumber(decimal: remaining / 100).doubleValue)),
+                        y: 1,
+                        anchor: .leading
+                    )
             }
             .clipShape(Capsule())
             .accessibilityHidden(true)
@@ -567,21 +572,10 @@ struct QuotaValueView: View {
         return QuotaDisplayFormatter.value(quota.remaining)
     }
 
-    private var gaugeFill: Double {
-        guard let remainingPercentage else { return 0 }
-        return NSDecimalNumber(decimal: remainingPercentage / 100).doubleValue
-    }
 
     private var gaugeTint: Color {
         guard let remainingPercentage else { return .secondary.opacity(0.3) }
-        let value = NSDecimalNumber(decimal: remainingPercentage).doubleValue
-        if value > 50 {
-            return Color(nsColor: .systemGreen)
-        }
-        if value >= 20 {
-            return Color(nsColor: .systemYellow)
-        }
-        return Color(nsColor: .systemRed)
+        return percentageTint(for: remainingPercentage)
     }
 
     private func accessibilityValue(_ value: String?) -> Text {
@@ -591,7 +585,7 @@ struct QuotaValueView: View {
         return Text("field.not_provided")
     }
 
-    private func chipTint(for remaining: Decimal) -> Color {
+    private func percentageTint(for remaining: Decimal) -> Color {
         let value = NSDecimalNumber(decimal: remaining).doubleValue
         if value > 50 { return Color(nsColor: .systemGreen) }
         if value >= 20 { return Color(nsColor: .systemYellow) }
@@ -664,17 +658,17 @@ enum QuotaDisplayFormatter {
         }
     }
 
-    struct LimitChip: Equatable {
+    struct ScopedLimit: Equatable {
         let id: String
         let title: String
         let remaining: Decimal
     }
 
-    static func claudeFableChip(
+    static func claudeFableLimit(
         for quota: RawQuotaItem,
         in quotas: [RawQuotaItem],
         locale: Locale = .current
-    ) -> LimitChip? {
+    ) -> ScopedLimit? {
         guard quota.originalName == "weekly_all" || quota.originalName == "seven_day" else {
             return nil
         }
@@ -684,7 +678,7 @@ enum QuotaDisplayFormatter {
             return nil
         }
         let title = fable.originalName.split(separator: ".").last.map(String.init) ?? "Fable"
-        return LimitChip(id: fable.id.rawValue, title: title, remaining: remaining)
+        return ScopedLimit(id: fable.id.rawValue, title: title, remaining: remaining)
     }
 
     static func codexResetCreditsLine(

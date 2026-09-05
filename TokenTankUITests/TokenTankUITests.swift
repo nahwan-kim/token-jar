@@ -5,6 +5,27 @@ final class TokenTankUITests: XCTestCase {
     private let app = XCUIApplication(bundleIdentifier: "com.tokentank.TokenTank")
     private let timeout: TimeInterval = 10
 
+    func testFableUsesWeeklyGaugeLayout() {
+        continueAfterFailure = false
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launch()
+        defer { app.terminate() }
+
+        let window = app.windows["Token Tank UI Test Detail"]
+        XCTAssertTrue(window.waitForExistence(timeout: timeout))
+        let weekly = window.descendants(matching: .any)["quota.ui-test.claude"]
+        let fable = weekly.descendants(matching: .any)["quota.scoped.ui-test.claude.fable"]
+        XCTAssertTrue(fable.waitForExistence(timeout: timeout))
+        XCTAssertTrue(fable.label.contains("Fable"))
+        XCTAssertEqual(fable.value as? String, "56%")
+        let headline = weekly.descendants(matching: .any)["field.percentage"]
+        XCTAssertGreaterThan(fable.frame.minY, headline.frame.maxY)
+        XCTAssertEqual(fable.frame.width, headline.frame.width, accuracy: 1)
+        XCTAssertGreaterThan(fable.frame.height, headline.frame.height + 3)
+    }
+
     func testStatusUsesCompactLEDsInsteadOfText() {
         continueAfterFailure = false
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]

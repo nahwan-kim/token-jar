@@ -364,6 +364,16 @@ final class AppModel: ObservableObject {
                     ))
                 }
             }
+            if providerID == .claude {
+                quotas.append(RawQuotaItem(
+                    id: "ui-test.claude.fable",
+                    originalName: "weekly_scoped.Fable",
+                    used: nil,
+                    remaining: nil,
+                    percentage: SourcePercentage(value: 44, rawText: "44", meaning: .used),
+                    resetsAt: nil
+                ))
+            }
             return ProviderSnapshot(
                 providerID: providerID,
                 source: sourceDescriptors[providerID]!,
@@ -385,7 +395,7 @@ final class AppModel: ObservableObject {
         )
         let claude = snapshot(
             .claude,
-            originalName: "Monthly tokens",
+            originalName: "weekly_all",
             used: 10,
             remaining: nil,
             percentage: 10,
