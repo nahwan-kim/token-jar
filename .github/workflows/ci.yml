@@ -185,7 +185,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          app="$DERIVED_DATA_PATH/Build/Products/Release/Token Tank.app"
+          app="$DERIVED_DATA_PATH/Build/Products/Release/Token Jar.app"
           if [[ ! -d "$app" ]]; then
             echo "::error::Expected built product is missing: $app"
             exit 1
@@ -237,7 +237,7 @@ jobs:
 
           app = Path(sys.argv[1])
           app_root = app.resolve(strict=True)
-          binary = app / "Contents" / "MacOS" / "Token Tank"
+          binary = app / "Contents" / "MacOS" / "Token Jar"
           architectures = set(
               subprocess.check_output(["/usr/bin/lipo", "-archs", str(binary)], text=True).split()
           )
@@ -275,7 +275,7 @@ jobs:
           test_markers = [
               b"ui-test-detail",
               b"ui-test.",
-              b"Token Tank UI Test Detail",
+              b"Token Jar UI Test Detail",
               b"UITEST",
               b"TokenTankUITests",
               b"___profc_",
@@ -393,7 +393,7 @@ jobs:
           receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
           print(json.dumps(receipt, sort_keys=True))
           with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
-              summary.write("### Token Tank Release receipt\n\n```json\n")
+              summary.write("### Token Jar Release receipt\n\n```json\n")
               summary.write(json.dumps(receipt, indent=2, sort_keys=True))
               summary.write("\n```\n")
           PY

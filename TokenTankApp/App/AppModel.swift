@@ -28,6 +28,12 @@ enum AppLanguage: String, CaseIterable, Identifiable {
     var title: String { self == .english ? "English" : "한국어" }
     var locale: Locale { Locale(identifier: rawValue) }
 
+    var appName: String {
+        let bundle = Bundle.main.url(forResource: rawValue, withExtension: "lproj")
+            .flatMap(Bundle.init(url:)) ?? Bundle.main
+        return bundle.localizedString(forKey: "detail.title", value: nil, table: nil)
+    }
+
     static func preferred(_ languages: [String]) -> AppLanguage {
         languages.first?.split(whereSeparator: { $0 == "-" || $0 == "_" }).first == "ko"
             ? .korean : .english

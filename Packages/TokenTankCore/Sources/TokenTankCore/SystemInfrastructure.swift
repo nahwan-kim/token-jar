@@ -885,7 +885,7 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
                 "params": [
                     "clientInfo": [
                         "name": "token_tank",
-                        "title": "Token Tank",
+                        "title": "Token Jar",
                         "version": "1.0.0",
                     ],
                 ],

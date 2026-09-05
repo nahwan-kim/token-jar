@@ -40,7 +40,7 @@ struct TokenTankApp: App {
             }
         }
 
-        Window("Token Tank", id: "detail") {
+        Window(model.language.appName, id: "detail") {
             DetailPopoverView(model: model, isStandaloneWindow: true)
                 .environment(\.locale, model.locale)
         }
@@ -53,13 +53,13 @@ struct TokenTankApp: App {
         }
 
         #if UITEST
-        WindowGroup("Token Tank UI Test Detail", id: "ui-test-detail") {
+        WindowGroup("Token Jar UI Test Detail", id: "ui-test-detail") {
             DetailPopoverView(model: model)
                 .environment(\.locale, model.locale)
                 .frame(width: 480, height: 640)
         }
 
-        WindowGroup("Token Tank UI Test Settings", id: "ui-test-settings") {
+        WindowGroup("Token Jar UI Test Settings", id: "ui-test-settings") {
             ProviderSettingsView(model: model)
                 .environment(\.locale, model.locale)
                 .frame(minWidth: 620, minHeight: 520)
@@ -81,6 +81,9 @@ private struct TokenTankUITestMenuBarLabel: View {
                     return
                 }
                 openWindow(id: "ui-test-detail")
+                if ProcessInfo.processInfo.environment["TOKENTANK_UI_STANDALONE"] == "1" {
+                    openWindow(id: "detail")
+                }
                 if ProcessInfo.processInfo.environment["TOKENTANK_UI_SETTINGS"] == "1" {
                     openWindow(id: "ui-test-settings")
                 }

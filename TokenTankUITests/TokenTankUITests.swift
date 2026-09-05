@@ -40,13 +40,13 @@ final class TokenTankUITests: XCTestCase {
         app.launch()
         defer { app.terminate() }
 
-        let popup = app.windows["Token Tank UI Test Detail"]
+        let popup = app.windows["Token Jar UI Test Detail"]
         XCTAssertTrue(popup.waitForExistence(timeout: timeout))
         let openButton = popup.buttons["action.open-window"]
         XCTAssertTrue(openButton.exists)
         openButton.click()
 
-        let window = app.windows["Token Tank"]
+        let window = app.windows["Token Jar"]
         XCTAssertTrue(window.waitForExistence(timeout: timeout))
         XCTAssertTrue(window.buttons["action.refresh"].exists)
         XCTAssertFalse(window.buttons["action.open-window"].exists)
@@ -55,7 +55,7 @@ final class TokenTankUITests: XCTestCase {
         popup.click()
         XCTAssertTrue(window.exists, "Moving focus away must not dismiss the standalone window")
         openButton.click()
-        XCTAssertEqual(app.windows.matching(identifier: "Token Tank").count, 1)
+        XCTAssertEqual(app.windows.matching(identifier: "Token Jar").count, 1)
 
         window.buttons[XCUIIdentifierCloseWindow].click()
         XCTAssertTrue(window.waitForNonExistence(timeout: timeout))
@@ -70,23 +70,37 @@ final class TokenTankUITests: XCTestCase {
         app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
         app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
         app.launchEnvironment["TOKENTANK_UI_SETTINGS"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_STANDALONE"] = "1"
         app.launch()
         defer { app.terminate() }
-        let settings = app.windows["Token Tank UI Test Settings"]
+        let settings = app.windows["Token Jar UI Test Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 45))
         app.activate()
         settings.click()
         let picker = settings.popUpButtons["settings.language.picker"]
         XCTAssertTrue(picker.waitForExistence(timeout: timeout), settings.debugDescription)
+
+        let detail = app.windows["Token Jar UI Test Detail"]
+        XCTAssertTrue(detail.waitForExistence(timeout: timeout))
+        let standaloneEnglish = app.windows["Token Jar"]
+        XCTAssertTrue(standaloneEnglish.waitForExistence(timeout: timeout))
+        settings.click()
+
         picker.click()
         app.menuItems["한국어"].click()
-        let detail = app.windows["Token Tank UI Test Detail"]
+        let standaloneKorean = app.windows["토큰 항아리"]
+        XCTAssertTrue(standaloneKorean.waitForExistence(timeout: timeout))
+        XCTAssertFalse(app.windows["Token Jar"].exists)
         XCTAssertTrue(detail.buttons["action.quit"].waitForExistence(timeout: timeout))
-        XCTAssertTrue(detail.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "action.quit", "Token Tank 종료")).firstMatch.waitForExistence(timeout: timeout))
+        XCTAssertTrue(detail.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "action.quit", "토큰 항아리 종료")).firstMatch.waitForExistence(timeout: timeout))
         XCTAssertTrue(settings.popUpButtons.matching(NSPredicate(format: "value == %@", "주간")).firstMatch.exists)
+
         picker.click()
         app.menuItems["English"].click()
-        XCTAssertTrue(detail.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "action.quit", "Quit Token Tank")).firstMatch.waitForExistence(timeout: timeout))
+        let standaloneEnglishAgain = app.windows["Token Jar"]
+        XCTAssertTrue(standaloneEnglishAgain.waitForExistence(timeout: timeout))
+        XCTAssertFalse(app.windows["토큰 항아리"].exists)
+        XCTAssertTrue(detail.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "action.quit", "Quit Token Jar")).firstMatch.waitForExistence(timeout: timeout))
         XCTAssertTrue(settings.popUpButtons.matching(NSPredicate(format: "value == %@", "Weekly")).firstMatch.exists)
     }
     func testFableUsesWeeklyGaugeLayout() {
@@ -97,7 +111,7 @@ final class TokenTankUITests: XCTestCase {
         app.launch()
         defer { app.terminate() }
 
-        let window = app.windows["Token Tank UI Test Detail"]
+        let window = app.windows["Token Jar UI Test Detail"]
         XCTAssertTrue(window.waitForExistence(timeout: timeout))
         let weekly = window.descendants(matching: .any)["quota.ui-test.claude"]
         let fable = weekly.descendants(matching: .any)["quota.scoped.ui-test.claude.fable"]
@@ -118,7 +132,7 @@ final class TokenTankUITests: XCTestCase {
         app.launch()
         defer { app.terminate() }
 
-        let window = app.windows["Token Tank UI Test Detail"]
+        let window = app.windows["Token Jar UI Test Detail"]
         XCTAssertTrue(window.waitForExistence(timeout: timeout))
         for identifier in ["detail.overall-status", "state.fresh", "state.stale", "state.authentication-required"] {
             let led = window.descendants(matching: .any).matching(identifier: identifier).firstMatch
@@ -139,7 +153,7 @@ final class TokenTankUITests: XCTestCase {
         app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
         app.launch()
         defer { app.terminate() }
-        let window = app.windows["Token Tank UI Test Detail"]
+        let window = app.windows["Token Jar UI Test Detail"]
         XCTAssertTrue(window.waitForExistence(timeout: timeout))
         let weekly = window.descendants(matching: .any)["quota.ui-test.codex"]
         let tickets = window.descendants(matching: .any)["provider.codex.reset-credits"]
@@ -160,7 +174,7 @@ final class TokenTankUITests: XCTestCase {
         app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
         app.launch()
         defer { app.terminate() }
-        let window = app.windows["Token Tank UI Test Detail"]
+        let window = app.windows["Token Jar UI Test Detail"]
         XCTAssertTrue(window.waitForExistence(timeout: timeout))
         for (provider, statusID) in [("codex", "state.fresh"), ("claude", "state.stale"),
                                      ("grok", "state.authentication-required"), ("cursor", "state.stale"), ("doubao", "state.fresh")] {
@@ -183,7 +197,7 @@ final class TokenTankUITests: XCTestCase {
         app.launch()
         defer { app.terminate() }
 
-        let detailWindow = app.windows["Token Tank UI Test Detail"]
+        let detailWindow = app.windows["Token Jar UI Test Detail"]
         XCTAssertTrue(detailWindow.waitForExistence(timeout: timeout))
         let codexAccount = detailWindow.staticTexts["provider.codex.account"]
         XCTAssertTrue(codexAccount.waitForExistence(timeout: timeout))
@@ -217,7 +231,7 @@ final class TokenTankUITests: XCTestCase {
         app.launchEnvironment["TOKENTANK_UI_CODEX_ACCOUNTS"] = "1"
         app.launch()
 
-        let detailWindow = app.windows["Token Tank UI Test Detail"]
+        let detailWindow = app.windows["Token Jar UI Test Detail"]
         XCTAssertTrue(detailWindow.waitForExistence(timeout: timeout))
         defer { app.terminate() }
 
@@ -293,7 +307,7 @@ final class TokenTankUITests: XCTestCase {
         app.launchEnvironment["TOKENTANK_UI_CODEX_SECONDARY_FAILURE"] = "1"
         app.launch()
 
-        let detailWindow = app.windows["Token Tank UI Test Detail"]
+        let detailWindow = app.windows["Token Jar UI Test Detail"]
         XCTAssertTrue(detailWindow.waitForExistence(timeout: timeout))
         defer { app.terminate() }
 
@@ -366,7 +380,7 @@ final class TokenTankUITests: XCTestCase {
             )
         }
 
-        let detailWindow = app.windows["Token Tank UI Test Detail"]
+        let detailWindow = app.windows["Token Jar UI Test Detail"]
         XCTAssertTrue(
             detailWindow.waitForExistence(timeout: timeout),
             "The UITest configuration must host the real detail surface"
@@ -477,7 +491,7 @@ final class TokenTankUITests: XCTestCase {
         app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
         app.launch()
 
-        let detailWindow = app.windows["Token Tank UI Test Detail"]
+        let detailWindow = app.windows["Token Jar UI Test Detail"]
         XCTAssertTrue(detailWindow.waitForExistence(timeout: timeout))
         app.activate()
         detailWindow.click()
@@ -510,7 +524,7 @@ final class TokenTankUITests: XCTestCase {
         app.launchEnvironment["TOKENTANK_UI_CODEX_ACCOUNTS"] = "1"
         app.launch()
 
-        let detailWindow = app.windows["Token Tank UI Test Detail"]
+        let detailWindow = app.windows["Token Jar UI Test Detail"]
         XCTAssertTrue(detailWindow.waitForExistence(timeout: timeout))
         defer { app.terminate() }
 
@@ -558,7 +572,7 @@ final class TokenTankUITests: XCTestCase {
             app.statusItems.matching(identifier: "menu-bar.summary").firstMatch
                 .waitForExistence(timeout: timeout)
         )
-        let detailWindow = app.windows["Token Tank UI Test Detail"]
+        let detailWindow = app.windows["Token Jar UI Test Detail"]
         XCTAssertTrue(detailWindow.waitForExistence(timeout: timeout))
         let doubaoQuota = detailWindow.descendants(matching: .any)
             .matching(identifier: "quota.ui-test.doubao")
@@ -596,7 +610,7 @@ final class TokenTankUITests: XCTestCase {
         app.launchEnvironment["TOKENTANK_UI_MISSING_QUOTA"] = "1"
         app.launch()
 
-        let detailWindow = app.windows["Token Tank UI Test Detail"]
+        let detailWindow = app.windows["Token Jar UI Test Detail"]
         XCTAssertTrue(detailWindow.waitForExistence(timeout: timeout))
         let missingUsed = detailWindow.descendants(matching: .any)
             .matching(identifier: "quota.ui-test.doubao")

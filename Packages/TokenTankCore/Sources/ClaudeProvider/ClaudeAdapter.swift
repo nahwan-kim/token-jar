@@ -14,7 +14,7 @@ public struct ClaudeAdapter: ProviderAdapter {
             kind: .localSession,
             credentialOwnership: .externalProvider,
             documentationURL: URL(string: "https://www.onorca.dev/docs/agents/usage-tracking"),
-            detail: "Read-only Claude Code ~/.claude.json cachedUsageUtilization. This is the same local session and weekly usage Orca displays. Token Tank never reads Claude credentials, never calls the organization Admin API, and never presents invented quota."
+            detail: "Read-only Claude Code ~/.claude.json cachedUsageUtilization. This is the same local session and weekly usage Orca displays. Token Jar never reads Claude credentials, never calls the organization Admin API, and never presents invented quota."
         )
     }
 

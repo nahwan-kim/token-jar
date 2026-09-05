@@ -626,6 +626,8 @@ final class AppModelTests: XCTestCase {
         )
 
         let frozen: [String: (en: String, ko: String)] = [
+            "detail.title": ("Token Jar", "토큰 항아리"),
+            "action.quit": ("Quit Token Jar", "토큰 항아리 종료"),
             "field.not_provided": ("Not provided", "제공 안 됨"),
             "state.stale": ("Stale", "오래됨"),
             "error.network": ("Network error", "네트워크 오류"),
@@ -637,7 +639,7 @@ final class AppModelTests: XCTestCase {
             "action.retry": ("Retry", "다시 시도"),
             "action.wait": ("Wait for next refresh", "다음 갱신까지 대기"),
             "action.sign_in_source": ("Sign in again in the source app", "원본 앱에서 다시 로그인"),
-            "action.sign_in_token_tank": ("Sign in to Token Tank", "Token Tank에서 로그인"),
+            "action.sign_in_token_tank": ("Sign in to Token Jar", "토큰 항아리에서 로그인"),
             "action.allow_system_settings": ("Allow access in System Settings", "시스템 설정에서 접근 허용"),
             "state.selected_unavailable": ("Selected quota unavailable", "선택한 할당량을 사용할 수 없음"),
             "settings.representative.none": ("Choose another", "다시 선택"),
@@ -655,6 +657,19 @@ final class AppModelTests: XCTestCase {
         )
         XCTAssertEqual(info["CFBundleDevelopmentRegion"] as? String, "en")
         XCTAssertEqual(info["CFBundleLocalizations"] as? [String], ["en", "ko"])
+        for (locale, expectedName) in [("en", "Token Jar"), ("ko", "토큰 항아리")] {
+            let infoPlistStringsURL = repositoryRoot
+                .appendingPathComponent("TokenTankApp/Resources/\(locale).lproj/InfoPlist.strings")
+            let infoPlistStrings = try String(contentsOf: infoPlistStringsURL, encoding: .utf8)
+            XCTAssertTrue(
+                infoPlistStrings.contains("CFBundleDisplayName = \"\(expectedName)\";"),
+                "Missing \(locale) CFBundleDisplayName localization"
+            )
+            XCTAssertTrue(
+                infoPlistStrings.contains("CFBundleName = \"\(expectedName)\";"),
+                "Missing \(locale) CFBundleName localization"
+            )
+        }
     }
 
     func testQuotaDisplayNamesHideRawSourceKeys() {

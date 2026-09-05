@@ -18,12 +18,12 @@
       "selectedSource": "Official Codex app-server account/rateLimits/read plus optional account/read (refreshToken: false)",
       "sourceStatus": "clear",
       "productionComposition": true,
-      "sourceStatusReason": "The user approved the reviewed process boundary. Token Tank starts only the official stdio server, advertises no filesystem or terminal capability, and never reads or mutates Codex credentials.",
+      "sourceStatusReason": "The user approved the reviewed process boundary. Token Jar starts only the official stdio server, advertises no filesystem or terminal capability, and never reads or mutates Codex credentials.",
       "documentation": [
         "https://developers.openai.com/codex/app-server"
       ],
       "credentialOwner": "Codex CLI",
-      "credentialPersistence": "Codex-owned store; Token Tank does not read, copy, write, or rotate it",
+      "credentialPersistence": "Codex-owned store; Token Jar does not read, copy, write, or rotate it",
       "tokenTankIO": [
         "Launch an allowlisted codex app-server per native account source: explicit CODEX_HOME ~/.codex, and optional ~/.codex-secondary with -c cli_auth_credentials_store=\"file\"",
         "Exchange initialize, initialized, account/rateLimits/read, and optional account/read (refreshToken: false) JSONL over stdio",
@@ -35,13 +35,13 @@
         "~/.local/bin/codex",
         "~/.local/share/mise/shims/codex",
         "~/.bun/bin/codex",
-        "~/.codex (Codex-owned home; no credential file opens by Token Tank)",
+        "~/.codex (Codex-owned home; no credential file opens by Token Jar)",
         "~/.codex-secondary (optional Codex-owned home; directory discovery only)"
       ],
       "tccClass": "none",
       "fdaRequired": false,
       "liveValidation": "Two independent native CODEX_HOME environments returned distinct ChatGPT account emails and successful general weekly rate limits on 2026-09-05. No GJC credential or usage dependency. Final application-candidate validation remains a separate gate.",
-      "mutationRisk": "The app-server owner may maintain its own credential; Token Tank sends no auth mutation method.",
+      "mutationRisk": "The app-server owner may maintain its own credential; Token Jar sends no auth mutation method.",
       "releaseBlocker": "Revalidate the owner session and sanitized shape through the final frozen candidate"
     },
     {
@@ -50,13 +50,13 @@
       "selectedSource": "Read-only ~/.claude.json cachedUsageUtilization",
       "sourceStatus": "watch",
       "productionComposition": true,
-      "sourceStatusReason": "Claude Code writes local five-hour, weekly, and scoped utilization that Orca already displays. Token Tank reads that cache in place, never presents organization Admin API usage as consumer quota, and never reads Claude credentials.",
+      "sourceStatusReason": "Claude Code writes local five-hour, weekly, and scoped utilization that Orca already displays. Token Jar reads that cache in place, never presents organization Admin API usage as consumer quota, and never reads Claude credentials.",
       "documentation": [
         "https://www.onorca.dev/docs/agents/usage-tracking",
         "https://www.onorca.dev/docs/agents/claude-code"
       ],
       "credentialOwner": "Claude Code",
-      "credentialPersistence": "Claude-owned ~/.claude.json; Token Tank does not persist, copy, write, or refresh credentials",
+      "credentialPersistence": "Claude-owned ~/.claude.json; Token Jar does not persist, copy, write, or refresh credentials",
       "tokenTankIO": [
         "Open only ~/.claude.json with the exact external-session capability",
         "Expose cachedUsageUtilization limits and named windows under stable opaque IDs",
@@ -77,13 +77,13 @@
       "selectedSource": "Read-only ~/.grok/auth.json plus cli-chat-proxy.grok.com/v1/billing?format=credits",
       "sourceStatus": "watch",
       "productionComposition": true,
-      "sourceStatusReason": "This is the CodexBar SuperGrok credits path: the Grok CLI owner session plus the documented CLI-proxy credits endpoint. Token Tank never copies or refreshes the token, never imports browser cookies, never uses grok agent stdio, and never calls the xAI Management prepaid-balance API.",
+      "sourceStatusReason": "This is the CodexBar SuperGrok credits path: the Grok CLI owner session plus the documented CLI-proxy credits endpoint. Token Jar never copies or refreshes the token, never imports browser cookies, never uses grok agent stdio, and never calls the xAI Management prepaid-balance API.",
       "rejectedAlternative": "The CodexBar-observed Grok Build ACP x.ai/billing extension returned JSON-RPC -32601 (method-not-found) on official Grok 1.0.13; browser-cookie, gRPC-web, and local-session-estimate fallbacks remain prohibited.",
       "documentation": [
         "https://github.com/steipete/CodexBar/blob/main/docs/grok.md"
       ],
       "credentialOwner": "Grok CLI",
-      "credentialPersistence": "Grok-owned ~/.grok/auth.json; Token Tank does not persist, copy, write, or refresh credentials",
+      "credentialPersistence": "Grok-owned ~/.grok/auth.json; Token Jar does not persist, copy, write, or refresh credentials",
       "tokenTankIO": [
         "Open only ~/.grok/auth.json with the exact external-session capability",
         "HTTPS GET https://cli-chat-proxy.grok.com/v1/billing?format=credits with the ephemeral owner bearer",
@@ -105,13 +105,13 @@
       "selectedSource": "Read-only Cursor.app state.vscdb session plus cursor.com/api/usage-summary",
       "sourceStatus": "watch",
       "productionComposition": true,
-      "sourceStatusReason": "Cursor documents the usage surface but not the local session layout or usage-summary endpoint. Token Tank follows the current CodexBar behavior as a reference, reads the Cursor-owned SQLite value in place with immutable=1 and no persistence or refresh, and fails closed on expiry or schema drift.",
+      "sourceStatusReason": "Cursor documents the usage surface but not the local session layout or usage-summary endpoint. Token Jar follows the current CodexBar behavior as a reference, reads the Cursor-owned SQLite value in place with immutable=1 and no persistence or refresh, and fails closed on expiry or schema drift.",
       "documentation": [
         "https://prod.cursor.com/help/models-and-usage/usage-limits",
         "https://github.com/steipete/CodexBar/blob/main/docs/cursor.md"
       ],
       "credentialOwner": "Cursor.app",
-      "credentialPersistence": "Cursor-owned state.vscdb; Token Tank does not persist, copy, write, or refresh the JWT",
+      "credentialPersistence": "Cursor-owned state.vscdb; Token Jar does not persist, copy, write, or refresh the JWT",
       "tokenTankIO": [
         "Open only Cursor/User/globalStorage/state.vscdb with O_NOFOLLOW, verify the opened descriptor identity, bind immutable=1 SQLite to that descriptor, and query only ItemTable cursorAuth/accessToken and cursorAuth/cachedEmail",
         "Require a canonical token envelope, bounded allowed subject, and unexpired timestamp; use it only in an ephemeral owner-session cookie whose authority is decided by cursor.com/api/usage-summary",
@@ -135,14 +135,14 @@
       "selectedSource": "Official arkcli usage plan --format json",
       "sourceStatus": "watch",
       "productionComposition": true,
-      "sourceStatusReason": "This is the CodexBar Doubao path: the official arkcli CLI owns SSO and prints plan windows. Token Tank starts only the allowlisted arkcli executable with those literal arguments, never copies Volcengine credentials, and never signs OpenAPI requests.",
+      "sourceStatusReason": "This is the CodexBar Doubao path: the official arkcli CLI owns SSO and prints plan windows. Token Jar starts only the allowlisted arkcli executable with those literal arguments, never copies Volcengine credentials, and never signs OpenAPI requests.",
       "rejectedAlternative": "App-owned AK/SK GetCodingPlanUsage remains fixture-tested history only and is not composed. Browser cookies and estimates remain prohibited.",
       "documentation": [
         "https://github.com/volcengine/ark-cli",
         "https://github.com/steipete/CodexBar/blob/main/docs/doubao.md"
       ],
       "credentialOwner": "arkcli",
-      "credentialPersistence": "arkcli-owned SSO; Token Tank does not persist, copy, write, or refresh credentials",
+      "credentialPersistence": "arkcli-owned SSO; Token Jar does not persist, copy, write, or refresh credentials",
       "tokenTankIO": [
         "Launch one allowlisted arkcli executable candidate with the literal arguments usage plan --format json",
         "Read one size-bounded JSON payload, then terminate the child after the response or exact timeout",
@@ -158,7 +158,7 @@
       "tccClass": "none",
       "fdaRequired": false,
       "liveValidation": "Current-host arkcli exists; live usage plan currently fails closed on expired Volcengine SSO and asks for arkcli auth login.",
-      "mutationRisk": "The CLI owner may maintain its own credential; Token Tank sends no auth mutation method.",
+      "mutationRisk": "The CLI owner may maintain its own credential; Token Jar sends no auth mutation method.",
       "releaseBlocker": "Revalidate the owner session and sanitized arkcli JSON shape through the final frozen candidate"
     }
   ]

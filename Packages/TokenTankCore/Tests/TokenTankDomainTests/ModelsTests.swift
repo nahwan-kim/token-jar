@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import TokenTankDomain
 
-@Suite("Token Tank domain semantics")
+@Suite("Token Jar domain semantics")
 struct ModelsTests {
     @Test("account metadata is normalized without exposing invalid display values")
     func accountEmailValidation() {

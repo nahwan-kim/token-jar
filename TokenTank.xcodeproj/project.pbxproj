@@ -20,6 +20,7 @@
 		A0000000000000000000010B /* BrandIcons.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000001C /* BrandIcons.swift */; };
 		A0000000000000000000010C /* BrandIcons in Resources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000001D /* BrandIcons */; };
 		A0000000000000000000010D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000001E /* Assets.xcassets */; };
+		A0000000000000000000010E /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000021 /* InfoPlist.strings */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -40,7 +41,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		A00000000000000000000010 /* Token Tank.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Token Tank.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A00000000000000000000010 /* Token Jar.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Token Jar.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000000000000000000011 /* TokenTankApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenTankApp.swift; sourceTree = "<group>"; };
 		A00000000000000000000012 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		A00000000000000000000013 /* Views.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views.swift; sourceTree = "<group>"; };
@@ -54,6 +55,8 @@
 		A0000000000000000000001C /* BrandIcons.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandIcons.swift; sourceTree = "<group>"; };
 		A0000000000000000000001D /* BrandIcons */ = {isa = PBXFileReference; lastKnownFileType = folder; path = BrandIcons; sourceTree = "<group>"; };
 		A0000000000000000000001E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A0000000000000000000001F /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A00000000000000000000020 /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = ko.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		A0000000000000000000001B /* TokenTankUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TokenTankUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -130,6 +133,7 @@
 				A00000000000000000000014 /* Localizable.xcstrings */,
 				A0000000000000000000001D /* BrandIcons */,
 				A0000000000000000000001E /* Assets.xcassets */,
+				A00000000000000000000021 /* InfoPlist.strings */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -147,7 +151,7 @@
 		A00000000000000000000009 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A00000000000000000000010 /* Token Tank.app */,
+				A00000000000000000000010 /* Token Jar.app */,
 				A00000000000000000000019 /* TokenTankTests.xctest */,
 				A0000000000000000000001B /* TokenTankUITests.xctest */,
 			);
@@ -191,8 +195,8 @@
 				A00000000000000000000203 /* TokenTankCore */,
 				A00000000000000000000204 /* TokenTankProviders */,
 			);
-			productName = "Token Tank";
-			productReference = A00000000000000000000010 /* Token Tank.app */;
+			productName = "Token Jar";
+			productReference = A00000000000000000000010 /* Token Jar.app */;
 			productType = "com.apple.product-type.application";
 		};
 		A0000000000000000000000B /* TokenTankTests */ = {
@@ -286,6 +290,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A00000000000000000000104 /* Localizable.xcstrings in Resources */,
+				A0000000000000000000010E /* InfoPlist.strings in Resources */,
 				A0000000000000000000010C /* BrandIcons in Resources */,
 				A0000000000000000000010D /* Assets.xcassets in Resources */,
 				A00000000000000000000105 /* PrivacyInfo.xcprivacy in Resources */,
@@ -350,6 +355,17 @@
 			targetProxy = A00000000000000000000504 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
+/* Begin PBXVariantGroup section */
+		A00000000000000000000021 /* InfoPlist.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				A0000000000000000000001F /* en */,
+				A00000000000000000000020 /* ko */,
+			);
+			name = InfoPlist.strings;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
 		A00000000000000000000401 /* Debug */ = {
@@ -412,7 +428,7 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokentank.TokenTank;
 				PRODUCT_MODULE_NAME = TokenTank;
-				PRODUCT_NAME = "Token Tank";
+				PRODUCT_NAME = "Token Jar";
 				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
@@ -443,7 +459,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokentank.TokenTank;
 				PRODUCT_MODULE_NAME = TokenTank;
-				PRODUCT_NAME = "Token Tank";
+				PRODUCT_NAME = "Token Jar";
 				STRIP_INSTALLED_PRODUCT = YES;
 				STRIP_STYLE = all;
 				SWIFT_VERSION = 6.0;
@@ -468,7 +484,7 @@
 				PRODUCT_MODULE_NAME = TokenTankTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Token Tank.app/Contents/MacOS/Token Tank";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Token Jar.app/Contents/MacOS/Token Jar";
 			};
 			name = Debug;
 		};
@@ -489,7 +505,7 @@
 				PRODUCT_MODULE_NAME = TokenTankTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Token Tank.app/Contents/MacOS/Token Tank";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Token Jar.app/Contents/MacOS/Token Jar";
 			};
 			name = Release;
 		};
@@ -572,7 +588,7 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.tokentank.TokenTank;
 				PRODUCT_MODULE_NAME = TokenTank;
-				PRODUCT_NAME = "Token Tank";
+				PRODUCT_NAME = "Token Jar";
 				SWIFT_VERSION = 6.0;
 			};
 			name = UITest;
@@ -595,7 +611,7 @@
 				PRODUCT_MODULE_NAME = TokenTankTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Token Tank.app/Contents/MacOS/Token Tank";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Token Jar.app/Contents/MacOS/Token Jar";
 			};
 			name = UITest;
 		};

@@ -161,7 +161,7 @@ struct GrokAdapterTests {
         }
     }
 
-    @Test("missing auth file is source-owner setup, not a Token Tank credential")
+    @Test("missing auth file is source-owner setup, not a Token Jar credential")
     func missingSession() async {
         let availability = await GrokAdapter().probeAvailability(context: TestContextFactory.make())
         guard case let .needsConfiguration(code) = availability else {

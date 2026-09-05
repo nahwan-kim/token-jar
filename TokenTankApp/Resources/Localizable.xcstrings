@@ -46,8 +46,8 @@
     "action.quit" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Quit Token Tank" } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank 종료" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Quit Token Jar" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "토큰 항아리 종료" } }
       }
     },
     "action.refresh.help" : {
@@ -74,8 +74,8 @@
     "action.sign_in_token_tank" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign in to Token Tank" } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank에서 로그인" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign in to Token Jar" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "토큰 항아리에서 로그인" } }
       }
     },
     "action.wait" : {
@@ -109,15 +109,15 @@
     "detail.title" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank" } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Token Jar" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "토큰 항아리" } }
       }
     },
     "error.app_credential_missing" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank credential required" } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank 인증 정보 필요" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Token Jar credential required" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "토큰 항아리 인증 정보 필요" } }
       }
     },
     "error.authentication" : {
@@ -214,8 +214,8 @@
     "menu.summary.empty" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank — no Providers visible" } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank — 표시 중인 Provider 없음" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Token Jar — no Providers visible" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "토큰 항아리 — 표시 중인 Provider 없음" } }
       }
     },
     "quota.percentage.remaining" : {
@@ -354,8 +354,8 @@
     "settings.sources.explanation" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank displays one selected source per Provider without estimating or reconciling values." } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Token Tank는 값을 추정하거나 조정하지 않고 Provider마다 선택한 원본 하나를 표시합니다." } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Token Jar displays one selected source per Provider without estimating or reconciling values." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "토큰 항아리는 값을 추정하거나 조정하지 않고 Provider마다 선택한 원본 하나를 표시합니다." } }
       }
     },
     "settings.summary" : {
@@ -375,15 +375,15 @@
     "source.detail.claude" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read-only Claude Code local usage cache. Sign in through Claude; Token Tank never reads its credentials." } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Claude Code 로컬 사용량 캐시를 읽기 전용으로 사용합니다. Claude에서 로그인하며 Token Tank는 자격 증명을 읽지 않습니다." } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read-only Claude Code local usage cache. Sign in through Claude; Token Jar never reads its credentials." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Claude Code 로컬 사용량 캐시를 읽기 전용으로 사용합니다. Claude에서 로그인하며 토큰 항아리는 자격 증명을 읽지 않습니다." } }
       }
     },
     "source.detail.codex" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Official Codex app-server rate limits. Sign in through Codex; Token Tank never reads or changes its credentials." } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "공식 Codex app-server 사용 한도입니다. Codex에서 로그인하며 Token Tank는 자격 증명을 읽거나 변경하지 않습니다." } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Official Codex app-server rate limits. Sign in through Codex; Token Jar never reads or changes its credentials." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "공식 Codex app-server 사용 한도입니다. Codex에서 로그인하며 토큰 항아리는 자격 증명을 읽거나 변경하지 않습니다." } }
       }
     },
     "source.detail.cursor" : {
@@ -396,15 +396,15 @@
     "source.detail.doubao" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Official arkcli plan usage. Sign in through arkcli auth login; Token Tank never copies Volcengine credentials." } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "공식 arkcli 플랜 사용량입니다. arkcli auth login으로 로그인하며 Token Tank는 Volcengine 자격 증명을 복사하지 않습니다." } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Official arkcli plan usage. Sign in through arkcli auth login; Token Jar never copies Volcengine credentials." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "공식 arkcli 플랜 사용량입니다. arkcli auth login으로 로그인하며 토큰 항아리는 Volcengine 자격 증명을 복사하지 않습니다." } }
       }
     },
     "source.detail.grok" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read-only Grok CLI SuperGrok credits. Sign in through grok login; Token Tank never copies the token or imports cookies." } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Grok CLI SuperGrok 크레딧을 읽기 전용으로 사용합니다. grok login으로 로그인하며 Token Tank는 토큰을 복사하거나 쿠키를 가져오지 않습니다." } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read-only Grok CLI SuperGrok credits. Sign in through grok login; Token Jar never copies the token or imports cookies." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Grok CLI SuperGrok 크레딧을 읽기 전용으로 사용합니다. grok login으로 로그인하며 토큰 항아리는 토큰을 복사하거나 쿠키를 가져오지 않습니다." } }
       }
     },
     "state.authentication_required" : {

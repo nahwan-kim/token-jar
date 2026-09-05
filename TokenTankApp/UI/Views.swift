@@ -34,6 +34,29 @@ struct MenuBarLabelView: View {
     }
 }
 
+private struct DetailWindowTitle: NSViewRepresentable {
+    let title: String
+
+    func makeNSView(context: Context) -> TitleView {
+        TitleView()
+    }
+
+    func updateNSView(_ nsView: TitleView, context: Context) {
+        nsView.title = title
+    }
+
+    final class TitleView: NSView {
+        var title = "" {
+            didSet { window?.title = title }
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            window?.title = title
+        }
+    }
+}
+
 struct DetailPopoverView: View {
     @ObservedObject var model: AppModel
     var isStandaloneWindow = false
@@ -68,6 +91,13 @@ struct DetailPopoverView: View {
             minHeight: 640, maxHeight: isStandaloneWindow ? .infinity : 640
         )
         .background(Color(nsColor: .windowBackgroundColor))
+        .background {
+            if isStandaloneWindow {
+                DetailWindowTitle(title: model.language.appName)
+                    .frame(width: 0, height: 0)
+                    .accessibilityHidden(true)
+            }
+        }
         .task {
             #if UITEST
             model.installUITestStates()

@@ -14,7 +14,7 @@ public struct GrokAdapter: ProviderAdapter {
             kind: .localSession,
             credentialOwnership: .externalProvider,
             documentationURL: URL(string: "https://github.com/steipete/CodexBar/blob/main/docs/grok.md"),
-            detail: "Read-only Grok CLI ~/.grok/auth.json session plus cli-chat-proxy.grok.com/v1/billing?format=credits. This is the CodexBar SuperGrok credits path. Token Tank never copies or refreshes the token, never imports browser cookies, never uses grok agent stdio, and never calls the xAI Management prepaid-balance API."
+            detail: "Read-only Grok CLI ~/.grok/auth.json session plus cli-chat-proxy.grok.com/v1/billing?format=credits. This is the CodexBar SuperGrok credits path. Token Jar never copies or refreshes the token, never imports browser cookies, never uses grok agent stdio, and never calls the xAI Management prepaid-balance API."
         )
     }
 

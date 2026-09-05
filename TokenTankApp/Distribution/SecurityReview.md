@@ -1,4 +1,4 @@
-# Token Tank security and privacy review
+# Token Jar security and privacy review
 
 This is a release-gate template. It records required evidence and unresolved questions; it does not claim that a build, Provider, permission, or release passed. Replace `{{PLACEHOLDER}}` only in an external review record. Never put credentials, cookies, raw quota responses, or personal paths in this file.
 
@@ -20,7 +20,7 @@ A release is blocked by any blank required cell, failed command, unreviewed path
 
 ## Provider source, path, permission, and TCC/FDA matrix
 
-Complete one row for every source actually used. “Official” applies only to the provider-owned, documented boundary; an undocumented method, endpoint, or storage layout remains explicitly labeled `watch` even when reached through an official client. Organization, team, and billing surfaces retain their real names and never masquerade as consumer quota. CodexBar is reference-only: Token Tank does not copy its code, browser-cookie imports, credential caches, PTY automation, estimates, or fallback chains.
+Complete one row for every source actually used. “Official” applies only to the provider-owned, documented boundary; an undocumented method, endpoint, or storage layout remains explicitly labeled `watch` even when reached through an official client. Organization, team, and billing surfaces retain their real names and never masquerade as consumer quota. CodexBar is reference-only: Token Jar does not copy its code, browser-cookie imports, credential caches, PTY automation, estimates, or fallback chains.
 
 | Provider / source kind | Official documentation URL + revision/date | Exact endpoint or canonical path/pattern | Owner that writes/rotates it | Exact files/records and raw fields | Read capability/API + read-only flags | Symlink/canonical-containment proof | Permission class / TCC or FDA location | FDA or broad grant required? | User-initiated explanation and pane | Denial/revocation behavior | Before/after immutability evidence | Reviewer/status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -36,15 +36,15 @@ The user delegated the source choice and approved CodexBar/Orca as a reference. 
 
 ## Ownership and immutability contract
 
-- Token Tank may write only app-owned generic-password Keychain items through the Core credential capability. It never writes, rotates, deletes, copies, exports, or migrates a CLI or browser session.
-- External CLI/browser owners alone create and rotate their stores. Token Tank re-reads the canonical record in place after an owner update and reports missing/revoked sessions with the typed recovery state.
+- Token Jar may write only app-owned generic-password Keychain items through the Core credential capability. It never writes, rotates, deletes, copies, exports, or migrates a CLI or browser session.
+- External CLI/browser owners alone create and rotate their stores. Token Jar re-reads the canonical record in place after an owner update and reports missing/revoked sessions with the typed recovery state.
 - External reads use the source-specific capability with canonical containment, no recursive discovery, no unreviewed symlink, no write-capable descriptor, and no metadata/content mutation. Provider code cannot instantiate filesystem, network, Security, process, WebKit, or browser APIs.
 - Record before and after path identity, inode/file ID, size, modification time, permissions, owner, and cryptographic digest for a sanitized fixture. The expected result is unchanged content and metadata after every read. Do not use a real cookie or token for this test.
 
 | Check | Fixture/path identifier | Before facts | Read operation | After facts | Expected result | Evidence / status |
 | --- | --- | --- | --- | --- | --- | --- |
 | Owner writes fixture | `{{FIXTURE_ID}}` | `{{BEFORE_FACTS}}` | owner-controlled update only | `{{AFTER_OWNER_UPDATE}}` | change belongs to owner | `{{OWNER_UPDATE_EVIDENCE}}` |
-| Token Tank read | `{{FIXTURE_ID}}` | `{{BEFORE_FACTS}}` | `{{READ_CAPABILITY}}` with read-only mode | `{{AFTER_READ_FACTS}}` | bytes/metadata unchanged | `{{READ_IMMUTABILITY_EVIDENCE}}` |
+| Token Jar read | `{{FIXTURE_ID}}` | `{{BEFORE_FACTS}}` | `{{READ_CAPABILITY}}` with read-only mode | `{{AFTER_READ_FACTS}}` | bytes/metadata unchanged | `{{READ_IMMUTABILITY_EVIDENCE}}` |
 | Missing/removed source | `{{FIXTURE_ID}}` | `{{PRESENT_FACTS}}` | source removed by owner | `{{MISSING_FACTS}}` | typed external-session-missing; no login unless contract says so | `{{MISSING_SOURCE_EVIDENCE}}` |
 | Unsafe symlink/path escape | `{{SYMLINK_FIXTURE_ID}}` | `{{LINK_FACTS}}` | canonicalization attempt | `{{DENIAL_FACTS}}` | permission/path-unsafe; no follow or fallback scan | `{{SYMLINK_EVIDENCE}}` |
 
@@ -114,16 +114,16 @@ Discovery that a required source is TCC-protected, needs Full Disk Access, needs
 
 - The request, if approved, is initiated by the user from the affected Provider setup/recovery surface and names the Provider, exact read-only quota purpose, and System Settings pane.
 - Denial, revocation, or an unavailable permission maps to `permissionDenied`/stale, preserves the in-memory value, retries only on the next cycle or explicit retry, and never prompts login or silently skips the Provider.
-- Token Tank never changes permissions or ownership and never edits, resets, disables, or bypasses TCC or SIP. Do not use `tccutil reset`, modify the TCC database, disable SIP, inject entitlements, grant Terminal-wide access, or instruct the user to weaken system protections.
+- Token Jar never changes permissions or ownership and never edits, resets, disables, or bypasses TCC or SIP. Do not use `tccutil reset`, modify the TCC database, disable SIP, inject entitlements, grant Terminal-wide access, or instruct the user to weaken system protections.
 - Browser automation, interactive CLI driving, PTY scraping, and Apple Events are forbidden. The approved Codex app-server boundary is a provider-documented JSON-RPC server that may receive only the methods recorded above; it is not UI automation.
 
 | Provider | Exact protected location | Minimum requested permission | Why narrower read is impossible | User explanation/pane | Denial/revocation | Consensus decision |
 | --- | --- | --- | --- | --- | --- | --- |
-| Codex | allowlisted CLI executable only; Token Tank does not open the Codex credential store | none | official app-server owns credential access | no System Settings request | missing/revoked owner session requests Codex login; generic failure stays stale | no TCC/FDA grant approved |
-|| Claude | `~/.claude.json` | none | Claude Code owns credential access; Token Tank reads only the usage cache | no System Settings request | missing/revoked owner cache requests Claude Code login; generic failure stays stale | no TCC/FDA grant required |
-|| Grok | `~/.grok/auth.json` | none | Grok CLI owns credential access; Token Tank reads only the owner session then the CLI-proxy credits endpoint | no System Settings request | missing/expired/rejected owner session requests `grok login`; generic failure stays stale | no TCC/FDA grant required |
+| Codex | allowlisted CLI executable only; Token Jar does not open the Codex credential store | none | official app-server owns credential access | no System Settings request | missing/revoked owner session requests Codex login; generic failure stays stale | no TCC/FDA grant approved |
+|| Claude | `~/.claude.json` | none | Claude Code owns credential access; Token Jar reads only the usage cache | no System Settings request | missing/revoked owner cache requests Claude Code login; generic failure stays stale | no TCC/FDA grant required |
+|| Grok | `~/.grok/auth.json` | none | Grok CLI owns credential access; Token Jar reads only the owner session then the CLI-proxy credits endpoint | no System Settings request | missing/expired/rejected owner session requests `grok login`; generic failure stays stale | no TCC/FDA grant required |
 | Cursor | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` and active SQLite sidecars | none observed; final candidate actual-open proof pending | immutable fixed-record read avoids browser stores and SQLite lock/SHM mutation | no System Settings request | permission denial remains stale and stops the lane; no fallback or broad prompt | no broad grant approved; current-host immutable open succeeded |
-|| Doubao | allowlisted arkcli executable only; Token Tank does not open the Volcengine credential store | none | official arkcli owns credential access | no System Settings request | missing/revoked owner session requests `arkcli auth login`; generic failure stays stale | no TCC/FDA grant required |
+|| Doubao | allowlisted arkcli executable only; Token Jar does not open the Volcengine credential store | none | official arkcli owns credential access | no System Settings request | missing/revoked owner session requests `arkcli auth login`; generic failure stays stale | no TCC/FDA grant required |
 
 ## Logs, fixtures, archive, and secret scan
 
@@ -147,7 +147,7 @@ Inspect the exact Developer ID candidate and every nested code object. Record un
 /usr/bin/codesign --verify --deep --strict --verbose=4 "{{APP_PATH}}"
 /usr/bin/codesign -d --entitlements :- "{{APP_PATH}}"
 /usr/bin/codesign -d -r- --verbose=4 "{{APP_PATH}}"
-/usr/bin/otool -L "{{APP_PATH}}/Contents/MacOS/Token Tank"
+/usr/bin/otool -L "{{APP_PATH}}/Contents/MacOS/Token Jar"
 /usr/bin/find "{{APP_PATH}}" -type f -print
 ```
 
@@ -200,7 +200,7 @@ The following checklist is intentionally unresolved until evidence is attached. 
 - [ ] Grok reads only the Grok CLI owner session plus CLI-proxy credits and never imports cookies, uses grok agent stdio, or calls the xAI Management prepaid-balance API.
 - [ ] Cursor reads only the fixed Cursor.app SQLite record with `immutable=1`, persists no token, imports no browser session, and calls only usage-summary.
 - [ ] Doubao uses only the approved arkcli usage-plan boundary and never signs OpenAPI requests or copies Volcengine credentials.
-- [ ] External-owner immutability tests show no content, metadata, permission, ownership, copy, rotation, or deletion by Token Tank.
+- [ ] External-owner immutability tests show no content, metadata, permission, ownership, copy, rotation, or deletion by Token Jar.
 - [ ] App credentials use the data-protection Keychain (`kSecUseDataProtectionKeychain`), exact non-synchronizing `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` reads, and app-owned service/account deletion; attribute mismatch or lock/unavailable is stale/no-login and no plaintext fallback exists.
 - [ ] No quota snapshot, raw response, session data, or error payload persists on disk; relaunch starts `neverLoaded`.
 - [ ] Static Provider I/O audit passes with the exact five-target scope and no suppression.

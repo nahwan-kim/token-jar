@@ -14,7 +14,7 @@ public struct CodexAdapter: ProviderAdapter {
             kind: .officialCLI,
             credentialOwnership: .externalProvider,
             documentationURL: URL(string: "https://developers.openai.com/codex/app-server/"),
-            detail: "Official Codex app-server account/rateLimits/read source. Token Tank starts one isolated stdio server per native account source and never reads, copies, or refreshes Codex credentials."
+            detail: "Official Codex app-server account/rateLimits/read source. Token Jar starts one isolated stdio server per native account source and never reads, copies, or refreshes Codex credentials."
         )
     }
 

@@ -1,4 +1,4 @@
-# Token Tank direct distribution runbook
+# Token Jar direct distribution runbook
 
 This is an operator template, not release evidence. A checked item records work performed by the operator; this document never asserts that a release passed. Replace every `{{PLACEHOLDER}}` before running a command and retain the command output with the release evidence. Do not commit filled-in credentials, private keys, notarization profiles, or unredacted logs.
 
@@ -16,7 +16,7 @@ This is an operator template, not release evidence. A checked item records work 
 | `{{ARCHIVE_PATH}}` | New, unambiguous `.xcarchive` path outside the repository. |
 | `{{EXPORT_OPTIONS_PLIST}}` | Operator-maintained export-options plist path. |
 | `{{EXPORT_PATH}}` | Empty export directory for this candidate. |
-| `{{APP_PATH}}` | Exported `Token Tank.app` path. |
+| `{{APP_PATH}}` | Exported `Token Jar.app` path. |
 | `{{ARTIFACT_PATH}}` | Final DMG (preferred) or ZIP path. |
 | `{{ARTIFACT_FILENAME}}` | Filename served at the official URL. |
 | `{{OFFICIAL_DOWNLOAD_URL}}` | HTTPS URL owned by the project for this exact artifact. |
@@ -28,7 +28,7 @@ This is an operator template, not release evidence. A checked item records work 
 
 ## Native Codex account setup
 
-Token Tank collects the existing `~/.codex` login and an optional second login in `~/.codex-secondary` through separate official `codex app-server` processes. GJC is not required. Do not copy or swap authentication files. The Codex CLI owns credential storage and refresh; Token Tank never opens those files.
+Token Jar collects the existing `~/.codex` login and an optional second login in `~/.codex-secondary` through separate official `codex app-server` processes. GJC is not required. Do not copy or swap authentication files. The Codex CLI owns credential storage and refresh; Token Jar never opens those files.
 
 To add the second account without replacing the first, run the following in a terminal and choose the other ChatGPT account in the browser:
 
@@ -114,10 +114,10 @@ Record the complete archive command, tool versions, and actual output. Do not re
 
 ```sh
 /usr/bin/plutil -p "{{ARCHIVE_PATH}}/Info.plist"
-/usr/bin/codesign --display --verbose=4 "{{ARCHIVE_PATH}}/Products/Applications/Token Tank.app"
-/usr/bin/codesign --verify --deep --strict --verbose=4 "{{ARCHIVE_PATH}}/Products/Applications/Token Tank.app"
-/usr/bin/security cms -D -i "{{ARCHIVE_PATH}}/Products/Applications/Token Tank.app/Contents/embedded.provisionprofile"
-/usr/bin/lipo -archs "{{ARCHIVE_PATH}}/Products/Applications/Token Tank.app/Contents/MacOS/Token Tank"
+/usr/bin/codesign --display --verbose=4 "{{ARCHIVE_PATH}}/Products/Applications/Token Jar.app"
+/usr/bin/codesign --verify --deep --strict --verbose=4 "{{ARCHIVE_PATH}}/Products/Applications/Token Jar.app"
+/usr/bin/security cms -D -i "{{ARCHIVE_PATH}}/Products/Applications/Token Jar.app/Contents/embedded.provisionprofile"
+/usr/bin/lipo -archs "{{ARCHIVE_PATH}}/Products/Applications/Token Jar.app/Contents/MacOS/Token Jar"
 ```
 
 ## Export the distributable artifact
@@ -143,7 +143,7 @@ Run these checks on the exported app and record unedited output. The designated 
 /usr/bin/codesign -d --entitlements :- "{{APP_PATH}}"
 /usr/bin/security cms -D -i "{{APP_PATH}}/Contents/embedded.provisionprofile"
 /usr/bin/codesign -d -r- --verbose=4 "{{APP_PATH}}"
-/usr/bin/otool -L "{{APP_PATH}}/Contents/MacOS/Token Tank"
+/usr/bin/otool -L "{{APP_PATH}}/Contents/MacOS/Token Jar"
 ```
 
 Record the exact designated requirement as `{{DESIGNATED_REQUIREMENT}}`, signer, Team ID, bundle identifier, and signing flags. Compare entitlements against the approved matrix:
@@ -216,12 +216,12 @@ Do not place a release claim in this guide. The operator attaches the actual pro
 
 ## Manual replacement and rollback (no updater)
 
-Token Tank v1 has **no** in-app updater, update framework, feed check, background update agent, login item, privileged installer, or update signing key. There is no automatic download or replacement path.
+Token Jar v1 has **no** in-app updater, update framework, feed check, background update agent, login item, privileged installer, or update signing key. There is no automatic download or replacement path.
 
 1. Download `{{ARTIFACT_FILENAME}}` only from `{{OFFICIAL_DOWNLOAD_URL}}` using an HTTPS-capable client.
 2. Compare the downloaded SHA-256 with `{{ARTIFACT_SHA256}}`; reject a mismatch. Verify Developer ID identity, designated requirement, staple, and Gatekeeper result on the downloaded artifact before opening it.
-3. Quit Token Tank. Keep the current app untouched in `{{ROLLBACK_DIRECTORY}}` (or use a versioned Finder directory); do not delete it before the replacement is verified.
-4. Move the verified `Token Tank.app` into the reviewed installation location and launch it once manually. Do not run two copies during replacement. Validate bundle identity and signature again after the move.
+3. Quit Token Jar. Keep the current app untouched in `{{ROLLBACK_DIRECTORY}}` (or use a versioned Finder directory); do not delete it before the replacement is verified.
+4. Move the verified `Token Jar.app` into the reviewed installation location and launch it once manually. Do not run two copies during replacement. Validate bundle identity and signature again after the move.
 5. If launch, signature, notarization, or source behavior is wrong, quit the candidate and restore the retained prior app from `{{ROLLBACK_DIRECTORY}}`. Re-run signature and Gatekeeper checks; retain both candidate and rollback evidence. Do not use `rm -rf`, an updater helper, or permission changes as a recovery step.
 
 A future updater would require a new threat model, dependency/license review, feed and update-signing design, key custody, rollback plan, privacy disclosure, Hardened Runtime review, and explicit approval. It cannot be introduced as packaging cleanup.

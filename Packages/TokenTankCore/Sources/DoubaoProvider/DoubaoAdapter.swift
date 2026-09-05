@@ -14,7 +14,7 @@ public struct DoubaoAdapter: ProviderAdapter {
             kind: .officialCLI,
             credentialOwnership: .externalProvider,
             documentationURL: URL(string: "https://github.com/volcengine/ark-cli"),
-            detail: "Official arkcli usage plan --format json. Token Tank starts only the allowlisted arkcli executable with those literal arguments, never reads or copies Volcengine credentials, and never signs OpenAPI requests."
+            detail: "Official arkcli usage plan --format json. Token Jar starts only the allowlisted arkcli executable with those literal arguments, never reads or copies Volcengine credentials, and never signs OpenAPI requests."
         )
     }
 

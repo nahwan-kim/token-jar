@@ -97,7 +97,7 @@ struct ClaudeAdapterTests {
         #expect(await network.requests.isEmpty)
     }
 
-    @Test("missing local cache is source-owner setup, not a Token Tank credential")
+    @Test("missing local cache is source-owner setup, not a Token Jar credential")
     func missingCache() async {
         let availability = await ClaudeAdapter().probeAvailability(context: TestContextFactory.make())
         guard case let .unavailable(error) = availability else {

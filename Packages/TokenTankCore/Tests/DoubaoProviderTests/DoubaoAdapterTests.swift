@@ -124,7 +124,7 @@ struct DoubaoAdapterTests {
         #expect(shiftedSnapshot.quotas.first?.id == weekly.id)
     }
 
-    @Test("expired arkcli SSO is source-owner setup, not a Token Tank credential")
+    @Test("expired arkcli SSO is source-owner setup, not a Token Jar credential")
     func missingSession() throws {
         let body = Data(
             """
