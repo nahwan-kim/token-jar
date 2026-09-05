@@ -2,6 +2,17 @@
 
 This is a release-gate template. It records required evidence and unresolved questions; it does not claim that a build, Provider, permission, or release passed. Replace `{{PLACEHOLDER}}` only in an external review record. Never put credentials, cookies, raw quota responses, or personal paths in this file.
 
+**Channel scope (2026-09-06):** The current owner-approved distribution channel is
+an ad-hoc, unnotarized GitHub prerelease; see the current-channel section of
+[Distribution.md](Distribution.md). Developer ID, provisioning, notarization,
+clean-host acceptance and full AC sign-off below describe the future stable
+channel, not completed prerelease evidence. A prerelease must disclose unperformed
+live/hardware checks and must still stop for secret leaks, source/path violations,
+unexpected entitlements/payloads, failing verification, or known unsafe behavior.
+All five composed adapters use external-provider credentials; app-owned
+data-protection Keychain access is not a prerequisite of these sources and is
+not promised to work under ad-hoc signing. Never weaken its fail-closed behavior.
+
 ## Review identity and decision
 
 | Field | Operator value |

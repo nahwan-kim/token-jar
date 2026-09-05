@@ -1,5 +1,80 @@
 # Token Jar direct distribution runbook
 
+## Current channel: ad-hoc, unnotarized prereleases
+
+The owner approved no-membership GitHub distribution on 2026-09-06. This channel
+ships a universal ZIP with an **ad-hoc signature, no Developer ID identity, no
+provisioning profile, and no Apple notarization**. Publish as a GitHub prerelease;
+do not advertise it as Apple-verified or as passing the signed-release gates below.
+
+The Developer ID procedure and AC reconciliation below are the requirements for
+a future notarized/stable channel, not prerequisites claimed complete by this
+prerelease. Source/path violations, leaked secrets, broken signatures, unexpected
+payloads, failing tests, or known unsafe behavior still block this channel.
+Unperformed live-provider, clean-host, Intel-hardware, UI, and idle measurements
+must be disclosed in the release notes rather than represented as passes.
+
+### Build and package
+
+Use a clean source revision, an unused derived-data/staging directory outside the
+repository, and the actual version/build numbers for the candidate. For v0.1.0:
+
+```sh
+xcodebuild -project TokenTank.xcodeproj -scheme TokenTank \
+  -configuration Release -destination 'generic/platform=macOS' \
+  -derivedDataPath /tmp/token-jar-v0.1.0 \
+  ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO \
+  DEVELOPMENT_TEAM='' MARKETING_VERSION=0.1.0 CURRENT_PROJECT_VERSION=1 build
+```
+
+Copy `Build/Products/Release/Token Jar.app` into a new packaging directory.
+Include `LICENSE` and `THIRD_PARTY_NOTICES` inside the app's `Contents/Resources`
+before signing so notices travel with the app. Sign the final bundle:
+
+```sh
+codesign --force --sign - --options runtime --timestamp=none "Token Jar.app"
+codesign --verify --deep --strict --verbose=2 "Token Jar.app"
+codesign --display --verbose=4 "Token Jar.app"
+lipo -archs "Token Jar.app/Contents/MacOS/Token Jar"
+ditto -c -k --keepParent "Token Jar.app" Token-Jar-v0.1.0-universal.zip
+shasum -a 256 Token-Jar-v0.1.0-universal.zip > SHA256SUMS
+```
+
+No updater, helper, login item, nested executable, additional entitlement, or
+provisioning profile is expected. Never add entitlements to bypass a failed
+runtime check. Do not inject a fake Team ID. Record the source commit, toolchain,
+architectures, final signature verification, test results, and ZIP digest.
+Extract the ZIP into a separate directory, verify the extracted signature and
+version, and smoke-test that exact bundle before uploading. Scan source history
+and release contents for secrets; do not upload build logs or local runtime state.
+
+### Credentials and limitations
+
+All five current adapters declare external-provider credential ownership. They
+do not call the app-owned Keychain store or request app-owned credential setup.
+The Core data-protection Keychain implementation remains fail-closed; ad-hoc
+distribution does not promise that app-owned Keychain operations work. A future
+source that requires those operations needs a new signing/runtime review, not a
+plaintext fallback. Official CLI owners may manage their own sessions.
+
+### Installation, updates, and provenance
+
+Download only from `https://github.com/nahwan-kim/token-jar/releases`, verify
+`shasum -a 256 -c SHA256SUMS`, extract the ZIP, and move the app to Applications.
+A checksum verifies bytes, not publisher identity. Gatekeeper rejection is
+expected for an unnotarized app. After checking the source and digest, users may
+allow this individual app through System Settings > Privacy & Security > Open
+Anyway, where available. Do not disable Gatekeeper/SIP, delete quarantine
+attributes, bypass malware warnings, or override a managed-device policy.
+
+Quit before manually replacing the app. Keep the previous version until the new
+one launches successfully. No Homebrew tap or automatic updater is provided in
+this initial channel.
+
+## Future channel: Developer ID and notarization
+
+The remaining runbook is a template for that channel only. Its unchecked
+sign-off items are not evidence for an ad-hoc prerelease.
 This is an operator template, not release evidence. A checked item records work performed by the operator; this document never asserts that a release passed. Replace every `{{PLACEHOLDER}}` before running a command and retain the command output with the release evidence. Do not commit filled-in credentials, private keys, notarization profiles, or unredacted logs.
 
 ## Operator placeholders
