@@ -107,9 +107,12 @@ final class TokenTankUITests: XCTestCase {
         screenshot.lifetime = .keepAlways
         add(screenshot)
 
-        XCTAssertFalse(settings.radioButtons["Credentials"].exists)
+        XCTAssertFalse(settings.descendants(matching: .any).matching(identifier: "Credentials").firstMatch.exists)
 
-        settings.radioButtons["Sources"].click()
+        let sourcesTab = settings.descendants(matching: .any)
+            .matching(identifier: "Sources").firstMatch
+        XCTAssertTrue(sourcesTab.waitForExistence(timeout: timeout))
+        sourcesTab.click()
         XCTAssertTrue(
             settings.descendants(matching: .any)["settings.sources.content"]
                 .waitForExistence(timeout: timeout)
