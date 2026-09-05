@@ -5,6 +5,29 @@ final class TokenTankUITests: XCTestCase {
     private let app = XCUIApplication(bundleIdentifier: "com.tokentank.TokenTank")
     private let timeout: TimeInterval = 10
 
+    func testLanguageSwitcherUpdatesOpenWindows() {
+        continueAfterFailure = false
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appLanguage", "en"]
+        app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_SETTINGS"] = "1"
+        app.launch()
+        defer { app.terminate() }
+        let settings = app.windows["Token Tank UI Test Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 45))
+        let picker = settings.popUpButtons["settings.language.picker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: timeout), settings.debugDescription)
+        picker.click()
+        app.menuItems["한국어"].click()
+        let detail = app.windows["Token Tank UI Test Detail"]
+        XCTAssertTrue(detail.buttons["action.quit"].waitForExistence(timeout: timeout))
+        XCTAssertEqual(detail.buttons["action.quit"].label, "Token Tank 종료")
+        XCTAssertTrue(settings.popUpButtons.matching(NSPredicate(format: "value == %@", "주간 한도")).firstMatch.exists)
+        picker.click()
+        app.menuItems["English"].click()
+        XCTAssertEqual(detail.buttons["action.quit"].label, "Quit Token Tank")
+        XCTAssertTrue(settings.popUpButtons.matching(NSPredicate(format: "value == %@", "Weekly limit")).firstMatch.exists)
+    }
     func testFableUsesWeeklyGaugeLayout() {
         continueAfterFailure = false
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]

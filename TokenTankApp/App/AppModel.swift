@@ -20,10 +20,29 @@ struct CredentialGroup: Identifiable, Sendable {
     var id: ProviderID { providerID }
 }
 
+enum AppLanguage: String, CaseIterable, Identifiable {
+    case english = "en"
+    case korean = "ko"
+
+    var id: String { rawValue }
+    var title: String { self == .english ? "English" : "한국어" }
+    var locale: Locale { Locale(identifier: rawValue) }
+
+    static func preferred(_ languages: [String]) -> AppLanguage {
+        languages.first?.split(whereSeparator: { $0 == "-" || $0 == "_" }).first == "ko"
+            ? .korean : .english
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var states: [ProviderID: CollectionState]
     @Published private(set) var preferences = UserPreferences()
+    @Published var language: AppLanguage {
+        didSet { languageDefaults.set(language.rawValue, forKey: "appLanguage") }
+    }
+    var locale: Locale { language.locale }
+    private let languageDefaults: UserDefaults
     @Published private(set) var isRefreshing = false
     @Published private(set) var credentialErrorCodes: [ProviderID: String] = [:]
     @Published private var credentialDrafts: [String: String] = [:]
@@ -51,8 +70,12 @@ final class AppModel: ObservableObject {
         adapters suppliedAdapters: [any ProviderAdapter]? = nil,
         credentialStore suppliedCredentialStore: (any AppCredentialStore)? = nil,
         preferencesStore suppliedPreferencesStore: (any PreferencesStore)? = nil,
-        context suppliedContext: CollectionContext? = nil
+        context suppliedContext: CollectionContext? = nil,
+        languageDefaults: UserDefaults = .standard
     ) {
+        self.languageDefaults = languageDefaults
+        self.language = languageDefaults.string(forKey: "appLanguage").flatMap(AppLanguage.init(rawValue:))
+            ?? AppLanguage.preferred(Locale.preferredLanguages)
         let defaultAdapters = TokenTankProviderRegistry.defaultAdapters()
         let adapterList = suppliedAdapters ?? defaultAdapters
         self.sourceDescriptors = Dictionary(

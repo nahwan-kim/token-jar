@@ -62,6 +62,8 @@ This is the authoritative evidence map, not a pass claim. Automated rows are re-
 
 AC-01 through AC-16 are conjunctive. The unchecked external cells above are hard release stops and feed the operator sign-off record below.
 
+The Settings language picker switches English/한국어 immediately across open windows and persists the selection. On first launch, Korean system language selects Korean; other languages select English. Quota reset countdowns use elapsed days and whole hours (under one hour is explicit), while reset-ticket expirations show full local dates, times, and time zones. Missing expiration data is not inferred.
+
 ## Archive with Developer ID and Hardened Runtime
 
 Use an empty archive path for each candidate. Manual signing avoids accidentally selecting a development identity. The command below is a procedure, not a pass assertion:

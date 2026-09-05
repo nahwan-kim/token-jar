@@ -9,11 +9,14 @@ struct TokenTankApp: App {
     var body: some Scene {
         MenuBarExtra {
             DetailPopoverView(model: model)
+                .environment(\.locale, model.locale)
         } label: {
             #if UITEST
             TokenTankUITestMenuBarLabel(model: model)
+                .environment(\.locale, model.locale)
             #else
             MenuBarLabelView(model: model)
+                .environment(\.locale, model.locale)
                 .task {
                     guard
                         NSClassFromString("XCTestCase") == nil,
@@ -30,25 +33,29 @@ struct TokenTankApp: App {
         .commands {
             CommandGroup(replacing: .appSettings) {
                 SettingsLink {
-                    Label("action.settings", systemImage: "gearshape")
+                    Label("settings.title", systemImage: "gearshape")
                 }
+                .environment(\.locale, model.locale)
                 .keyboardShortcut(",", modifiers: .command)
             }
         }
 
         Settings {
             ProviderSettingsView(model: model)
+                .environment(\.locale, model.locale)
                 .frame(minWidth: 620, minHeight: 520)
         }
 
         #if UITEST
         WindowGroup("Token Tank UI Test Detail", id: "ui-test-detail") {
             DetailPopoverView(model: model)
+                .environment(\.locale, model.locale)
                 .frame(width: 420, height: 520)
         }
 
         WindowGroup("Token Tank UI Test Settings", id: "ui-test-settings") {
             ProviderSettingsView(model: model)
+                .environment(\.locale, model.locale)
                 .frame(minWidth: 620, minHeight: 520)
         }
         #endif

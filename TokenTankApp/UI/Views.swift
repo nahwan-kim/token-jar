@@ -219,6 +219,7 @@ private struct StatusLED: View {
 }
 
 struct ProviderDetailView: View {
+    @Environment(\.locale) private var locale
     let providerID: ProviderID
     let state: CollectionState
     let now: Date
@@ -265,7 +266,8 @@ struct ProviderDetailView: View {
                         if providerID == .codex,
                            let resetLine = QuotaDisplayFormatter.codexResetCreditsLine(
                             snapshot.quotas,
-                            now: now
+                            now: now,
+                            locale: locale
                            ) {
                             Text(verbatim: resetLine)
                                 .font(.caption)
@@ -305,7 +307,8 @@ struct ProviderDetailView: View {
                         .accessibilityIdentifier("provider.\(providerID.rawValue).name")
                     if let planName = QuotaDisplayFormatter.planName(
                         for: providerID,
-                        quotas: state.snapshot?.quotas ?? []
+                        quotas: state.snapshot?.quotas ?? [],
+                        locale: locale
                     ) {
                         Text(verbatim: planName)
                             .font(.caption2)
@@ -474,6 +477,7 @@ private struct FailureView: View {
 }
 
 struct QuotaValueView: View {
+    @Environment(\.locale) private var locale
     let quota: RawQuotaItem
     let refreshedAt: Date
     let now: Date
@@ -482,12 +486,12 @@ struct QuotaValueView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(verbatim: QuotaDisplayFormatter.name(for: quota))
+                Text(verbatim: QuotaDisplayFormatter.name(for: quota, locale: locale))
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
 
                 if let reset = quota.resetsAt {
-                    Text(verbatim: QuotaDisplayFormatter.relativeTime(reset, relativeTo: now))
+                    Text(verbatim: QuotaDisplayFormatter.resetCountdown(reset, relativeTo: now, locale: locale))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -497,10 +501,10 @@ struct QuotaValueView: View {
                 Spacer(minLength: 6)
 
                 if let remainingPercentage {
-                    Text(verbatim: QuotaDisplayFormatter.percentageValue(remainingPercentage))
+                    Text(verbatim: QuotaDisplayFormatter.percentageValue(remainingPercentage, locale: locale))
                         .font(.subheadline.weight(.semibold).monospacedDigit())
                         .foregroundStyle(gaugeTint)
-                } else if let remaining = QuotaDisplayFormatter.value(quota.remaining) {
+                } else if let remaining = QuotaDisplayFormatter.value(quota.remaining, locale: locale) {
                     Text(verbatim: remaining)
                         .font(.subheadline.weight(.semibold).monospacedDigit())
                 } else {
@@ -524,7 +528,7 @@ struct QuotaValueView: View {
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
                         Spacer(minLength: 6)
-                        Text(verbatim: QuotaDisplayFormatter.percentageValue(scopedLimit.remaining))
+                        Text(verbatim: QuotaDisplayFormatter.percentageValue(scopedLimit.remaining, locale: locale))
                             .font(.subheadline.weight(.semibold).monospacedDigit())
                             .foregroundStyle(percentageTint(for: scopedLimit.remaining))
                     }
@@ -534,7 +538,7 @@ struct QuotaValueView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("quota.scoped.\(scopedLimit.id)")
                 .accessibilityLabel(Text(verbatim: "\(scopedLimit.title), ") + Text("quota.percentage.remaining"))
-                .accessibilityValue(Text(verbatim: QuotaDisplayFormatter.percentageValue(scopedLimit.remaining)))
+                .accessibilityValue(Text(verbatim: QuotaDisplayFormatter.percentageValue(scopedLimit.remaining, locale: locale)))
             }
         }
         .padding(.horizontal, 8)
@@ -567,9 +571,9 @@ struct QuotaValueView: View {
 
     private var headlineValue: String? {
         if let remainingPercentage {
-            return QuotaDisplayFormatter.percentageValue(remainingPercentage)
+            return QuotaDisplayFormatter.percentageValue(remainingPercentage, locale: locale)
         }
-        return QuotaDisplayFormatter.value(quota.remaining)
+        return QuotaDisplayFormatter.value(quota.remaining, locale: locale)
     }
 
 
@@ -684,7 +688,8 @@ enum QuotaDisplayFormatter {
     static func codexResetCreditsLine(
         _ quotas: [RawQuotaItem],
         now: Date,
-        locale: Locale = .current
+        locale: Locale = .current,
+        timeZone: TimeZone = .current
     ) -> String? {
         guard let credits = quotas.first(where: { $0.id.rawValue == "rateLimitResetCredits" }) else {
             return nil
@@ -692,19 +697,22 @@ enum QuotaDisplayFormatter {
         let remaining = credits.remaining.map { number($0.value, locale: locale, maximumFractionDigits: 0) }
             ?? "—"
         let korean = (locale.language.languageCode?.identifier ?? "en") == "ko"
-        let expiry = quotas.compactMap { quota -> Date? in
+        let expiries = Set(quotas.compactMap { quota -> Date? in
             guard quota.id.rawValue.hasPrefix("rateLimitResetCredit.") else { return nil }
             return quota.resetsAt ?? dateFromSourceFields(quota.sourceFields)
-        }.min()
-        if let expiry {
-            let when = relativeTime(expiry, relativeTo: now, locale: locale)
-            return korean
-                ? "리셋권 \(remaining)개 · \(when)"
-                : "\(remaining) reset credits · \(when)"
+        }).sorted()
+        let title = korean ? "리셋 티켓 \(remaining)개" : "\(remaining) reset credits"
+        guard !expiries.isEmpty else {
+            return title + (korean ? " · 만료일 제공 안 됨" : " · Expiration not provided")
         }
-        return korean
-            ? "리셋권 \(remaining)개"
-            : "\(remaining) reset credits"
+        let dates = expiries.map { expiry in
+            let when = absoluteTime(expiry, locale: locale, timeZone: timeZone)
+            if expiry <= now {
+                return korean ? "\(when) 만료됨" : "Expired \(when)"
+            }
+            return korean ? "\(when) 만료" : "Expires \(when)"
+        }
+        return ([title] + dates).joined(separator: "\n")
     }
 
     static func name(for quota: RawQuotaItem, locale: Locale = .current) -> String {
@@ -757,23 +765,25 @@ enum QuotaDisplayFormatter {
         "\(number(value, locale: locale, maximumFractionDigits: 2))%"
     }
 
-    static func resetTime(_ date: Date, relativeTo now: Date, locale: Locale = .current) -> String {
-        "\(relativeTime(date, relativeTo: now, locale: locale)) · \(absoluteTime(date, locale: locale))"
+    static func resetCountdown(_ date: Date, relativeTo now: Date, locale: Locale = .current) -> String {
+        let korean = locale.language.languageCode?.identifier == "ko"
+        let seconds = date.timeIntervalSince(now)
+        guard seconds > 0 else { return korean ? "리셋 대기 중" : "Reset pending" }
+        guard seconds >= 3_600 else { return korean ? "1시간 미만" : "<1h" }
+        let hours = Int(seconds / 3_600)
+        let days = hours / 24
+        let remainder = hours % 24
+        if days > 0 {
+            return korean ? "\(days)일 \(remainder)시간" : "\(days)d \(remainder)h"
+        }
+        return korean ? "\(hours)시간" : "\(hours)h"
     }
 
-    static func relativeTime(_ date: Date, relativeTo now: Date, locale: Locale = .current) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.locale = locale
-        formatter.dateTimeStyle = .named
-        formatter.unitsStyle = .full
-        return formatter.localizedString(for: date, relativeTo: now)
-    }
-
-    private static func absoluteTime(_ date: Date, locale: Locale) -> String {
+    private static func absoluteTime(_ date: Date, locale: Locale, timeZone: TimeZone) -> String {
         let formatter = DateFormatter()
         formatter.locale = locale
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
+        formatter.timeZone = timeZone
+        formatter.setLocalizedDateFormatFromTemplate("yyyyMMMdjmmssz")
         return formatter.string(from: date)
     }
 
@@ -950,6 +960,7 @@ enum QuotaDisplayFormatter {
 
 struct ProviderSettingsView: View {
     @ObservedObject var model: AppModel
+    @Environment(\.locale) private var locale
 
     var body: some View {
         TabView {
@@ -981,6 +992,15 @@ struct ProviderSettingsView: View {
 
     private var providerPreferences: some View {
         Form {
+            Section("settings.language") {
+                Picker("settings.language", selection: $model.language) {
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(verbatim: language.title).tag(language)
+                    }
+                }
+                .pickerStyle(.menu)
+                .accessibilityIdentifier("settings.language.picker")
+            }
             Section("settings.summary") {
                 ForEach(model.orderedPreferences) { preference in
                     VStack(alignment: .leading, spacing: 8) {
@@ -1029,7 +1049,7 @@ struct ProviderSettingsView: View {
                             }
                             Text("settings.representative.none").tag(RawQuotaID?.none)
                             ForEach(model.quotas(for: preference.providerID)) { quota in
-                                Text(verbatim: quota.originalName).tag(Optional(quota.id))
+                                Text(verbatim: QuotaDisplayFormatter.name(for: quota, locale: locale)).tag(Optional(quota.id))
                             }
                         }
                         if let selected = preference.representativeQuotaID,
@@ -1055,6 +1075,7 @@ struct ProviderSettingsView: View {
                 }
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings.providers.content")
     }
 

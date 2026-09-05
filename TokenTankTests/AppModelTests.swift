@@ -5,6 +5,77 @@ import TokenTankDomain
 
 @MainActor
 final class AppModelTests: XCTestCase {
+    func testLanguageSelectionPersistsAndResolvesUnsupportedLanguages() throws {
+        let suite = "TokenTankTests.language.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = AppModel(adapters: [], languageDefaults: defaults)
+        model.language = .korean
+        XCTAssertEqual(model.locale.language.languageCode?.identifier, "ko")
+        XCTAssertEqual(AppModel(adapters: [], languageDefaults: defaults).language, .korean)
+        model.language = .english
+        XCTAssertEqual(AppModel(adapters: [], languageDefaults: defaults).language, .english)
+        XCTAssertEqual(AppLanguage.preferred(["ko-KR"]), .korean)
+        XCTAssertEqual(AppLanguage.preferred(["en_US"]), .english)
+        XCTAssertEqual(AppLanguage.preferred(["ja-JP"]), .english)
+        XCTAssertEqual(AppLanguage.preferred([]), .english)
+    }
+
+    func testResetCountdownUsesElapsedDaysAndHours() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let cases: [(TimeInterval, String, String)] = [
+            (-1, "Reset pending", "리셋 대기 중"),
+            (0, "Reset pending", "리셋 대기 중"),
+            (1, "<1h", "1시간 미만"),
+            (3_599, "<1h", "1시간 미만"),
+            (3_600, "1h", "1시간"),
+            (86_399, "23h", "23시간"),
+            (86_400, "1d 0h", "1일 0시간"),
+            (183_600, "2d 3h", "2일 3시간"),
+            (691_200, "8d 0h", "8일 0시간"),
+        ]
+        for (seconds, english, korean) in cases {
+            for (language, expected) in [("en", english), ("ko", korean)] {
+                XCTAssertEqual(QuotaDisplayFormatter.resetCountdown(
+                    now.addingTimeInterval(seconds), relativeTo: now, locale: Locale(identifier: language)
+                ), expected)
+            }
+        }
+    }
+
+    func testResetTicketsShowEveryExactExpirationInLocalTime() throws {
+        let now = Date(timeIntervalSince1970: 0)
+        let summary = RawQuotaItem(
+            id: "rateLimitResetCredits", originalName: "rateLimitResetCredits",
+            used: nil, remaining: SourceValue(value: 2, rawText: "2", unit: "credits"),
+            percentage: .missing(meaning: .remaining), resetsAt: nil
+        )
+        let tickets = ["2026-09-05T18:00:00Z", "2027-01-01T00:00:00Z"].enumerated().map { index, date in
+            RawQuotaItem(
+                id: RawQuotaID(rawValue: "rateLimitResetCredit.\(index)"), originalName: "ticket",
+                used: nil, remaining: nil, percentage: .missing(meaning: .remaining),
+                resetsAt: nil, sourceFields: ["expiresAt": date]
+            )
+        }
+        let zone = try XCTUnwrap(TimeZone(secondsFromGMT: 9 * 3_600))
+        let korean = try XCTUnwrap(QuotaDisplayFormatter.codexResetCreditsLine(
+            [summary] + tickets, now: now, locale: Locale(identifier: "ko_KR"), timeZone: zone
+        ))
+        XCTAssertTrue(korean.contains("리셋 티켓 2개"))
+        XCTAssertTrue(korean.contains("2026년 9월 6일"), korean)
+        XCTAssertTrue(korean.contains("2027년 1월 1일"), korean)
+        XCTAssertTrue(korean.contains("오전 3시 0분 0초 GMT+9"), korean)
+        XCTAssertEqual(korean.components(separatedBy: "\n").count, 3)
+        let english = try XCTUnwrap(QuotaDisplayFormatter.codexResetCreditsLine(
+            [summary] + tickets, now: .distantFuture, locale: Locale(identifier: "en_US"), timeZone: zone
+        ))
+        XCTAssertTrue(english.contains("Expired Sep 6, 2026"), english)
+        XCTAssertTrue(english.contains("2027"), english)
+        XCTAssertEqual(QuotaDisplayFormatter.codexResetCreditsLine(
+            [summary], now: now, locale: Locale(identifier: "ko")
+        ), "리셋 티켓 2개 · 만료일 제공 안 됨")
+        XCTAssertNil(QuotaDisplayFormatter.codexResetCreditsLine([], now: now))
+    }
     func testRepresentativeQuotaRequiresExplicitSelection() async throws {
         let snapshot = makeSnapshot(providerID: .codex, percentage: 37.5)
         let adapter = TestAppAdapter(id: .codex, results: [.success(snapshot)])

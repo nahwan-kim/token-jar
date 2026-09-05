@@ -1,6 +1,13 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "settings.language" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Language" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "언어" } }
+      }
+    },
     "action.allow_system_settings" : {
       "extractionState" : "manual",
       "localizations" : {
