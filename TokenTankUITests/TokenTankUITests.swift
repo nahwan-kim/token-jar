@@ -5,6 +5,39 @@ final class TokenTankUITests: XCTestCase {
     private let app = XCUIApplication(bundleIdentifier: "com.tokentank.TokenTank")
     private let timeout: TimeInterval = 10
 
+    func testMultipleQuotasUseTwoColumns() {
+        continueAfterFailure = false
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        defer { app.terminate() }
+
+        for count in [2, 3] {
+            app.launchEnvironment["TOKENTANK_UI_QUOTA_COUNT"] = String(count)
+            app.launch()
+            let window = app.windows["Token Tank UI Test Detail"]
+            XCTAssertTrue(window.waitForExistence(timeout: timeout))
+            let first = window.descendants(matching: .any)["quota.ui-test.codex"]
+            let second = window.descendants(matching: .any)["quota.ui-test.codex.2"]
+            XCTAssertTrue(first.waitForExistence(timeout: timeout))
+            XCTAssertTrue(second.waitForExistence(timeout: timeout))
+            XCTAssertEqual(first.frame.minY, second.frame.minY, accuracy: 1)
+            XCTAssertEqual(first.frame.width, second.frame.width, accuracy: 1)
+            XCTAssertGreaterThan(second.frame.minX, first.frame.maxX)
+
+            let single = window.descendants(matching: .any)["quota.ui-test.claude"]
+            XCTAssertTrue(single.exists)
+            XCTAssertGreaterThan(single.frame.width, first.frame.width * 1.9)
+            if count == 3 {
+                let third = window.descendants(matching: .any)["quota.ui-test.codex.3"]
+                XCTAssertTrue(third.exists)
+                XCTAssertEqual(third.frame.minX, first.frame.minX, accuracy: 1)
+                XCTAssertGreaterThan(third.frame.minY, first.frame.maxY)
+            }
+            app.terminate()
+        }
+    }
+
     func testCompactAccountEmails() {
         continueAfterFailure = false
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]

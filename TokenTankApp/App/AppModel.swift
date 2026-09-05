@@ -349,10 +349,25 @@ final class AppModel: ObservableObject {
                 resetsAt: resetsAt,
                 sourceFields: sourceFields
             )
+            var quotas = [quota]
+            if providerID == .codex,
+               let count = Int(ProcessInfo.processInfo.environment["TOKENTANK_UI_QUOTA_COUNT"] ?? ""),
+               (2...3).contains(count) {
+                for index in 2...count {
+                    quotas.append(RawQuotaItem(
+                        id: RawQuotaID(rawValue: "ui-test.codex.\(index)"),
+                        originalName: "Window \(index)",
+                        used: quota.used,
+                        remaining: quota.remaining,
+                        percentage: quota.percentage,
+                        resetsAt: quota.resetsAt
+                    ))
+                }
+            }
             return ProviderSnapshot(
                 providerID: providerID,
                 source: sourceDescriptors[providerID]!,
-                quotas: [quota],
+                quotas: quotas,
                 refreshedAt: now.addingTimeInterval(-30),
                 accountEmail: accountEmail
             )

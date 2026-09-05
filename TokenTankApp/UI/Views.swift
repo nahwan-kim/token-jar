@@ -246,19 +246,29 @@ struct ProviderDetailView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
-                        ForEach(QuotaDisplayFormatter.displayedQuotas(
+                        let quotas = QuotaDisplayFormatter.displayedQuotas(
                             snapshot.quotas,
                             providerID: providerID
-                        )) { quota in
-                            QuotaValueView(
-                                quota: quota,
-                                refreshedAt: snapshot.refreshedAt,
-                                now: now,
-                                trailingChip: QuotaDisplayFormatter.claudeFableChip(
-                                    for: quota,
-                                    in: snapshot.quotas
+                        )
+                        LazyVGrid(
+                            columns: Array(
+                                repeating: GridItem(.flexible(), spacing: 8, alignment: .top),
+                                count: quotas.count > 1 ? 2 : 1
+                            ),
+                            alignment: .leading,
+                            spacing: 8
+                        ) {
+                            ForEach(quotas) { quota in
+                                QuotaValueView(
+                                    quota: quota,
+                                    refreshedAt: snapshot.refreshedAt,
+                                    now: now,
+                                    trailingChip: QuotaDisplayFormatter.claudeFableChip(
+                                        for: quota,
+                                        in: snapshot.quotas
+                                    )
                                 )
-                            )
+                            }
                         }
                         if providerID == .codex,
                            let resetLine = QuotaDisplayFormatter.codexResetCreditsLine(
