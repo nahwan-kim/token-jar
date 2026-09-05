@@ -1246,6 +1246,8 @@ struct ProviderSettingsView: View {
                                     model.move(preference.providerID, offset: -1)
                                 } label: {
                                     Image(systemName: "chevron.up")
+                                        .frame(width: 24, height: 24)
+                                        .contentShape(Rectangle())
                                 }
                                 .disabled(model.isFirst(preference.providerID))
                                 .accessibilityLabel(Text("settings.move_up"))
@@ -1255,12 +1257,15 @@ struct ProviderSettingsView: View {
                                     model.move(preference.providerID, offset: 1)
                                 } label: {
                                     Image(systemName: "chevron.down")
+                                        .frame(width: 24, height: 24)
+                                        .contentShape(Rectangle())
                                 }
                                 .disabled(model.isLast(preference.providerID))
                                 .accessibilityLabel(Text("settings.move_down"))
                                 .accessibilityIdentifier("settings.move-down.\(preference.providerID.rawValue)")
                                 .help(Text("settings.move_down"))
                             }
+                            .buttonStyle(.borderless)
                         }
                         .controlSize(.small)
 
