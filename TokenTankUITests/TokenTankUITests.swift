@@ -5,6 +5,28 @@ final class TokenTankUITests: XCTestCase {
     private let app = XCUIApplication(bundleIdentifier: "com.tokentank.TokenTank")
     private let timeout: TimeInterval = 10
 
+    func testStatusUsesCompactLEDsInsteadOfText() {
+        continueAfterFailure = false
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launch()
+        defer { app.terminate() }
+
+        let window = app.windows["Token Tank UI Test Detail"]
+        XCTAssertTrue(window.waitForExistence(timeout: timeout))
+        for identifier in ["detail.overall-status", "state.fresh", "state.stale", "state.authentication-required"] {
+            let led = window.descendants(matching: .any).matching(identifier: identifier).firstMatch
+            XCTAssertTrue(led.waitForExistence(timeout: timeout))
+            XCTAssertNotEqual(led.elementType, .staticText)
+            XCTAssertFalse(led.label.isEmpty, "Status remains available to VoiceOver")
+            XCTAssertGreaterThan(led.frame.width, 0)
+            XCTAssertLessThanOrEqual(led.frame.width, 14)
+            XCTAssertLessThanOrEqual(led.frame.height, 14)
+        }
+        XCTAssertTrue(window.staticTexts["error.offline"].exists, "Actionable error details remain visible")
+    }
+
     func testMultipleQuotasUseTwoColumns() {
         continueAfterFailure = false
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]

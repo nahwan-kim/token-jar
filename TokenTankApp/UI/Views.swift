@@ -81,40 +81,21 @@ struct DetailPopoverView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            ZStack(alignment: .bottomTrailing) {
-                Image(nsImage: NSApp.applicationIconImage)
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: 38, height: 38)
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 38, height: 38)
+                .accessibilityHidden(true)
 
-                Image(systemName: overview.symbol)
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 15, height: 15)
-                    .background(overview.tint, in: Circle())
-                    .overlay {
-                        Circle()
-                            .stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5)
-                    }
-            }
-            .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
                 Text("detail.title")
                     .font(.headline)
-                Text(overview.title)
-                    .font(.caption)
-                    .foregroundStyle(overview.tint)
+                StatusLED(title: overview.title, tint: overview.tint)
                     .accessibilityIdentifier("detail.overall-status")
             }
 
             Spacer()
 
-            if model.isRefreshing {
-                ProgressView()
-                    .controlSize(.small)
-                    .accessibilityLabel(Text("state.refreshing"))
-            }
 
             toolbarButton("action.refresh.help", symbol: "arrow.clockwise", identifier: "action.refresh") {
                 model.refreshAll()
@@ -156,7 +137,6 @@ struct DetailPopoverView: View {
         if model.isRefreshing {
             return StatusPresentation(
                 title: "state.refreshing",
-                symbol: "arrow.triangle.2.circlepath",
                 tint: .blue
             )
         }
@@ -169,7 +149,6 @@ struct DetailPopoverView: View {
             case .authenticationActionRequired:
                 return StatusPresentation(
                     title: "state.authentication_required",
-                    symbol: "exclamationmark.shield.fill",
                     tint: .red
                 )
             case .stale:
@@ -186,27 +165,23 @@ struct DetailPopoverView: View {
         if hasStale {
             return StatusPresentation(
                 title: "state.stale",
-                symbol: "exclamationmark.triangle.fill",
                 tint: .orange
             )
         }
         if hasRefreshing {
             return StatusPresentation(
                 title: "state.refreshing",
-                symbol: "arrow.triangle.2.circlepath",
                 tint: .blue
             )
         }
         if hasUnavailable {
             return StatusPresentation(
                 title: "state.unavailable",
-                symbol: "questionmark.circle.fill",
                 tint: .secondary
             )
         }
         return StatusPresentation(
             title: "state.fresh",
-            symbol: "checkmark.circle.fill",
             tint: .green
         )
     }
@@ -222,8 +197,25 @@ struct DetailPopoverView: View {
 
 private struct StatusPresentation {
     let title: LocalizedStringKey
-    let symbol: String
     let tint: Color
+}
+
+private struct StatusLED: View {
+    let title: LocalizedStringKey
+    let tint: Color
+
+    var body: some View {
+        Circle()
+            .fill(tint)
+            .frame(width: 8, height: 8)
+            .shadow(color: tint.opacity(0.5), radius: 2)
+            .padding(3)
+            .background(tint.opacity(0.12), in: Circle())
+            .help(Text(title))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(title))
+            .accessibilityAddTraits(.isImage)
+    }
 }
 
 struct ProviderDetailView: View {
@@ -282,7 +274,6 @@ struct ProviderDetailView: View {
                         }
                     }
                 }
-
             }
         }
         .padding(14)
@@ -337,8 +328,7 @@ struct ProviderDetailView: View {
 
             Spacer()
 
-            Text(presentation.title)
-                .badgeStyle(presentation.badgeColor)
+            StatusLED(title: presentation.title, tint: presentation.tint)
                 .accessibilityIdentifier(presentation.identifier)
         }
     }
@@ -348,19 +338,7 @@ struct ProviderDetailView: View {
     @ViewBuilder
     private var statusView: some View {
         switch state {
-        case .neverLoaded:
-            Label("state.never_loaded", systemImage: "hourglass")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        case .refreshing:
-            HStack(spacing: 8) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("state.refreshing")
-            }
-            .font(.callout)
-            .foregroundStyle(.secondary)
-        case .fresh:
+        case .neverLoaded, .refreshing, .fresh:
             EmptyView()
         case let .stale(_, failure, _):
             FailureView(failure: failure, retry: retry, configure: configure)
@@ -374,41 +352,31 @@ struct ProviderDetailView: View {
         case .neverLoaded:
             ProviderStatusPresentation(
                 title: "state.unavailable",
-                symbol: "questionmark.circle.fill",
                 tint: .secondary,
-                badgeColor: .secondary,
                 identifier: "state.unavailable"
             )
         case .refreshing:
             ProviderStatusPresentation(
                 title: "state.refreshing",
-                symbol: "arrow.triangle.2.circlepath",
                 tint: .blue,
-                badgeColor: .blue,
                 identifier: "state.refreshing"
             )
         case .fresh:
             ProviderStatusPresentation(
                 title: "state.fresh",
-                symbol: "checkmark.circle.fill",
                 tint: .green,
-                badgeColor: .green,
                 identifier: "state.fresh"
             )
         case .stale:
             ProviderStatusPresentation(
                 title: "state.stale",
-                symbol: "exclamationmark.triangle.fill",
                 tint: .orange,
-                badgeColor: .orange,
                 identifier: "state.stale"
             )
         case .authenticationActionRequired:
             ProviderStatusPresentation(
                 title: "state.authentication_required",
-                symbol: "exclamationmark.shield.fill",
                 tint: .red,
-                badgeColor: .red,
                 identifier: "state.authentication-required"
             )
         }
@@ -417,9 +385,7 @@ struct ProviderDetailView: View {
 
 private struct ProviderStatusPresentation {
     let title: LocalizedStringKey
-    let symbol: String
     let tint: Color
-    let badgeColor: BadgeColor
     let identifier: String
 }
 
@@ -1189,34 +1155,5 @@ struct ProviderSettingsView: View {
                 model.updatePreference(updated)
             }
         )
-    }
-}
-
-private enum BadgeColor {
-    case secondary
-    case blue
-    case green
-    case orange
-    case red
-
-    var foreground: Color {
-        switch self {
-        case .secondary: .secondary
-        case .blue: .blue
-        case .green: .green
-        case .orange: .orange
-        case .red: .red
-        }
-    }
-}
-
-private extension View {
-    func badgeStyle(_ color: BadgeColor) -> some View {
-        self
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(color.foreground)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .background(color.foreground.opacity(0.12), in: Capsule())
     }
 }
