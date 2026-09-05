@@ -32,7 +32,6 @@ jobs:
     env:
       DEVELOPER_DIR: ${{ matrix.developer_dir }}
       SWIFT_TOOLS_VERSION: "6.0"
-      DERIVED_DATA_PATH: ${{ runner.temp }}/TokenTankDerivedData
 
     steps:
       - name: Check out source
@@ -44,6 +43,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          printf 'DERIVED_DATA_PATH=%s/TokenTankDerivedData\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
           if [[ ! -d "$DEVELOPER_DIR" ]]; then
             echo "::error::Pinned Xcode directory is unavailable: $DEVELOPER_DIR"
             exit 1
