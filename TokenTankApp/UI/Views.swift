@@ -273,15 +273,6 @@ struct ProviderDetailView: View {
                     }
                 }
 
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.down.circle")
-                    Text(verbatim: snapshot.source.name)
-                }
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(Text("detail.source"))
-                .accessibilityValue(Text(verbatim: snapshot.source.name))
             }
         }
         .padding(14)
