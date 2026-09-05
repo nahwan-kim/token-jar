@@ -81,12 +81,23 @@ struct DetailPopoverView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Image(systemName: overview.symbol)
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(overview.tint)
-                .frame(width: 34, height: 34)
-                .background(overview.tint.opacity(0.12), in: Circle())
-                .accessibilityHidden(true)
+            ZStack(alignment: .bottomTrailing) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 38, height: 38)
+
+                Image(systemName: overview.symbol)
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 15, height: 15)
+                    .background(overview.tint, in: Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5)
+                    }
+            }
+            .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("detail.title")
