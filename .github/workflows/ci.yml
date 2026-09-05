@@ -62,10 +62,11 @@ jobs:
           /usr/bin/xcrun swift package --package-path Packages/TokenTankCore show-dependencies
 
       - name: Run package tests
+        timeout-minutes: 5
         shell: bash
         run: |
           set -euo pipefail
-          /usr/bin/xcrun swift test --package-path Packages/TokenTankCore
+          /usr/bin/xcrun swift test --verbose --package-path Packages/TokenTankCore
 
       - name: Audit Provider source I/O boundary
         shell: bash

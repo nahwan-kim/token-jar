@@ -1261,8 +1261,8 @@ struct ProviderSettingsView: View {
                                 .accessibilityIdentifier("settings.move-down.\(preference.providerID.rawValue)")
                                 .help(Text("settings.move_down"))
                             }
-                            .controlSize(.small)
                         }
+                        .controlSize(.small)
 
                         if preference.providerID != .codex {
                             Picker(
