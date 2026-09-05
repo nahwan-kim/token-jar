@@ -36,6 +36,8 @@ struct MenuBarLabelView: View {
 
 struct DetailPopoverView: View {
     @ObservedObject var model: AppModel
+    var isStandaloneWindow = false
+    @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
@@ -61,7 +63,10 @@ struct DetailPopoverView: View {
                 }
             }
         }
-        .frame(width: 480, height: 640)
+        .frame(
+            minWidth: 480, maxWidth: isStandaloneWindow ? .infinity : 480,
+            minHeight: 640, maxHeight: isStandaloneWindow ? .infinity : 640
+        )
         .background(Color(nsColor: .windowBackgroundColor))
         .task {
             #if UITEST
@@ -89,7 +94,13 @@ struct DetailPopoverView: View {
 
             Spacer()
 
-
+            if !isStandaloneWindow {
+                toolbarButton("action.open_window", symbol: "arrow.up.forward.square", identifier: "action.open-window") {
+                    openWindow(id: "detail")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                .help(Text("action.open_window"))
+            }
             toolbarButton("action.refresh.help", symbol: "arrow.clockwise", identifier: "action.refresh") {
                 model.refreshAll()
             }

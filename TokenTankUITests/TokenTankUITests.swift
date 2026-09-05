@@ -32,6 +32,38 @@ final class TokenTankUITests: XCTestCase {
         }
     }
 
+    func testOpenStandaloneWindowReusesAndReopensWindow() {
+        continueAfterFailure = false
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appLanguage", "en"]
+        app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launch()
+        defer { app.terminate() }
+
+        let popup = app.windows["Token Tank UI Test Detail"]
+        XCTAssertTrue(popup.waitForExistence(timeout: timeout))
+        let openButton = popup.buttons["action.open-window"]
+        XCTAssertTrue(openButton.exists)
+        openButton.click()
+
+        let window = app.windows["Token Tank"]
+        XCTAssertTrue(window.waitForExistence(timeout: timeout))
+        XCTAssertTrue(window.buttons["action.refresh"].exists)
+        XCTAssertFalse(window.buttons["action.open-window"].exists)
+        XCTAssertTrue(window.descendants(matching: .any)["quota.ui-test.codex"].exists)
+
+        popup.click()
+        XCTAssertTrue(window.exists, "Moving focus away must not dismiss the standalone window")
+        openButton.click()
+        XCTAssertEqual(app.windows.matching(identifier: "Token Tank").count, 1)
+
+        window.buttons[XCUIIdentifierCloseWindow].click()
+        XCTAssertTrue(window.waitForNonExistence(timeout: timeout))
+        XCTAssertTrue(popup.exists, "Closing the window must leave the app running")
+        openButton.click()
+        XCTAssertTrue(window.waitForExistence(timeout: timeout))
+    }
+
     func testLanguageSwitcherUpdatesOpenWindows() {
         continueAfterFailure = false
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appLanguage", "en"]

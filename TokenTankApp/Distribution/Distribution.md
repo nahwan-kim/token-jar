@@ -41,6 +41,8 @@ CODEX_HOME="$HOME/.codex-secondary" codex -c 'cli_auth_credentials_store="file"'
 
 Treat `~/.codex-secondary/auth.json` as a password: never paste, commit, or export it. Verify the two account emails in the popup; login status alone does not establish different identities. Missing secondary directories are not errors, and a failed secondary refresh must not replace the first account's healthy data. The compact Codex panel shows `email · plan`, one general weekly quota in column 1, and remaining reset-ticket count plus only the nearest future expiry in column 2. Spark is not displayed. The menu shows ordered remaining percentages separated by a middle dot, without aliases or email labels; percentages are never added or averaged. Every provider shows elapsed minutes since its last successful refresh beside its status LED; missing timestamps remain unavailable.
 
+The popup header's **Open in Window** button opens a resizable standalone usage window. It shares the popup's data and refresh cycle, remains open when focus moves elsewhere, and reuses the same window on repeated clicks. Closing that window leaves the menu-bar app running; the header button can reopen it. This is a normal desktop window, not an always-on-top overlay.
+
 ## Preconditions and hard stops
 
 - Use a clean, physical macOS 14+ host and the pinned Xcode/Swift toolchain from CI. Record `sw_vers`, `xcodebuild -version`, `swift --version`, host model, and the candidate source revision in `{{EVIDENCE_DIRECTORY}}`.

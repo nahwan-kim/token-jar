@@ -40,6 +40,12 @@ struct TokenTankApp: App {
             }
         }
 
+        Window("Token Tank", id: "detail") {
+            DetailPopoverView(model: model, isStandaloneWindow: true)
+                .environment(\.locale, model.locale)
+        }
+        .defaultSize(width: 480, height: 640)
+        .windowResizability(.contentMinSize)
         Settings {
             ProviderSettingsView(model: model)
                 .environment(\.locale, model.locale)

@@ -36,6 +36,13 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "사용 가능한 동작 없음" } }
       }
     },
+    "action.open_window" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Open in Window" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "창으로 띄우기" } }
+      }
+    },
     "action.quit" : {
       "extractionState" : "manual",
       "localizations" : {
