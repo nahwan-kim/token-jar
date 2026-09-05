@@ -864,18 +864,34 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
         process.standardInput = input
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
+        let termination = ProcessTermination()
+        process.terminationHandler = { _ in
+            Task { await termination.didExit() }
+        }
 
         do {
             try process.run()
         } catch {
             throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "codex.app-server.launch-failed")
         }
-        defer {
-            inputHandle.closeFile()
-            Self.stop(process)
-            output.fileHandleForReading.closeFile()
+        let result: Result<Data, Error>
+        do {
+            try Self.protectPipeFromSIGPIPE(inputHandle)
+            result = .success(try await exchangeRateLimits(process: process, inputHandle: inputHandle, output: output))
+        } catch {
+            result = .failure(error)
         }
-        try Self.protectPipeFromSIGPIPE(inputHandle)
+        inputHandle.closeFile()
+        await termination.stop(process)
+        output.fileHandleForReading.closeFile()
+        return try result.get()
+    }
+
+    private func exchangeRateLimits(
+        process: Process,
+        inputHandle: FileHandle,
+        output: Pipe
+    ) async throws -> Data {
 
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
@@ -971,19 +987,6 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
         ]
     }
 
-    private static func stop(_ process: Process) {
-        if process.isRunning {
-            process.terminate()
-            for _ in 0..<20 {
-                if !process.isRunning { break }
-                Darwin.usleep(50_000)
-            }
-        }
-        if process.isRunning {
-            _ = Darwin.kill(process.processIdentifier, SIGKILL)
-        }
-        process.waitUntilExit()
-    }
     private static func protectPipeFromSIGPIPE(_ handle: FileHandle) throws {
         guard Darwin.fcntl(handle.fileDescriptor, F_SETNOSIGPIPE, 1) == 0 else {
             throw CollectionError(
@@ -1166,13 +1169,34 @@ public actor ArkCLIPlanUsageReader: DoubaoPlanUsageReader {
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = output
         process.standardError = error
+        let termination = ProcessTermination()
+        process.terminationHandler = { _ in
+            Task { await termination.didExit() }
+        }
 
         do {
             try process.run()
         } catch {
             throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "doubao.arkcli.launch-failed")
         }
-        defer { Self.stop(process) }
+        let result: Result<Data, Error>
+        do {
+            result = .success(try await collectOutput(process: process, output: output, error: error, termination: termination))
+        } catch {
+            result = .failure(error)
+        }
+        await termination.stop(process)
+        output.fileHandleForReading.closeFile()
+        error.fileHandleForReading.closeFile()
+        return try result.get()
+    }
+
+    private func collectOutput(
+        process: Process,
+        output: Pipe,
+        error: Pipe,
+        termination: ProcessTermination
+    ) async throws -> Data {
 
         let stdoutHandle = output.fileHandleForReading
         let fileDescriptor = stdoutHandle.fileDescriptor
@@ -1195,7 +1219,7 @@ public actor ArkCLIPlanUsageReader: DoubaoPlanUsageReader {
             throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "doubao.arkcli.read-failed")
         }
 
-        process.waitUntilExit()
+        await termination.wait()
         let stderr = error.fileHandleForReading.readDataToEndOfFile()
         if process.terminationStatus != 0 {
             if Self.looksLikeMissingSession(data) || Self.looksLikeMissingSession(stderr) {
@@ -1226,19 +1250,6 @@ public actor ArkCLIPlanUsageReader: DoubaoPlanUsageReader {
         ]
     }
 
-    private static func stop(_ process: Process) {
-        if process.isRunning {
-            process.terminate()
-            for _ in 0..<20 {
-                if !process.isRunning { break }
-                Darwin.usleep(50_000)
-            }
-        }
-        if process.isRunning {
-            _ = Darwin.kill(process.processIdentifier, SIGKILL)
-        }
-        process.waitUntilExit()
-    }
 
     private nonisolated static func readBoundedOutput(
         fileDescriptor: Int32,
@@ -1299,6 +1310,41 @@ public actor ArkCLIPlanUsageReader: DoubaoPlanUsageReader {
     }
 }
 
+// Register the handler before launch: exit may precede the first await.
+// waitUntilExit spins a thread-local run loop and can miss wakeups on Swift workers.
+private actor ProcessTermination {
+    private var exited = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func didExit() {
+        exited = true
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending {
+            waiter.resume()
+        }
+    }
+
+    func wait() async {
+        if exited { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func stop(_ process: Process) async {
+        if process.isRunning {
+            process.terminate()
+            for _ in 0..<20 {
+                if !process.isRunning { break }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
+        if process.isRunning {
+            _ = Darwin.kill(process.processIdentifier, SIGKILL)
+        }
+        // Cleanup still awaits the exit callback when the caller is cancelled.
+        await wait()
+    }
+}
 public struct UnifiedDiagnostics: DiagnosticsSink {
     private let subsystem: String
 

@@ -67,6 +67,10 @@ jobs:
         run: |
           set -euo pipefail
           /usr/bin/xcrun swift test --verbose --package-path Packages/TokenTankCore
+          for repetition in 2 3; do
+            printf 'Required package test pass %s/3\n' "$repetition"
+            /usr/bin/xcrun swift test --skip-build --package-path Packages/TokenTankCore
+          done
 
       - name: Audit Provider source I/O boundary
         shell: bash

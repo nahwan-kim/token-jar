@@ -639,6 +639,53 @@ struct SystemInfrastructureTests {
         #expect(failure.kind == .sourceUnavailable)
         #expect(failure.diagnosticCode == "codex.app-server.write-failed")
     }
+
+    @Test("fast CLI exits complete cleanup repeatedly without run-loop waits", .timeLimit(.minutes(1)))
+    func repeatedFastProcessExit() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let codex = directory.appendingPathComponent("codex-fast-exit")
+        let arkcli = directory.appendingPathComponent("arkcli-fast-exit")
+        let pidFile = directory.appendingPathComponent("children")
+        let codexScript = """
+        #!/bin/sh
+        printf '%s\\n' "$$" >> "\(pidFile.path)"
+        IFS= read -r initialize
+        printf '%s\\n' '{"id":0,"result":{}}'
+        IFS= read -r initialized
+        IFS= read -r request
+        printf '%s\\n' '{"id":1,"result":{"rateLimits":{"primary":{"usedPercent":25}}}}'
+        """
+        let arkScript = """
+        #!/bin/sh
+        printf '%s\\n' "$$" >> "\(pidFile.path)"
+        printf '%s\\n' '{"items":[]}'
+        """
+        try Data(codexScript.utf8).write(to: codex, options: .atomic)
+        try Data(arkScript.utf8).write(to: arkcli, options: .atomic)
+        for executable in [codex, arkcli] {
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        }
+        let codexReader = CodexAppServerUsageReader(
+            executableCandidates: [codex], accountSources: [.primary], timeout: .seconds(1)
+        )
+        let arkReader = ArkCLIPlanUsageReader(executableCandidates: [arkcli], timeout: .seconds(1))
+        for _ in 0..<24 {
+            async let codexReads = codexReader.readAccounts()
+            async let arkData = arkReader.readPlanUsage()
+            let reads = try await codexReads
+            #expect(reads.first?.data != nil)
+            #expect(reads.first?.failure == nil)
+            let data = try await arkData
+            #expect(data == Data("{\"items\":[]}\n".utf8))
+        }
+        let pids = try String(contentsOf: pidFile, encoding: .utf8)
+            .split(separator: "\n").compactMap { Int32($0) }
+        #expect(pids.count == 48)
+        for pid in pids {
+            #expect(Darwin.kill(pid, 0) == -1 && errno == ESRCH, "CLI child must be reaped before returning")
+        }
+    }
     @Test("Codex app-server identity RPC failures preserve successful rate limits")
     func codexIdentityFailurePreservesUsage() async throws {
         let directory = try makeTemporaryDirectory()
