@@ -36,10 +36,10 @@ final class AppModelTests: XCTestCase {
         let short = quota("codex.primary", window: "primary", minutes: "300")
         let weekly = quota("codex.secondary", window: "secondary", minutes: "10080")
         XCTAssertEqual(QuotaDisplayFormatter.defaultCodexQuota([short, weekly])?.id, weekly.id)
-        XCTAssertEqual(QuotaDisplayFormatter.name(for: short, locale: Locale(identifier: "en")), "5-hour limit")
-        XCTAssertEqual(QuotaDisplayFormatter.name(for: weekly, locale: Locale(identifier: "ko")), "주간 한도")
+        XCTAssertEqual(QuotaDisplayFormatter.name(for: short, locale: Locale(identifier: "en")), "5-hour")
+        XCTAssertEqual(QuotaDisplayFormatter.name(for: weekly, locale: Locale(identifier: "ko")), "주간")
         let unknown = quota("unknown", window: "primary", minutes: nil)
-        XCTAssertEqual(QuotaDisplayFormatter.name(for: unknown, locale: Locale(identifier: "en")), "Usage limit")
+        XCTAssertEqual(QuotaDisplayFormatter.name(for: unknown, locale: Locale(identifier: "en")), "Usage")
     }
     func testLanguageSelectionPersistsAndResolvesUnsupportedLanguages() throws {
         let suite = "TokenTankTests.language.\(UUID().uuidString)"
@@ -454,7 +454,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertNil(QuotaDisplayFormatter.defaultCodexQuota([spark]))
         XCTAssertEqual(
             QuotaDisplayFormatter.name(for: displayed[0], locale: Locale(identifier: "en_US")),
-            "Weekly limit"
+            "Weekly"
         )
         XCTAssertTrue(QuotaDisplayFormatter.displayedQuotas([spark], providerID: .codex).isEmpty)
     }
@@ -686,11 +686,11 @@ final class AppModelTests: XCTestCase {
         )
         XCTAssertEqual(
             QuotaDisplayFormatter.name(for: codexWindow, locale: Locale(identifier: "en_US")),
-            "Weekly limit"
+            "Weekly"
         )
         XCTAssertEqual(
             QuotaDisplayFormatter.name(for: codexWindow, locale: Locale(identifier: "ko_KR")),
-            "주간 한도"
+            "주간"
         )
         let extraCodex = RawQuotaItem(
             id: "codex_other.primary",
@@ -850,7 +850,7 @@ final class AppModelTests: XCTestCase {
         )
         XCTAssertEqual(
             QuotaDisplayFormatter.name(for: doubao, locale: Locale(identifier: "en_US")),
-            "Agent plan · Personal · Weekly"
+            "Weekly"
         )
         XCTAssertEqual(
             QuotaDisplayFormatter.planName(
@@ -912,7 +912,23 @@ final class AppModelTests: XCTestCase {
         )
         XCTAssertEqual(
             QuotaDisplayFormatter.name(for: doubao, locale: Locale(identifier: "ko_KR")),
-            "Agent 플랜 · 개인 · 주간"
+            "주간"
+        )
+        let doubaoFiveHour = RawQuotaItem(
+            id: "arkcli-agent-5h",
+            originalName: "agent-plan.personal.5h",
+            used: nil,
+            remaining: nil,
+            percentage: .missing(meaning: .used),
+            resetsAt: nil
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.name(for: doubaoFiveHour, locale: Locale(identifier: "en_US")),
+            "5-hour"
+        )
+        XCTAssertEqual(
+            QuotaDisplayFormatter.name(for: doubaoFiveHour, locale: Locale(identifier: "ko_KR")),
+            "5시간"
         )
     }
 

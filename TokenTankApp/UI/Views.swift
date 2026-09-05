@@ -994,18 +994,18 @@ enum QuotaDisplayFormatter {
         if isCodexWindowQuota(quota) {
             let window: String
             switch codexWindowMinutes(quota) {
-            case 10_080: window = korean ? "주간 한도" : "Weekly limit"
-            case 300: window = korean ? "5시간 한도" : "5-hour limit"
-            case let minutes?: window = korean ? "\(minutes)분 한도" : "\(minutes)-minute limit"
-            case nil: window = korean ? "사용 한도" : "Usage limit"
+            case 10_080: window = korean ? "주간" : "Weekly"
+            case 300: window = korean ? "5시간" : "5-hour"
+            case let minutes?: window = korean ? "\(minutes)분" : "\(minutes)-minute"
+            case nil: window = korean ? "사용량" : "Usage"
             }
             return window
         }
         switch quota.originalName {
         case "session", "five_hour", "5h":
-            return korean ? "5시간 한도" : "5-hour limit"
+            return korean ? "5시간" : "5-hour"
         case "weekly_all", "seven_day", "weekly", "credits":
-            return korean ? "주간 한도" : "Weekly limit"
+            return korean ? "주간" : "Weekly"
         case "individualUsage.plan.autoPercentUsed":
             return korean ? "Cursor 모델" : "Cursor Models"
         case "individualUsage.plan.apiPercentUsed":
@@ -1014,12 +1014,10 @@ enum QuotaDisplayFormatter {
             break
         }
         if quota.originalName.hasSuffix(".5h") {
-            let prefix = String(quota.originalName.dropLast(3))
-            return "\(readableNamePath(prefix, locale: locale)) · \(korean ? "5시간" : "5-hour")"
+            return korean ? "5시간" : "5-hour"
         }
         if quota.originalName.hasSuffix(".weekly") {
-            let prefix = String(quota.originalName.dropLast(7))
-            return "\(readableNamePath(prefix, locale: locale)) · \(korean ? "주간" : "Weekly")"
+            return korean ? "주간" : "Weekly"
         }
         return nil
     }

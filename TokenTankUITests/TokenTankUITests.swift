@@ -51,11 +51,11 @@ final class TokenTankUITests: XCTestCase {
         let detail = app.windows["Token Tank UI Test Detail"]
         XCTAssertTrue(detail.buttons["action.quit"].waitForExistence(timeout: timeout))
         XCTAssertTrue(detail.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "action.quit", "Token Tank 종료")).firstMatch.waitForExistence(timeout: timeout))
-        XCTAssertTrue(settings.popUpButtons.matching(NSPredicate(format: "value == %@", "주간 한도")).firstMatch.exists)
+        XCTAssertTrue(settings.popUpButtons.matching(NSPredicate(format: "value == %@", "주간")).firstMatch.exists)
         picker.click()
         app.menuItems["English"].click()
         XCTAssertTrue(detail.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "action.quit", "Quit Token Tank")).firstMatch.waitForExistence(timeout: timeout))
-        XCTAssertTrue(settings.popUpButtons.matching(NSPredicate(format: "value == %@", "Weekly limit")).firstMatch.exists)
+        XCTAssertTrue(settings.popUpButtons.matching(NSPredicate(format: "value == %@", "Weekly")).firstMatch.exists)
     }
     func testFableUsesWeeklyGaugeLayout() {
         continueAfterFailure = false
