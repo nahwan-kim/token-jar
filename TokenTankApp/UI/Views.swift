@@ -1183,18 +1183,13 @@ struct ProviderSettingsView: View {
                     Label("settings.providers", systemImage: "list.bullet")
                         .accessibilityIdentifier("settings.providers.tab")
                 }
-            credentialSettings
-                .tabItem {
-                    Label("settings.credentials", systemImage: "key")
-                        .accessibilityIdentifier("settings.credentials.tab")
-                }
             sourceSettings
                 .tabItem {
                     Label("settings.sources", systemImage: "network")
                         .accessibilityIdentifier("settings.sources.tab")
                 }
         }
-        .padding()
+        .frame(minWidth: 620, minHeight: 520)
         .task {
             #if UITEST
             model.installUITestStates()
@@ -1206,7 +1201,7 @@ struct ProviderSettingsView: View {
 
     private var providerPreferences: some View {
         Form {
-            Section("settings.language") {
+            Section {
                 Picker("settings.language", selection: $model.language) {
                     ForEach(AppLanguage.allCases) { language in
                         Text(verbatim: language.title).tag(language)
@@ -1218,12 +1213,11 @@ struct ProviderSettingsView: View {
             Section("settings.summary") {
                 ForEach(model.orderedPreferences) { preference in
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Toggle(
-                                isOn: binding(for: preference, keyPath: \.isVisible)
-                            ) {
+                        HStack(spacing: 12) {
+                            Toggle(isOn: binding(for: preference, keyPath: \.isVisible)) {
                                 Label {
                                     Text(verbatim: preference.providerID.displayName)
+                                        .fontWeight(.medium)
                                 } icon: {
                                     ProviderBrandIcon(
                                         providerID: preference.providerID,
@@ -1232,25 +1226,42 @@ struct ProviderSettingsView: View {
                                     )
                                 }
                             }
+                            .toggleStyle(.checkbox)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("settings.visible.\(preference.providerID.rawValue)")
+
                             TextField(
                                 "settings.abbreviation",
                                 text: binding(for: preference, keyPath: \.abbreviation)
                             )
-                            .frame(width: 90)
-                            Button {
-                                model.move(preference.providerID, offset: -1)
-                            } label: {
-                                Image(systemName: "chevron.up")
+                            .textFieldStyle(.roundedBorder)
+                            .labelsHidden()
+                            .frame(width: 72)
+                            .accessibilityLabel(Text("settings.abbreviation"))
+                            .accessibilityIdentifier("settings.abbreviation.\(preference.providerID.rawValue)")
+                            .help(Text("settings.abbreviation"))
+
+                            HStack(spacing: 4) {
+                                Button {
+                                    model.move(preference.providerID, offset: -1)
+                                } label: {
+                                    Image(systemName: "chevron.up")
+                                }
+                                .disabled(model.isFirst(preference.providerID))
+                                .accessibilityLabel(Text("settings.move_up"))
+                                .accessibilityIdentifier("settings.move-up.\(preference.providerID.rawValue)")
+                                .help(Text("settings.move_up"))
+                                Button {
+                                    model.move(preference.providerID, offset: 1)
+                                } label: {
+                                    Image(systemName: "chevron.down")
+                                }
+                                .disabled(model.isLast(preference.providerID))
+                                .accessibilityLabel(Text("settings.move_down"))
+                                .accessibilityIdentifier("settings.move-down.\(preference.providerID.rawValue)")
+                                .help(Text("settings.move_down"))
                             }
-                            .disabled(model.isFirst(preference.providerID))
-                            .accessibilityLabel(Text("settings.move_up"))
-                            Button {
-                                model.move(preference.providerID, offset: 1)
-                            } label: {
-                                Image(systemName: "chevron.down")
-                            }
-                            .disabled(model.isLast(preference.providerID))
-                            .accessibilityLabel(Text("settings.move_down"))
+                            .controlSize(.small)
                         }
 
                         if preference.providerID != .codex {
@@ -1267,6 +1278,8 @@ struct ProviderSettingsView: View {
                                     Text(verbatim: QuotaDisplayFormatter.name(for: quota, locale: locale)).tag(Optional(quota.id))
                                 }
                             }
+                            .pickerStyle(.menu)
+                            .accessibilityIdentifier("settings.quota.\(preference.providerID.rawValue)")
                             if let selected = preference.representativeQuotaID,
                                !model.quotas(for: preference.providerID).contains(where: { $0.id == selected }) {
                                 HStack {
@@ -1285,80 +1298,46 @@ struct ProviderSettingsView: View {
                             }
                         }
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 6)
                 }
             }
         }
+        .formStyle(.grouped)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings.providers.content")
-    }
-
-    private var credentialSettings: some View {
-        Form {
-            Text("settings.credentials.explanation")
-                .foregroundStyle(.secondary)
-            ForEach(model.credentialGroups) { group in
-                Section {
-                    ForEach(group.fields) { field in
-                        SecureField(
-                            LocalizedStringKey(field.labelKey),
-                            text: Binding(
-                                get: { model.credentialDraft(field.id) },
-                                set: { model.updateCredentialDraft($0, id: field.id) }
-                            )
-                        )
-                        .textContentType(.password)
-                        .privacySensitive()
-                    }
-                    HStack {
-                        Button("settings.credentials.save") {
-                            model.saveCredentials(for: group.providerID)
-                        }
-                        .disabled(!model.hasCredentialDrafts(for: group.providerID))
-                        Button("settings.credentials.delete", role: .destructive) {
-                            model.deleteCredentials(for: group.providerID)
-                        }
-                    }
-                    if let code = model.credentialErrorCodes[group.providerID] {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("error.keychain")
-                                .foregroundStyle(.red)
-                            Text(verbatim: code)
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } header: {
-                    Text(verbatim: group.providerID.displayName)
-                } footer: {
-                    Text("settings.credentials.keychain_footer")
-                }
-            }
-        }
-        .accessibilityIdentifier("settings.credentials.content")
     }
 
     private var sourceSettings: some View {
         Form {
             Text("settings.sources.explanation")
                 .foregroundStyle(.secondary)
-            ForEach(ProviderID.allCases) { providerID in
-                Section {
+            Section {
+                ForEach(ProviderID.allCases) { providerID in
                     if let source = model.sourceDescriptor(for: providerID) {
-                        LabeledContent("detail.source", value: source.name)
-                        Text(sourceDetailKey(for: providerID))
-                            .foregroundStyle(.secondary)
-                        if let url = source.documentationURL {
-                            Link("settings.source.documentation", destination: url)
+                        DisclosureGroup {
+                            Text(sourceDetailKey(for: providerID))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 4)
+                            if let url = source.documentationURL {
+                                Link("settings.source.documentation", destination: url)
+                            }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(verbatim: providerID.displayName)
+                                    .fontWeight(.medium)
+                                Text(verbatim: source.name)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     } else {
                         Text("state.unavailable")
                     }
-                } header: {
-                    Text(verbatim: providerID.displayName)
                 }
             }
         }
+        .formStyle(.grouped)
         .accessibilityIdentifier("settings.sources.content")
     }
 

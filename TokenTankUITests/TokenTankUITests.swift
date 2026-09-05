@@ -64,6 +64,61 @@ final class TokenTankUITests: XCTestCase {
         XCTAssertTrue(window.waitForExistence(timeout: timeout))
     }
 
+    func testSettingsRowsAlignAndSupportReordering() throws {
+        continueAfterFailure = false
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appLanguage", "en"]
+        app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_SETTINGS"] = "1"
+        app.launch()
+        defer { app.terminate() }
+
+        let settings = app.windows["Token Jar UI Test Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 45))
+        settings.click()
+        let codex = settings.textFields["settings.abbreviation.codex"]
+        let claude = settings.textFields["settings.abbreviation.claude"]
+        XCTAssertTrue(codex.waitForExistence(timeout: timeout))
+        XCTAssertTrue(claude.exists)
+        XCTAssertEqual(codex.frame.minX, claude.frame.minX, accuracy: 1)
+        XCTAssertEqual(codex.frame.width, claude.frame.width, accuracy: 1)
+        XCTAssertLessThan(codex.frame.maxX, settings.buttons["settings.move-up.codex"].frame.minX)
+        XCTAssertEqual(
+            codex.frame.midY,
+            settings.buttons["settings.move-up.codex"].frame.midY,
+            accuracy: 2
+        )
+
+        let down = settings.buttons["settings.move-down.codex"]
+        down.click()
+        XCTAssertLessThan(claude.frame.minY, codex.frame.minY)
+        settings.buttons["settings.move-up.codex"].click()
+        XCTAssertLessThan(codex.frame.minY, claude.frame.minY)
+
+        let visibility = settings.checkBoxes["settings.visible.codex"]
+        let original = try XCTUnwrap(visibility.value as? NSNumber)
+        visibility.click()
+        XCTAssertNotEqual(visibility.value as? NSNumber, original)
+        visibility.click()
+        XCTAssertEqual(visibility.value as? NSNumber, original)
+
+        let screenshot = XCTAttachment(screenshot: settings.screenshot())
+        screenshot.name = "Settings — aligned provider rows"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+
+        XCTAssertFalse(settings.radioButtons["Credentials"].exists)
+
+        settings.radioButtons["Sources"].click()
+        XCTAssertTrue(
+            settings.descendants(matching: .any)["settings.sources.content"]
+                .waitForExistence(timeout: timeout)
+        )
+        let sourcesScreenshot = XCTAttachment(screenshot: settings.screenshot())
+        sourcesScreenshot.name = "Settings — sources"
+        sourcesScreenshot.lifetime = .keepAlways
+        add(sourcesScreenshot)
+    }
     func testLanguageSwitcherUpdatesOpenWindows() {
         continueAfterFailure = false
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appLanguage", "en"]
