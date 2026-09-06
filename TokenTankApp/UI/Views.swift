@@ -1354,6 +1354,13 @@ struct ProviderSettingsView: View {
 
     private var updateSettings: some View {
         Section("settings.updates") {
+            if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+               let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String {
+                Text("settings.updates.current_version \(version) (\(build))")
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("settings.updates.current-version")
+            }
             Toggle(
                 "settings.updates.automatic",
                 isOn: $model.automaticallyChecksForUpdates

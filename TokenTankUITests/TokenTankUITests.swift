@@ -136,6 +136,17 @@ final class TokenTankUITests: XCTestCase {
         XCTAssertTrue(settings.waitForExistence(timeout: 45))
         settings.click()
 
+        let currentVersion = settings.descendants(matching: .any)
+            .matching(identifier: "settings.updates.current-version")
+            .firstMatch
+        XCTAssertTrue(currentVersion.waitForExistence(timeout: timeout))
+        let englishVersion = accessibilityText(currentVersion)
+        XCTAssertTrue(englishVersion.contains("Current version:"))
+        let versionRange = try XCTUnwrap(
+            englishVersion.range(of: #"[0-9]+(?:\.[0-9]+){1,2} \([0-9]+\)"#, options: .regularExpression)
+        )
+        let versionAndBuild = String(englishVersion[versionRange])
+
         let automatic = settings.checkBoxes["settings.updates.automatic"]
         XCTAssertTrue(automatic.waitForExistence(timeout: timeout), settings.debugDescription)
         let original = try XCTUnwrap(automatic.value as? NSNumber)
@@ -173,6 +184,8 @@ final class TokenTankUITests: XCTestCase {
         XCTAssertTrue(accessibilityText(warning).contains("공증되지"))
         XCTAssertTrue(accessibilityText(privacy).contains("GitHub"))
         XCTAssertTrue(accessibilityText(privacy).contains("IP"))
+        XCTAssertTrue(accessibilityText(currentVersion).contains("현재 버전:"))
+        XCTAssertTrue(accessibilityText(currentVersion).contains(versionAndBuild))
 
         picker.click()
         app.menuItems["English"].click()

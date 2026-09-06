@@ -393,6 +393,13 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "지금 업데이트 확인" } }
       }
     },
+    "settings.updates.current_version %@ (%@)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Current version: %1$@ (%2$@)" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "현재 버전: %1$@ (%2$@)" } }
+      }
+    },
     "settings.updates.manual_install_short" : {
       "extractionState" : "manual",
       "localizations" : {
