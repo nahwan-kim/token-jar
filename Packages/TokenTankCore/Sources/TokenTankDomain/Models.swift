@@ -486,7 +486,6 @@ public struct ProviderPreference: Codable, Equatable, Sendable, Identifiable {
     public let providerID: ProviderID
     public var isVisible: Bool
     public var order: Int
-    public var abbreviation: String
     public var representativeQuotaID: RawQuotaID?
 
     public var id: ProviderID { providerID }
@@ -495,39 +494,18 @@ public struct ProviderPreference: Codable, Equatable, Sendable, Identifiable {
         providerID: ProviderID,
         isVisible: Bool = true,
         order: Int,
-        abbreviation: String? = nil,
         representativeQuotaID: RawQuotaID? = nil
     ) {
         self.providerID = providerID
         self.isVisible = isVisible
         self.order = order
-        self.abbreviation = abbreviation ?? providerID.defaultAbbreviation
         self.representativeQuotaID = representativeQuotaID
     }
-
-
-    public func normalized() -> ProviderPreference {
-        var normalized = self
-        let sanitized = abbreviation.unicodeScalars.reduce(into: "") { result, scalar in
-            guard
-                !CharacterSet.controlCharacters.contains(scalar),
-                !CharacterSet.newlines.contains(scalar)
-            else { return }
-            result.unicodeScalars.append(scalar)
-        }
-        let trimmed = sanitized.trimmingCharacters(in: .whitespacesAndNewlines)
-        normalized.abbreviation = trimmed.isEmpty
-            ? providerID.defaultAbbreviation
-            : String(trimmed.prefix(8))
-        return normalized
-    }
-
 
     private enum CodingKeys: String, CodingKey {
         case providerID
         case isVisible
         case order
-        case abbreviation
         case representativeQuotaID
     }
 
@@ -537,7 +515,6 @@ public struct ProviderPreference: Codable, Equatable, Sendable, Identifiable {
             providerID: try container.decode(ProviderID.self, forKey: .providerID),
             isVisible: try container.decodeIfPresent(Bool.self, forKey: .isVisible) ?? true,
             order: try container.decodeIfPresent(Int.self, forKey: .order) ?? 0,
-            abbreviation: try container.decodeIfPresent(String.self, forKey: .abbreviation),
             representativeQuotaID: try container.decodeIfPresent(
                 RawQuotaID.self,
                 forKey: .representativeQuotaID
@@ -548,9 +525,30 @@ public struct ProviderPreference: Codable, Equatable, Sendable, Identifiable {
 
 public struct UserPreferences: Codable, Equatable, Sendable {
     public var providers: [ProviderPreference]
+    public var showsMenuBarPercentSign: Bool
 
-    public init(providers: [ProviderPreference] = UserPreferences.defaults) {
+    public init(
+        providers: [ProviderPreference] = UserPreferences.defaults,
+        showsMenuBarPercentSign: Bool = true
+    ) {
         self.providers = providers
+        self.showsMenuBarPercentSign = showsMenuBarPercentSign
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case providers
+        case showsMenuBarPercentSign
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            providers: try container.decode([ProviderPreference].self, forKey: .providers),
+            showsMenuBarPercentSign: try container.decodeIfPresent(
+                Bool.self,
+                forKey: .showsMenuBarPercentSign
+            ) ?? true
+        )
     }
 
     public static let defaults = ProviderID.allCases.enumerated().map { index, providerID in
@@ -566,7 +564,6 @@ public struct UserPreferences: Codable, Equatable, Sendable {
         var seen = Set<ProviderID>()
         var normalizedProviders = providers
             .filter { seen.insert($0.providerID).inserted }
-            .map { $0.normalized() }
         for providerID in ProviderID.allCases where !seen.contains(providerID) {
             normalizedProviders.append(
                 ProviderPreference(
@@ -575,7 +572,10 @@ public struct UserPreferences: Codable, Equatable, Sendable {
                 )
             )
         }
-        return UserPreferences(providers: normalizedProviders)
+        return UserPreferences(
+            providers: normalizedProviders,
+            showsMenuBarPercentSign: showsMenuBarPercentSign
+        )
     }
 
     public var visibleProviders: [ProviderPreference] {

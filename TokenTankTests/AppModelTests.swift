@@ -238,10 +238,43 @@ final class AppModelTests: XCTestCase {
         grokPreference.representativeQuotaID = "primary"
         model.updatePreference(grokPreference)
         XCTAssertEqual(model.menuValue(for: grokPreference), "—")
+        let withSymbols = model.menuBarSummaryItems()
+        model.setShowsMenuBarPercentSign(false)
+        XCTAssertEqual(model.menuBarSummaryItems().map(\.text), ["63", "18", "—", "—", "—"])
+        XCTAssertEqual(model.menuValue(for: claudePreference), "18%")
+        XCTAssertFalse(model.menuBarLabelText(forDisplay: true).contains("%"))
+        XCTAssertTrue(model.menuBarLabelText().contains("18%"))
+        model.setShowsMenuBarPercentSign(true)
+        XCTAssertEqual(model.menuBarSummaryItems(), withSymbols)
 
         await model.stop()
     }
 
+    func testPercentSignTogglePreservesZeroFullAndMissingValues() async {
+        let credentials = InMemoryCredentialStore()
+        let model = AppModel(
+            adapters: [
+                TestAppAdapter(id: .codex, results: [.success(makeSnapshot(providerID: .codex, percentage: 100))]),
+                TestAppAdapter(id: .claude, results: [.success(makeSnapshot(providerID: .claude, percentage: 0))]),
+            ],
+            credentialStore: credentials,
+            preferencesStore: MemoryPreferencesStore(),
+            context: makeContext(credentials: credentials)
+        )
+        model.ensureStarted()
+        let loaded = await eventually {
+            if case .fresh = model.states[.codex], case .fresh = model.states[.claude] { return true }
+            return false
+        }
+        XCTAssertTrue(loaded)
+        model.setShowsMenuBarPercentSign(false)
+        XCTAssertEqual(model.menuBarSummaryItems().map(\.text), ["0", "100", "—", "—", "—"])
+        XCTAssertEqual(model.menuValue(for: model.preference(for: .codex)), "0%")
+        XCTAssertEqual(model.menuValue(for: model.preference(for: .claude)), "100%")
+        model.setShowsMenuBarPercentSign(true)
+        XCTAssertEqual(model.menuBarSummaryItems().map(\.text), ["0%", "100%", "—", "—", "—"])
+        await model.stop()
+    }
     func testMenuBarLabelJoinsEveryVisibleProvider() async throws {
         let credentials = InMemoryCredentialStore()
         let model = AppModel(
@@ -251,7 +284,7 @@ final class AppModelTests: XCTestCase {
             context: makeContext(credentials: credentials)
         )
 
-        XCTAssertEqual(model.menuBarLabelText(), "CDX —  CLD —  GRK —  CUR —  DB —")
+        XCTAssertEqual(model.menuBarLabelText(), "Codex —  Claude —  Grok —  Cursor —  Doubao —")
 
         var cursor = model.preference(for: .cursor)
         cursor.isVisible = false
@@ -259,7 +292,7 @@ final class AppModelTests: XCTestCase {
         var claude = model.preference(for: .claude)
         claude.representativeQuotaID = "primary"
         model.updatePreference(claude)
-        XCTAssertEqual(model.menuBarLabelText(), "CDX —  CLD —  GRK —  DB —")
+        XCTAssertEqual(model.menuBarLabelText(), "Codex —  Claude —  Grok —  Doubao —")
 
         await model.stop()
     }
@@ -314,9 +347,16 @@ final class AppModelTests: XCTestCase {
         ])
         XCTAssertEqual(values.map(\.value), ["74%", "98%"])
         XCTAssertEqual(model.menuValue(for: preference), "74%")
-        XCTAssertTrue(model.menuBarLabelText().hasPrefix("CDX 74% · 98%"))
+        XCTAssertTrue(model.menuBarLabelText().hasPrefix("Codex 74% · 98%"))
         XCTAssertEqual(model.menuBarSummaryItems().first?.text, "74% · 98%")
         XCTAssertFalse(model.menuBarLabelText().contains("172%"))
+        model.setShowsMenuBarPercentSign(false)
+        XCTAssertEqual(model.menuBarSummaryItems().first?.text, "74 · 98")
+        XCTAssertTrue(model.menuBarLabelText(forDisplay: true).hasPrefix("Codex 74 · 98"))
+        XCTAssertTrue(model.menuBarLabelText().hasPrefix("Codex 74% · 98%"))
+        XCTAssertEqual(model.codexMenuValues(for: preference).map(\.value), ["74%", "98%"])
+        model.setShowsMenuBarPercentSign(true)
+        XCTAssertEqual(model.menuBarSummaryItems().first?.text, "74% · 98%")
 
         await model.stop()
     }
@@ -404,6 +444,10 @@ final class AppModelTests: XCTestCase {
         XCTAssertFalse(staleValues[0].isStale)
         XCTAssertTrue(staleValues[1].isStale)
         XCTAssertTrue(staleModel.menuBarLabelText().contains("Stale"))
+        XCTAssertEqual(staleModel.menuBarSummaryItems().first?.text, "90% · 90%*")
+        staleModel.setShowsMenuBarPercentSign(false)
+        XCTAssertEqual(staleModel.menuBarSummaryItems().first?.text, "90 · 90*")
+        XCTAssertTrue(staleModel.menuBarLabelText(forDisplay: true).contains("Stale"))
 
         await staleModel.stop()
     }
@@ -502,7 +546,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertGreaterThan(dualImage?.size.width ?? 0, image?.size.width ?? 0)
     }
 
-    func testVisibilityOrderingAndAbbreviationPersist() async throws {
+    func testVisibilityOrderingAndPercentSignPersist() async throws {
         let preferences = MemoryPreferencesStore()
         let model = AppModel(
             adapters: [],
@@ -516,9 +560,9 @@ final class AppModelTests: XCTestCase {
 
         var codex = model.preference(for: .codex)
         codex.isVisible = false
-        codex.abbreviation = "  C\nO\tDEX-LONG  "
+        model.setShowsMenuBarPercentSign(false)
         model.updatePreference(codex)
-        XCTAssertEqual(model.preference(for: .codex).abbreviation, "CODEX-LO")
+        XCTAssertFalse(model.preferences.showsMenuBarPercentSign)
         model.move(.doubao, offset: -1)
         try await Task.sleep(for: .milliseconds(100))
         let backgroundSaveCount = await preferences.saveCount
@@ -527,7 +571,7 @@ final class AppModelTests: XCTestCase {
         await model.stop()
         let saved = await preferences.load()
         XCTAssertEqual(saved.preference(for: .codex).isVisible, false)
-        XCTAssertEqual(saved.preference(for: .codex).abbreviation, "CODEX-LO")
+        XCTAssertFalse(saved.showsMenuBarPercentSign)
         XCTAssertEqual(model.orderedPreferences.count, ProviderID.allCases.count)
     }
 
@@ -548,8 +592,9 @@ final class AppModelTests: XCTestCase {
         model.refresh(.codex)
         model.refreshAll()
         var postStopPreference = model.preference(for: .codex)
-        postStopPreference.abbreviation = "POSTSTOP"
+        postStopPreference.isVisible = false
         model.updatePreference(postStopPreference)
+        model.setShowsMenuBarPercentSign(false)
         model.updateCredentialDraft("blocked", id: "doubao.secret-access-key")
         try await Task.sleep(for: .milliseconds(25))
 
@@ -557,7 +602,8 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(fetchCount, 0)
         XCTAssertEqual(model.states[.codex], .neverLoaded)
         XCTAssertFalse(model.isRefreshing)
-        XCTAssertEqual(model.preference(for: .codex).abbreviation, "CDX")
+        XCTAssertTrue(model.preference(for: .codex).isVisible)
+        XCTAssertTrue(model.preferences.showsMenuBarPercentSign)
         XCTAssertFalse(model.hasCredentialDrafts(for: .doubao))
     }
 

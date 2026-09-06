@@ -260,13 +260,6 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "사용" } }
       }
     },
-    "settings.abbreviation" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Abbreviation" } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "축약명" } }
-      }
-    },
     "settings.credentials" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -363,6 +356,20 @@
       "localizations" : {
         "en" : { "stringUnit" : { "state" : "translated", "value" : "Menu bar summary" } },
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "메뉴바 요약" } }
+      }
+    },
+    "settings.summary.percent_sign" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Show % symbol" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "% 기호 표시" } }
+      }
+    },
+    "settings.summary.percent_sign_help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Hide only the % symbol in the menu bar, keeping the numbers. Detail percentages are unchanged." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "메뉴바의 숫자는 유지하고 % 기호만 숨깁니다. 상세 화면의 퍼센트 표시는 바뀌지 않습니다." } }
       }
     },
     "settings.title" : {

@@ -148,8 +148,8 @@ This is the authoritative evidence map, not a pass claim. Automated rows are re-
 
 | AC | Automated/source-tree evidence | Evidence still required before v1 release |
 | --- | --- | --- |
-| AC-01 | `TokenTankUITests.testMenuBarAccessibilityAndTermination` checks the five-Provider one-line accessible summary, fixed order, abbreviations, and selected percentages. | Final signed-candidate UI rerun. |
-| AC-02 | `AppModelTests` covers explicit representative selection, vanished IDs without substitution, ordering, visibility, abbreviation, and preference persistence; Settings renders the frozen unavailable state/action. | Final signed-candidate Settings smoke test. |
+| AC-01 | `TokenTankUITests.testMenuBarAccessibilityAndTermination` checks the five-Provider one-line accessible summary, fixed order, service names, and selected percentages. The visual percent-sign preference does not remove percentage semantics from accessibility text. | Final signed-candidate UI rerun. |
+| AC-02 | `AppModelTests` covers explicit representative selection, vanished IDs without substitution, ordering, visibility, percent-sign display, and preference persistence; Settings renders the frozen unavailable state/action. Editable abbreviation inputs are removed; text summaries use service names. | Final signed-candidate Settings smoke test. |
 | AC-03 | Five adapter suites assert exact fixture records, optional/zero preservation, raw fields, stable opaque IDs, and no merge. | Sanitized owner-controlled live checklist for all five accepted surfaces. |
 | AC-04 | Domain/adapter suites and the bilingual UI matrix cover original names, exact source values, direction, reset/freshness, literal zero, and `Not provided` / `제공 안 됨`. | Final signed-candidate bilingual smoke test. |
 | AC-05 | `RefreshCoordinator` fake-clock tests cover five-minute cadence, manual coalescing, cancellation, and no overlapping refresh storm. | Normal five-minute terminal-state observation in the frozen AC-11 runs. |

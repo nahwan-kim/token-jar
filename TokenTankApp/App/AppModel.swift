@@ -439,11 +439,11 @@ final class AppModel: ObservableObject {
                     let suffix = value.isStale ? " (\(staleLabel))" : ""
                     return "\(value.value)\(suffix)"
                 }.joined(separator: " · ")
-                return "\(preference.abbreviation) \(accounts)"
+                return "\(preference.providerID.displayName) \(accounts)"
             }
         }
 
-        var value = "\(preference.abbreviation) \(menuValue(for: preference))"
+        var value = "\(preference.providerID.displayName) \(menuValue(for: preference))"
         if states[preference.providerID]?.isStale == true {
             value += " (\(staleLabel))"
         }
@@ -460,7 +460,10 @@ final class AppModel: ObservableObject {
             } else {
                 text = menuValue(for: preference)
             }
-            return MenuBarSummaryItem(providerID: preference.providerID, text: text)
+            return MenuBarSummaryItem(
+                providerID: preference.providerID,
+                text: menuBarDisplayText(text)
+            )
         }
     }
 
@@ -471,8 +474,13 @@ final class AppModel: ObservableObject {
         return NSDecimalNumber(decimal: rounded).intValue
     }
 
-    func menuBarLabelText() -> String {
-        preferences.visibleProviders.map { menuSummaryText(for: $0) }.joined(separator: "  ")
+    func menuBarLabelText(forDisplay: Bool = false) -> String {
+        let text = preferences.visibleProviders.map { menuSummaryText(for: $0) }.joined(separator: "  ")
+        return forDisplay ? menuBarDisplayText(text) : text
+    }
+
+    private func menuBarDisplayText(_ text: String) -> String {
+        preferences.showsMenuBarPercentSign ? text : text.replacingOccurrences(of: "%", with: "")
     }
 
     var orderedPreferences: [ProviderPreference] {
@@ -531,6 +539,12 @@ final class AppModel: ObservableObject {
         persistPreferences()
     }
 
+    func setShowsMenuBarPercentSign(_ value: Bool) {
+        guard !isStopping, preferences.showsMenuBarPercentSign != value else { return }
+        preferences.showsMenuBarPercentSign = value
+        persistPreferences()
+    }
+
     func move(_ providerID: ProviderID, offset: Int) {
         guard !isStopping else { return }
         var ordered = orderedPreferences
@@ -540,7 +554,9 @@ final class AppModel: ObservableObject {
         else { return }
         ordered.swapAt(sourceIndex, sourceIndex + offset)
         for index in ordered.indices { ordered[index].order = index }
-        preferences = UserPreferences(providers: ordered).normalized()
+        var next = preferences
+        next.providers = ordered
+        preferences = next.normalized()
         persistPreferences()
     }
 

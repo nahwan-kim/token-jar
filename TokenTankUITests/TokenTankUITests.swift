@@ -76,26 +76,40 @@ final class TokenTankUITests: XCTestCase {
         let settings = app.windows["Token Jar UI Test Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 45))
         settings.click()
-        let codex = settings.textFields["settings.abbreviation.codex"]
-        let claude = settings.textFields["settings.abbreviation.claude"]
+        let codex = settings.checkBoxes["settings.visible.codex"]
+        let claude = settings.checkBoxes["settings.visible.claude"]
         XCTAssertTrue(codex.waitForExistence(timeout: timeout))
         XCTAssertTrue(claude.exists)
         XCTAssertEqual(codex.frame.minX, claude.frame.minX, accuracy: 1)
-        XCTAssertEqual(codex.frame.width, claude.frame.width, accuracy: 1)
-        XCTAssertLessThan(codex.frame.maxX, settings.buttons["settings.move-up.codex"].frame.minX)
-        XCTAssertEqual(
-            codex.frame.midY,
-            settings.buttons["settings.move-up.codex"].frame.midY,
-            accuracy: 2
-        )
+        let codexUp = settings.buttons["settings.move-up.codex"]
+        let claudeUp = settings.buttons["settings.move-up.claude"]
+        XCTAssertEqual(codexUp.frame.minX, claudeUp.frame.minX, accuracy: 1)
+        XCTAssertEqual(codexUp.frame.width, claudeUp.frame.width, accuracy: 1)
+        XCTAssertLessThan(codex.frame.maxX, codexUp.frame.minX)
+        XCTAssertEqual(codex.frame.midY, codexUp.frame.midY, accuracy: 2)
+        XCTAssertFalse(settings.textFields["settings.abbreviation.codex"].exists)
+
+        let percentSign = settings.checkBoxes["settings.summary.percent-sign"]
+        reveal(percentSign, in: settings, deltaY: 400)
+        XCTAssertTrue(percentSign.exists)
+        XCTAssertEqual(percentSign.label, "Show % symbol")
+        let originalPercentSign = try XCTUnwrap(percentSign.value as? NSNumber)
+        percentSign.click()
+        XCTAssertNotEqual(percentSign.value as? NSNumber, originalPercentSign)
+        percentSign.click()
+        XCTAssertEqual(percentSign.value as? NSNumber, originalPercentSign)
 
         let down = settings.buttons["settings.move-down.codex"]
+        reveal(down, in: settings)
         down.click()
         XCTAssertLessThan(claude.frame.minY, codex.frame.minY)
-        settings.buttons["settings.move-up.codex"].click()
+        let up = settings.buttons["settings.move-up.codex"]
+        reveal(up, in: settings)
+        up.click()
         XCTAssertLessThan(codex.frame.minY, claude.frame.minY)
 
         let visibility = settings.checkBoxes["settings.visible.codex"]
+        reveal(visibility, in: settings, deltaY: 400)
         let original = try XCTUnwrap(visibility.value as? NSNumber)
         visibility.click()
         XCTAssertNotEqual(visibility.value as? NSNumber, original)
@@ -186,6 +200,7 @@ final class TokenTankUITests: XCTestCase {
         XCTAssertTrue(accessibilityText(privacy).contains("IP"))
         XCTAssertTrue(accessibilityText(currentVersion).contains("현재 버전:"))
         XCTAssertTrue(accessibilityText(currentVersion).contains(versionAndBuild))
+        XCTAssertEqual(settings.checkBoxes["settings.summary.percent-sign"].label, "% 기호 표시")
 
         picker.click()
         app.menuItems["English"].click()
@@ -500,7 +515,7 @@ final class TokenTankUITests: XCTestCase {
             statusItem.value as? String ?? "",
         ].joined(separator: " ")
         XCTAssertFalse(summaryText.contains("\n"), "Menu summary must remain one line")
-        for expected in ["CDX", "100%", "CLD", "90%", "GRK", "CUR", "DB"] {
+        for expected in ["Codex", "100%", "Claude", "90%", "Grok", "Cursor", "Doubao"] {
             XCTAssertTrue(
                 summaryText.contains(expected),
                 "Menu summary is missing \(expected): \(summaryText)"

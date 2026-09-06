@@ -73,7 +73,7 @@ App-owned generic-password credentials use the data-protection Keychain (`kSecUs
 
 ## Snapshot and persistence review
 
-Provider snapshots, raw quota values/responses, reset times, error payloads, session data, correlation payloads, and last-known-good values are memory-only for v1. Relaunch begins `neverLoaded`; quitting clears snapshots. Only non-secret display preferences (visibility, order, representative raw quota ID, abbreviation) may persist in `UserDefaults`.
+Provider snapshots, raw quota values/responses, reset times, error payloads, session data, correlation payloads, and last-known-good values are memory-only for v1. Relaunch begins `neverLoaded`; quitting clears snapshots. Only non-secret display preferences (visibility, order, representative raw quota ID, menu-bar percent-sign display) may persist in `UserDefaults`, alongside the language and release-check preferences described below.
 
 | Storage surface | Allowed data | Forbidden data | Check/evidence |
 | --- | --- | --- | --- |

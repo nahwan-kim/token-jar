@@ -67,7 +67,38 @@ struct ModelsTests {
 
         #expect(preferences.providers.map(\.providerID) == ProviderID.allCases)
         #expect(preferences.visibleProviders.map(\.providerID) == ProviderID.allCases)
-        #expect(Set(preferences.providers.map(\.abbreviation)).count == ProviderID.allCases.count)
+        #expect(preferences.showsMenuBarPercentSign)
+    }
+
+    @Test("menu bar percent sign preference JSON round trips")
+    func menuBarPercentSignJSONRoundTrip() throws {
+        for value in [false, true] {
+            let preferences = UserPreferences(showsMenuBarPercentSign: value)
+            let data = try JSONEncoder().encode(preferences)
+            let decoded = try JSONDecoder().decode(UserPreferences.self, from: data)
+            #expect(decoded == preferences)
+        }
+    }
+
+    @Test("missing menu bar percent sign defaults true without changing provider preferences")
+    func missingMenuBarPercentSignDefaults() throws {
+        let data = Data(
+            #"{"providers":[{"providerID":"grok","isVisible":false,"order":3},{"providerID":"codex","isVisible":true,"order":1}]}"#.utf8
+        )
+        let decoded = try JSONDecoder().decode(UserPreferences.self, from: data)
+
+        #expect(decoded.showsMenuBarPercentSign)
+        #expect(decoded.providers.map(\.providerID) == [.grok, .codex])
+        #expect(decoded.providers.map(\.isVisible) == [false, true])
+        #expect(decoded.providers.map(\.order) == [3, 1])
+    }
+
+    @Test("normalization preserves menu bar percent sign preference")
+    func normalizedMenuBarPercentSign() {
+        for value in [false, true] {
+            let preferences = UserPreferences(showsMenuBarPercentSign: value)
+            #expect(preferences.normalized().showsMenuBarPercentSign == value)
+        }
     }
 
     @Test("snapshot round trips without changing raw source precision")

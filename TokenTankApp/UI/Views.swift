@@ -14,7 +14,7 @@ struct MenuBarLabelView: View {
                     .renderingMode(.template)
             } else {
                 // MenuBarExtra renders only the first Text in a nested label tree.
-                Text(verbatim: model.menuBarLabelText())
+                Text(verbatim: model.menuBarLabelText(forDisplay: true))
                     .monospacedDigit()
             }
         }
@@ -1251,6 +1251,17 @@ struct ProviderSettingsView: View {
             }
             updateSettings
             Section("settings.summary") {
+                Toggle(
+                    "settings.summary.percent_sign",
+                    isOn: Binding(
+                        get: { model.preferences.showsMenuBarPercentSign },
+                        set: { model.setShowsMenuBarPercentSign($0) }
+                    )
+                )
+                .toggleStyle(.checkbox)
+                .help(Text("settings.summary.percent_sign_help"))
+                .accessibilityIdentifier("settings.summary.percent-sign")
+
                 ForEach(model.orderedPreferences) { preference in
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 12) {
@@ -1270,16 +1281,6 @@ struct ProviderSettingsView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .accessibilityIdentifier("settings.visible.\(preference.providerID.rawValue)")
 
-                            TextField(
-                                "settings.abbreviation",
-                                text: binding(for: preference, keyPath: \.abbreviation)
-                            )
-                            .textFieldStyle(.roundedBorder)
-                            .labelsHidden()
-                            .frame(width: 72)
-                            .accessibilityLabel(Text("settings.abbreviation"))
-                            .accessibilityIdentifier("settings.abbreviation.\(preference.providerID.rawValue)")
-                            .help(Text("settings.abbreviation"))
 
                             HStack(spacing: 4) {
                                 Button {

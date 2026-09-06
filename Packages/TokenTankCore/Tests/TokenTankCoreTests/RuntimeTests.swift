@@ -544,20 +544,23 @@ struct RuntimeTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = UserDefaultsPreferencesStore(suiteName: suite)
         var preferences = UserPreferences()
-        preferences.providers[0].abbreviation = "  LONG-ABBREVIATION  "
         preferences.providers[1].isVisible = false
 
-        try await store.save(preferences)
-        let loaded = await store.load()
+        for value in [false, true] {
+            preferences.showsMenuBarPercentSign = value
+            try await store.save(preferences)
+            let loaded = await store.load()
 
-        #expect(loaded.providers[0].abbreviation == "LONG-ABB")
-        #expect(loaded.providers[1].isVisible == false)
+            #expect(loaded.showsMenuBarPercentSign == value)
+            #expect(loaded.providers[1].isVisible == false)
+        }
         #expect(Set(defaults.persistentDomain(forName: suite)?.keys.map { $0 } ?? []) == ["user-preferences-v1"])
         let persisted = try #require(defaults.data(forKey: "user-preferences-v1"))
         let text = String(decoding: persisted, as: UTF8.self)
         #expect(!text.contains("quotas"))
         #expect(!text.contains("snapshot"))
         #expect(!text.contains("token"))
+        #expect(!text.contains("abbreviation"))
     }
 
     private static func codexSnapshot(
