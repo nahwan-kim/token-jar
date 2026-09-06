@@ -8,6 +8,7 @@ Build/
 *.xcresult
 *.dSYM
 *.dSYM.zip
+*.profraw
 
 # Xcode user state
 xcuserdata/
