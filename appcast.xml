@@ -1,18 +1,18 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><!-- sparkle-sign-warning:
+<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
 IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
 --><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
         <title>Token Jar</title>
         <item>
-            <title>0.1.3</title>
-            <pubDate>Sun, 06 Sep 2026 02:54:21 GMT</pubDate>
-            <sparkle:version>4</sparkle:version>
-            <sparkle:shortVersionString>0.1.3</sparkle:shortVersionString>
+            <title>0.1.5</title>
+            <pubDate>Sun, 06 Sep 2026 14:19:22 +0900</pubDate>
+            <sparkle:version>6</sparkle:version>
+            <sparkle:shortVersionString>0.1.5</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/nahwan-kim/token-jar/releases/download/v0.1.3/Token-Jar-v0.1.3-universal.zip" length="3000816" type="application/octet-stream" sparkle:edSignature="wNa0FwhWCfunrIhDrlmbrRmsko8GIoRP1Pdd9ffcv9ltjYiJfkAXnVv1tRb2PGVT24SGlHOwpdWR7BalUvWJBQ=="></enclosure>
+            <enclosure url="https://github.com/nahwan-kim/token-jar/releases/download/v0.1.5/Token-Jar-v0.1.5-universal.zip" length="3925577" type="application/octet-stream" sparkle:edSignature="cUJ0qRvTDrCMTEG1AoPFVFKclGSccECLaF01kvJ1sYZotrfPhG/BRMOk4fa24/NSTEku2AIxFt2Fb0mBJIutAw=="></enclosure>
         </item>
     </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 8F97fSKoh1fO5XDhNlBdqRKEc3dEQfm20ypWrcYSUerDCOPRndV4S8cjIkKiAYtTn4fwgHiUr4f8MezcANfvAA==
-length: 1072
+edSignature: 20YCnhqD2KNj0MfJPnW1DYUM0vjVxa+eH09rdRh5I5wZml7DoGJHjJlrYo3+MhvMU+Phxh8iH6i3RgrpXeq2DA==
+length: 1057
 -->
