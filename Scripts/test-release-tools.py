@@ -127,6 +127,10 @@ class ReleasePolicyTests(unittest.TestCase):
             with self.assertRaises(audit.AuditFailure):
                 audit.validate_source_provenance(commit, source_hash)
 
+    def test_empty_optional_source_hash_uses_commit_reference(self) -> None:
+        args = audit.parse_args(["--app", "/tmp/Token Jar.app", "--source-hash", ""])
+        self.assertEqual(audit.validate_source_provenance("a" * 40, args.source_hash), ("a" * 40, None))
+
     def test_package_lock_rejects_unpinned_revision_and_extra_dependencies(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             lock = Path(directory) / "Package.resolved"

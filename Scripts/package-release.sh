@@ -134,10 +134,6 @@ archive_sha256="$(/usr/bin/shasum -a 256 "$archive" | /usr/bin/cut -d ' ' -f1)"
 
 source_commit="$(git -C "$REPO_ROOT" rev-parse --verify HEAD)" || fail "source commit could not be determined"
 [[ "$source_commit" =~ ^[0-9a-fA-F]{40}$ ]] || fail "source commit is malformed"
-source_hash_args=()
-if [[ -n "${TOKENTANK_SOURCE_HASH:-}" ]]; then
-    source_hash_args+=(--source-hash "$TOKENTANK_SOURCE_HASH")
-fi
 if [[ -z "${TOKENTANK_SOURCE_HASH:-}" && -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
     fail "worktree is not clean; supply TOKENTANK_SOURCE_HASH for an explicitly identified local candidate"
 fi
@@ -220,7 +216,7 @@ PY
     --entitlements "$host_entitlements" \
     --sparkle-distribution "$sparkle_tools_dir" \
     --source-commit "$source_commit" \
-    "${source_hash_args[@]}" >/dev/null
+    --source-hash "${TOKENTANK_SOURCE_HASH:-}" >/dev/null
 
 public_key="$("$generate_keys" --account "$SPARKLE_ACCOUNT" -p)" || fail "Sparkle public-key lookup failed"
 [[ "$public_key" == "$SPARKLE_PUBLIC_KEY" ]] || fail "Keychain public key does not match app SUPublicEDKey"
@@ -254,7 +250,7 @@ sign_code "$framework"
     --sparkle-distribution "$sparkle_tools_dir" \
     --source-commit "$source_commit" \
     --receipt "$tmp_root/RELEASE_RECEIPT.json" \
-    "${source_hash_args[@]}" >/dev/null
+    --source-hash "${TOKENTANK_SOURCE_HASH:-}" >/dev/null
 
 feed_dir="$tmp_root/feed"
 mkdir -p -- "$feed_dir"

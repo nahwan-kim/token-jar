@@ -262,17 +262,13 @@ jobs:
             exit 1
           fi
 
-          source_hash_args=()
-          if [[ -n "${TOKENTANK_SOURCE_HASH:-}" ]]; then
-            source_hash_args+=(--source-hash "$TOKENTANK_SOURCE_HASH")
-          fi
           /usr/bin/python3 Scripts/audit-release.py \
             --app "$app" \
             --mode unsigned \
             --entitlements TokenTankApp/Supporting/TokenTankApp.entitlements \
             --sparkle-distribution "$SPARKLE_SOURCE_DIR" \
             --source-commit "${GITHUB_SHA:-}" \
-            "${source_hash_args[@]}" \
+            --source-hash "${TOKENTANK_SOURCE_HASH:-}" \
             --receipt "$RUNNER_TEMP/tokentank-release-receipt.json" \
             --summary "$GITHUB_STEP_SUMMARY"
           echo "Product dependency, leakage, provenance, and exact Sparkle footprint scan passed."
