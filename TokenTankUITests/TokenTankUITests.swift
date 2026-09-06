@@ -186,6 +186,38 @@ final class TokenTankUITests: XCTestCase {
         picker.click()
         app.menuItems["English"].click()
     }
+    func testLaunchAtLoginNotFoundCanBeRegistered() throws {
+        continueAfterFailure = false
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appLanguage", "en"]
+        app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_SETTINGS"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_LOGIN_ITEM_STATUS"] = "notFound"
+        app.launch()
+        defer { app.terminate() }
+
+        let settings = app.windows["Token Jar UI Test Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 45))
+        settings.click()
+
+        let toggle = settings.checkBoxes["settings.login-item.toggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: timeout), settings.debugDescription)
+        reveal(toggle, in: settings)
+        XCTAssertTrue(toggle.isEnabled)
+        XCTAssertEqual((toggle.value as? NSNumber)?.intValue, 0)
+
+        let status = settings.descendants(matching: .any)
+            .matching(identifier: "settings.login-item.status").firstMatch
+        XCTAssertTrue(status.waitForExistence(timeout: timeout))
+        XCTAssertTrue(accessibilityText(status).contains("Registration status unavailable."))
+
+        toggle.click()
+        XCTAssertEqual((toggle.value as? NSNumber)?.intValue, 1)
+        XCTAssertTrue(accessibilityText(status).contains("Enabled"))
+
+        toggle.click()
+        XCTAssertEqual((toggle.value as? NSNumber)?.intValue, 0)
+    }
     func testUpdateSettingsToggleAndLocalizedDisclosures() throws {
         continueAfterFailure = false
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appLanguage", "en"]

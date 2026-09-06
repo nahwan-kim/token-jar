@@ -1168,6 +1168,33 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.launchAtLoginStatus, .notRegistered)
         XCTAssertFalse(model.isLaunchAtLoginEnabled)
     }
+    func testLaunchAtLoginNotFoundCanRegisterOnExplicitEnable() {
+        let service = TestLaunchAtLoginService(status: .notFound)
+        let model = makeLaunchAtLoginModel(service)
+
+        XCTAssertEqual(model.launchAtLoginStatus, .notFound)
+        XCTAssertFalse(model.isLaunchAtLoginEnabled)
+
+        model.setLaunchAtLogin(true)
+
+        XCTAssertEqual(service.registerCount, 1)
+        XCTAssertEqual(model.launchAtLoginStatus, .enabled)
+        XCTAssertTrue(model.isLaunchAtLoginEnabled)
+        XCTAssertNil(model.launchAtLoginError)
+    }
+
+    func testLaunchAtLoginRegisterFailureLeavesNotFoundStatusAndPublishesError() {
+        let service = TestLaunchAtLoginService(status: .notFound)
+        service.registerError = .register
+        let model = makeLaunchAtLoginModel(service)
+
+        model.setLaunchAtLogin(true)
+
+        XCTAssertEqual(service.registerCount, 1)
+        XCTAssertEqual(model.launchAtLoginStatus, .notFound)
+        XCTAssertFalse(model.isLaunchAtLoginEnabled)
+        XCTAssertNotNil(model.launchAtLoginError)
+    }
 
     func testLaunchAtLoginErrorsStayReconciledWithServiceStatus() {
         let service = TestLaunchAtLoginService(status: .notRegistered)

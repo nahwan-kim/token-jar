@@ -1332,7 +1332,6 @@ struct ProviderSettingsView: View {
                 )
             )
             .toggleStyle(.checkbox)
-            .disabled(model.launchAtLoginStatus == .notFound)
             .accessibilityIdentifier("settings.login-item.toggle")
 
             Label(launchAtLoginStatusKey, systemImage: launchAtLoginStatusSymbol)
@@ -1355,12 +1354,21 @@ struct ProviderSettingsView: View {
                 .accessibilityIdentifier("settings.login-item.open-settings")
             }
 
-            if model.launchAtLoginError != nil {
-                Label("settings.login_item.error", systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("settings.login-item.error")
+            if let launchAtLoginError = model.launchAtLoginError {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("settings.login_item.error", systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("settings.login-item.error")
+
+                    Text(verbatim: launchAtLoginError.localizedDescription)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("settings.login-item.error.detail")
+                }
             }
         }
     }
@@ -1400,7 +1408,7 @@ struct ProviderSettingsView: View {
         case .requiresApproval:
             .orange
         case .notFound:
-            .red
+            model.launchAtLoginError == nil ? .secondary : .red
         }
     }
     private var updateSettings: some View {

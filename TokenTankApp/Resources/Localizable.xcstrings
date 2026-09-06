@@ -333,8 +333,8 @@
     "settings.login_item.status.not_found" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Login item unavailable for this app" } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "이 앱의 로그인 항목을 사용할 수 없음" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Registration status unavailable. Turn on to try registering." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "등록 상태를 확인할 수 없습니다. 켜서 등록을 시도하세요." } }
       }
     },
     "settings.login_item.status.not_registered" : {

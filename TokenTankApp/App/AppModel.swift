@@ -107,7 +107,11 @@ final class SMAppLaunchAtLoginService: LaunchAtLoginServicing {
 
 @MainActor
 private final class DisabledLaunchAtLoginService: LaunchAtLoginServicing {
-    private(set) var status: LaunchAtLoginStatus = .notRegistered
+    private(set) var status: LaunchAtLoginStatus
+
+    init(status: LaunchAtLoginStatus = .notRegistered) {
+        self.status = status
+    }
 
     func register() throws {
         status = .enabled
@@ -247,7 +251,11 @@ final class AppModel: ObservableObject {
         let resolvedLaunchAtLoginService: any LaunchAtLoginServicing = {
             if let suppliedLaunchAtLoginService { return suppliedLaunchAtLoginService }
             #if UITEST
-            return DisabledLaunchAtLoginService()
+            let initialStatus: LaunchAtLoginStatus =
+                ProcessInfo.processInfo.environment["TOKENTANK_UI_LOGIN_ITEM_STATUS"] == "notFound"
+                    ? .notFound
+                    : .notRegistered
+            return DisabledLaunchAtLoginService(status: initialStatus)
             #else
             guard
                 suppliedContext == nil,
