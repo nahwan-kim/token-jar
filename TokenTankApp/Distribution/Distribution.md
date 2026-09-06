@@ -68,8 +68,21 @@ Anyway, where available. Do not disable Gatekeeper/SIP, delete quarantine
 attributes, bypass malware warnings, or override a managed-device policy.
 
 Quit before manually replacing the app. Keep the previous version until the new
-one launches successfully. No Homebrew tap or automatic updater is provided in
-this initial channel.
+one launches successfully. The app checks public GitHub release metadata for newer
+versions, including prereleases, and offers an explicit link to the official
+release page. Automatic checks can be disabled in Settings; manual checking remains
+available. This is notification only: no automatic download, installation, helper,
+Homebrew tap, or Gatekeeper bypass is provided.
+
+Existing 0.1.0/0.1.1 installations have no checker; users must manually install a
+checker-capable build once. For every release, set `MARKETING_VERSION` to the
+numeric release tag without its leading `v`, and increment `CURRENT_PROJECT_VERSION`.
+The checker compares the installed `CFBundleShortVersionString` with release tags;
+a stale or inflated bundled version suppresses legitimate notifications. Marking
+a GitHub release as a prerelease does not change numeric version precedence.
+Publish the finished ZIP and checksum before making its release visible. Do not
+use drafts or non-version tags as release announcements. The repository's bundled
+version is an unreleased development version, not evidence of a published artifact.
 
 ## Future channel: Developer ID and notarization
 
@@ -291,7 +304,7 @@ Do not place a release claim in this guide. The operator attaches the actual pro
 
 ## Manual replacement and rollback (no updater)
 
-Token Jar v1 has **no** in-app updater, update framework, feed check, background update agent, login item, privileged installer, or update signing key. There is no automatic download or replacement path.
+Token Jar has an in-process release availability checker, not an installer. It reads public metadata from `https://api.github.com/repos/nahwan-kim/token-jar/releases` without provider credentials and offers official repository release links opened only on user action. Automatic checks are rate-limited to once per 24 hours and can be disabled in Settings; manual checks are also available. There is **no** update framework, background update agent, login item, privileged installer, update signing key, automatic download, or replacement path.
 
 1. Download `{{ARTIFACT_FILENAME}}` only from `{{OFFICIAL_DOWNLOAD_URL}}` using an HTTPS-capable client.
 2. Compare the downloaded SHA-256 with `{{ARTIFACT_SHA256}}`; reject a mismatch. Verify Developer ID identity, designated requirement, staple, and Gatekeeper result on the downloaded artifact before opening it.
@@ -299,7 +312,7 @@ Token Jar v1 has **no** in-app updater, update framework, feed check, background
 4. Move the verified `Token Jar.app` into the reviewed installation location and launch it once manually. Do not run two copies during replacement. Validate bundle identity and signature again after the move.
 5. If launch, signature, notarization, or source behavior is wrong, quit the candidate and restore the retained prior app from `{{ROLLBACK_DIRECTORY}}`. Re-run signature and Gatekeeper checks; retain both candidate and rollback evidence. Do not use `rm -rf`, an updater helper, or permission changes as a recovery step.
 
-A future updater would require a new threat model, dependency/license review, feed and update-signing design, key custody, rollback plan, privacy disclosure, Hardened Runtime review, and explicit approval. It cannot be introduced as packaging cleanup.
+A future automatic installer would require a new threat model, dependency/license review, feed and update-signing design, key custody, rollback plan, privacy disclosure, Hardened Runtime review, and explicit approval. The notification-only checker does not authorize automatic installation or introduce publisher authentication; GitHub metadata and ZIP checksums do not replace Developer ID or notarization.
 
 ## Secret and evidence handling
 

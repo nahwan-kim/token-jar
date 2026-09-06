@@ -66,6 +66,9 @@ struct DetailPopoverView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            if case let .available(version, url) = model.updateStatus {
+                UpdateAvailableBanner(version: version, releaseURL: url)
+            }
 
             Divider()
 
@@ -233,6 +236,42 @@ struct DetailPopoverView: View {
         DispatchQueue.main.async {
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+}
+private struct UpdateAvailableBanner: View {
+    let version: String
+    let releaseURL: URL
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "arrow.down.circle.fill")
+                .foregroundStyle(.blue)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text("settings.updates.status.available")
+                    Text(verbatim: version)
+                        .monospacedDigit()
+                }
+                .font(.callout.weight(.semibold))
+
+                Text("settings.updates.manual_install_short")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Link("settings.updates.release", destination: releaseURL)
+                    .font(.caption.weight(.medium))
+                    .accessibilityIdentifier("updates.available.release")
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color.accentColor.opacity(0.1))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("updates.available.banner")
     }
 }
 
@@ -1210,6 +1249,7 @@ struct ProviderSettingsView: View {
                 .pickerStyle(.menu)
                 .accessibilityIdentifier("settings.language.picker")
             }
+            updateSettings
             Section("settings.summary") {
                 ForEach(model.orderedPreferences) { preference in
                     VStack(alignment: .leading, spacing: 8) {
@@ -1310,6 +1350,95 @@ struct ProviderSettingsView: View {
         .formStyle(.grouped)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings.providers.content")
+    }
+
+    private var updateSettings: some View {
+        Section("settings.updates") {
+            Toggle(
+                "settings.updates.automatic",
+                isOn: $model.automaticallyChecksForUpdates
+            )
+            .toggleStyle(.checkbox)
+            .accessibilityIdentifier("settings.updates.automatic")
+
+            Button("settings.updates.check_now") {
+                model.checkForUpdates()
+            }
+            .controlSize(.small)
+            .disabled(isCheckingForUpdates)
+            .accessibilityIdentifier("settings.updates.check-now")
+
+            updateStatusView
+
+            Text("settings.updates.privacy")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("settings.updates.privacy")
+
+            Text("settings.updates.manual_install_warning")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("settings.updates.manual-install-warning")
+        }
+    }
+
+    @ViewBuilder
+    private var updateStatusView: some View {
+        switch model.updateStatus {
+        case .idle:
+            updateStatusLabel("settings.updates.status.idle", symbol: "questionmark.circle", tint: .secondary)
+        case .checking:
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("settings.updates.status.checking")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("settings.updates.status")
+        case .upToDate:
+            updateStatusLabel("settings.updates.status.up_to_date", symbol: "checkmark.circle", tint: .green)
+        case let .available(version, url):
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.down.circle")
+                        .accessibilityHidden(true)
+                    Text("settings.updates.status.available")
+                    Text(verbatim: version)
+                        .monospacedDigit()
+                }
+                .font(.caption.weight(.semibold))
+                Link("settings.updates.release", destination: url)
+                    .font(.caption)
+                    .accessibilityIdentifier("settings.updates.release")
+            }
+            .foregroundStyle(.blue)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("settings.updates.status")
+        case .failed:
+            updateStatusLabel("settings.updates.status.failed", symbol: "exclamationmark.triangle", tint: .orange)
+        }
+    }
+
+    private func updateStatusLabel(
+        _ title: LocalizedStringKey,
+        symbol: String,
+        tint: Color
+    ) -> some View {
+        Label(title, systemImage: symbol)
+            .font(.caption)
+            .foregroundStyle(tint)
+            .accessibilityIdentifier("settings.updates.status")
+    }
+
+    private var isCheckingForUpdates: Bool {
+        if case .checking = model.updateStatus {
+            return true
+        }
+        return false
     }
 
     private var sourceSettings: some View {

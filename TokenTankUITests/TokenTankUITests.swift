@@ -122,6 +122,62 @@ final class TokenTankUITests: XCTestCase {
         sourcesScreenshot.lifetime = .keepAlways
         add(sourcesScreenshot)
     }
+    func testUpdateSettingsToggleAndLocalizedDisclosures() throws {
+        continueAfterFailure = false
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appLanguage", "en"]
+        app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_SETTINGS"] = "1"
+        app.launch()
+
+        defer { app.terminate() }
+
+        let settings = app.windows["Token Jar UI Test Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 45))
+        settings.click()
+
+        let automatic = settings.checkBoxes["settings.updates.automatic"]
+        XCTAssertTrue(automatic.waitForExistence(timeout: timeout), settings.debugDescription)
+        let original = try XCTUnwrap(automatic.value as? NSNumber)
+        automatic.click()
+        XCTAssertNotEqual(automatic.value as? NSNumber, original)
+        automatic.click()
+        XCTAssertEqual(automatic.value as? NSNumber, original)
+
+        let checkNow = settings.buttons["settings.updates.check-now"]
+        XCTAssertTrue(checkNow.waitForExistence(timeout: timeout), settings.debugDescription)
+
+        let warning = settings.descendants(matching: .any)
+            .matching(identifier: "settings.updates.manual-install-warning")
+            .firstMatch
+        XCTAssertTrue(warning.waitForExistence(timeout: timeout), settings.debugDescription)
+        reveal(warning, in: settings)
+        XCTAssertTrue(accessibilityText(warning).contains("unnotarized"))
+
+        let privacy = settings.descendants(matching: .any)
+            .matching(identifier: "settings.updates.privacy")
+            .firstMatch
+        XCTAssertTrue(privacy.waitForExistence(timeout: timeout), settings.debugDescription)
+        XCTAssertTrue(accessibilityText(privacy).contains("GitHub"))
+        XCTAssertTrue(accessibilityText(privacy).contains("IP"))
+
+        let picker = settings.popUpButtons["settings.language.picker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: timeout), settings.debugDescription)
+        picker.click()
+        app.menuItems["한국어"].click()
+
+        XCTAssertTrue(
+            warning.waitForExistence(timeout: timeout),
+            settings.debugDescription
+        )
+        XCTAssertTrue(accessibilityText(warning).contains("공증되지"))
+        XCTAssertTrue(accessibilityText(privacy).contains("GitHub"))
+        XCTAssertTrue(accessibilityText(privacy).contains("IP"))
+
+        picker.click()
+        app.menuItems["English"].click()
+    }
+
     func testLanguageSwitcherUpdatesOpenWindows() {
         continueAfterFailure = false
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appLanguage", "en"]

@@ -168,7 +168,24 @@ Required findings:
 - The embedded Developer ID profile authorizes the exact application identifier used as the data-protection Keychain default group; profile-derived application/team identifiers and any Keychain group contain no extra shared group.
 - Hardened Runtime is enabled. App Sandbox is absent for v1, and no JIT, unsigned executable memory, library-validation bypass, broad temporary exception, privileged helper, Automation, or Apple Events entitlement is present.
 - `otool -L` and nested bundle inspection show no WebKit/browser runtime, SafariServices, Sparkle/updater framework, update agent, login item, XPC/helper, or privileged installer payload.
-- `LSUIElement` remains true; no Dock/browser/updater/helper process is introduced. There is no updater feed, background update check, update key, or automatic replacement path.
+- `LSUIElement` remains true; no Dock/browser/updater/helper process is introduced. An in-process public GitHub release check can notify users of newer versions; there is no update signing key, automatic download, or replacement path.
+
+### Release availability checking
+
+The app composition layer, separate from Provider capabilities, may request public
+release metadata from `https://api.github.com/repos/nahwan-kim/token-jar/releases`.
+No provider credentials, usage values, account identifiers, cookies, or telemetry
+are sent. GitHub necessarily receives ordinary connection metadata such as the
+client IP address. The ephemeral client rejects redirects and bounds time and
+response size. Automatic checks are limited to once per 24 hours, can be disabled
+in Settings, and stop with the app; manual checks are user-initiated. The preference
+and last-attempt time are app-owned UserDefaults, not provider snapshots.
+Prereleases participate because this is the current distribution channel; drafts
+and malformed version tags must not become update candidates. Release links are
+constructed for the fixed official repository rather than trusting response URLs,
+and open in the external browser only after an explicit click. Release metadata
+does not authenticate executable code. Installation remains manual and retains all
+Gatekeeper, checksum, provenance, and rollback requirements above.
 
 | Inspection | Actual output reference | Reviewer result |
 | --- | --- | --- |

@@ -372,6 +372,90 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "설정" } }
       }
     },
+    "settings.updates" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Updates" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "업데이트" } }
+      }
+    },
+    "settings.updates.automatic" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Automatically check for updates" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "업데이트 자동 확인" } }
+      }
+    },
+    "settings.updates.check_now" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Check for Updates Now" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "지금 업데이트 확인" } }
+      }
+    },
+    "settings.updates.manual_install_short" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Install manually from the release page." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "릴리스 페이지에서 직접 설치하세요." } }
+      }
+    },
+    "settings.updates.manual_install_warning" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Install updates manually from the GitHub release page. Downloads may be unnotarized, so macOS Gatekeeper may require explicit approval." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "GitHub 릴리스 페이지에서 업데이트를 직접 설치하세요. 다운로드한 앱은 공증되지 않았을 수 있어 macOS Gatekeeper에서 명시적 승인이 필요할 수 있습니다." } }
+      }
+    },
+    "settings.updates.privacy" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Automatic checks contact GitHub. GitHub can see your connection IP address; Token Jar sends no usage or account data." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "자동 확인은 GitHub에 연결합니다. GitHub는 연결 IP 주소를 볼 수 있으며, 토큰 항아리는 사용량이나 계정 데이터를 보내지 않습니다." } }
+      }
+    },
+    "settings.updates.release" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "View release page" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "릴리스 페이지 보기" } }
+      }
+    },
+    "settings.updates.status.available" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Update available" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "업데이트 있음" } }
+      }
+    },
+    "settings.updates.status.checking" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Checking for updates…" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "업데이트 확인 중…" } }
+      }
+    },
+    "settings.updates.status.failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn’t check for updates" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "업데이트를 확인할 수 없음" } }
+      }
+    },
+    "settings.updates.status.idle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Not checked yet" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "아직 확인하지 않음" } }
+      }
+    },
+    "settings.updates.status.up_to_date" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Up to date" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "최신 상태" } }
+      }
+    },
     "source.detail.claude" : {
       "extractionState" : "manual",
       "localizations" : {
