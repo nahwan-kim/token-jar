@@ -90,7 +90,7 @@ final class TokenTankUITests: XCTestCase {
         XCTAssertFalse(settings.textFields["settings.abbreviation.codex"].exists)
 
         let percentSign = settings.checkBoxes["settings.summary.percent-sign"]
-        reveal(percentSign, in: settings, deltaY: 400)
+        reveal(percentSign, in: settings)
         XCTAssertTrue(percentSign.exists)
         XCTAssertEqual(percentSign.label, "Show % symbol")
         let originalPercentSign = try XCTUnwrap(percentSign.value as? NSNumber)
