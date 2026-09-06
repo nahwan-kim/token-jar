@@ -37,7 +37,7 @@ struct ReleaseUpdateAvailability: Equatable, Sendable {
     let url: URL
 }
 
-enum ReleaseUpdateResult: Equatable, Sendable {
+enum ReleaseCheckResult: Equatable, Sendable {
     case notApplicable
     case upToDate
     case available(ReleaseUpdateAvailability)
@@ -306,7 +306,7 @@ struct ReleaseUpdateChecker: Sendable {
 
     var isApplicable: Bool { currentVersion != nil }
 
-    func check() async throws -> ReleaseUpdateResult {
+    func check() async throws -> ReleaseCheckResult {
         guard let currentVersion else { return .notApplicable }
         try Task.checkCancellation()
         let releases = try await client.fetchReleases()
