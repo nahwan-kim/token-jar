@@ -136,6 +136,56 @@ final class TokenTankUITests: XCTestCase {
         sourcesScreenshot.lifetime = .keepAlways
         add(sourcesScreenshot)
     }
+    func testLaunchAtLoginToggleAndLocalization() throws {
+        continueAfterFailure = false
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appLanguage", "en"]
+        app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_SETTINGS"] = "1"
+        app.launch()
+        defer { app.terminate() }
+
+        let settings = app.windows["Token Jar UI Test Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 45))
+        settings.click()
+
+        let toggle = settings.checkBoxes["settings.login-item.toggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: timeout), settings.debugDescription)
+        reveal(toggle, in: settings)
+        XCTAssertEqual(toggle.label, "Launch Token Jar at login")
+        XCTAssertEqual((toggle.value as? NSNumber)?.intValue, 0)
+        toggle.click()
+        XCTAssertEqual((toggle.value as? NSNumber)?.intValue, 1)
+
+        let status = settings.descendants(matching: .any)
+            .matching(identifier: "settings.login-item.status").firstMatch
+        XCTAssertTrue(status.waitForExistence(timeout: timeout))
+        XCTAssertTrue(accessibilityText(status).contains("Enabled"))
+        toggle.click()
+        XCTAssertEqual((toggle.value as? NSNumber)?.intValue, 0)
+        XCTAssertTrue(accessibilityText(status).contains("Not enabled"))
+
+        let picker = settings.popUpButtons["settings.language.picker"]
+        reveal(picker, in: settings)
+        picker.click()
+        app.menuItems["한국어"].click()
+        XCTAssertEqual(toggle.label, "로그인 시 Token Jar 실행")
+        XCTAssertTrue(accessibilityText(status).contains("활성화되지 않음"))
+        reveal(toggle, in: settings)
+        toggle.click()
+        XCTAssertEqual((toggle.value as? NSNumber)?.intValue, 1)
+        XCTAssertTrue(accessibilityText(status).contains("활성화됨"))
+        toggle.click()
+        XCTAssertEqual((toggle.value as? NSNumber)?.intValue, 0)
+
+        let screenshot = XCTAttachment(screenshot: settings.screenshot())
+        screenshot.name = "로그인 시 자동실행 설정"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        reveal(picker, in: settings)
+        picker.click()
+        app.menuItems["English"].click()
+    }
     func testUpdateSettingsToggleAndLocalizedDisclosures() throws {
         continueAfterFailure = false
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appLanguage", "en"]

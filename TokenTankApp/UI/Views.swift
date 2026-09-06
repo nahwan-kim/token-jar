@@ -1191,6 +1191,7 @@ struct ProviderSettingsView: View {
         }
         .frame(minWidth: 620, minHeight: 520)
         .task {
+            model.refreshLaunchAtLoginStatus()
             #if UITEST
             model.installUITestStates()
             #else
@@ -1210,6 +1211,7 @@ struct ProviderSettingsView: View {
                 .pickerStyle(.menu)
                 .accessibilityIdentifier("settings.language.picker")
             }
+            launchAtLoginSettings
             updateSettings
             Section("settings.summary") {
                 Toggle(
@@ -1314,6 +1316,93 @@ struct ProviderSettingsView: View {
         .accessibilityIdentifier("settings.providers.content")
     }
 
+    private var launchAtLoginSettings: some View {
+        Section("settings.login_item") {
+            Text("settings.login_item.explanation")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("settings.login-item.explanation")
+
+            Toggle(
+                "settings.login_item.toggle",
+                isOn: Binding(
+                    get: { model.isLaunchAtLoginEnabled },
+                    set: { model.setLaunchAtLogin($0) }
+                )
+            )
+            .toggleStyle(.checkbox)
+            .disabled(model.launchAtLoginStatus == .notFound)
+            .accessibilityIdentifier("settings.login-item.toggle")
+
+            Label(launchAtLoginStatusKey, systemImage: launchAtLoginStatusSymbol)
+                .font(.caption)
+                .foregroundStyle(launchAtLoginStatusColor)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("settings.login-item.status")
+
+            if model.launchAtLoginStatus == .requiresApproval {
+                Text("settings.login_item.approval")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("settings.login-item.approval")
+
+                Button("action.allow_system_settings") {
+                    model.openLaunchAtLoginSettings()
+                }
+                .controlSize(.small)
+                .accessibilityIdentifier("settings.login-item.open-settings")
+            }
+
+            if model.launchAtLoginError != nil {
+                Label("settings.login_item.error", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("settings.login-item.error")
+            }
+        }
+    }
+
+    private var launchAtLoginStatusKey: LocalizedStringKey {
+        switch model.launchAtLoginStatus {
+        case .enabled:
+            "settings.login_item.status.enabled"
+        case .notRegistered:
+            "settings.login_item.status.not_registered"
+        case .requiresApproval:
+            "settings.login_item.status.requires_approval"
+        case .notFound:
+            "settings.login_item.status.not_found"
+        }
+    }
+
+    private var launchAtLoginStatusSymbol: String {
+        switch model.launchAtLoginStatus {
+        case .enabled:
+            "checkmark.circle.fill"
+        case .notRegistered:
+            "circle"
+        case .requiresApproval:
+            "exclamationmark.circle"
+        case .notFound:
+            "questionmark.circle"
+        }
+    }
+
+    private var launchAtLoginStatusColor: Color {
+        switch model.launchAtLoginStatus {
+        case .enabled:
+            .green
+        case .notRegistered:
+            .secondary
+        case .requiresApproval:
+            .orange
+        case .notFound:
+            .red
+        }
+    }
     private var updateSettings: some View {
         Section("settings.updates") {
             if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {

@@ -295,6 +295,69 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "키체인에 저장" } }
       }
     },
+    "settings.login_item" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Launch at Login" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "로그인 시 실행" } }
+      }
+    },
+    "settings.login_item.approval" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "macOS requires approval before Token Jar can launch at login." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Token Jar를 로그인 시 실행하려면 macOS에서 먼저 승인이 필요합니다." } }
+      }
+    },
+    "settings.login_item.error" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Could not update the login item. Check its status in System Settings." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "로그인 항목을 업데이트할 수 없습니다. 시스템 설정에서 상태를 확인하세요." } }
+      }
+    },
+    "settings.login_item.explanation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Start Token Jar automatically when you log in. This stays off until you enable it." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "로그인할 때 Token Jar를 자동으로 시작합니다. 직접 켜기 전까지는 꺼져 있습니다." } }
+      }
+    },
+    "settings.login_item.status.enabled" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Enabled" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "활성화됨" } }
+      }
+    },
+    "settings.login_item.status.not_found" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Login item unavailable for this app" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "이 앱의 로그인 항목을 사용할 수 없음" } }
+      }
+    },
+    "settings.login_item.status.not_registered" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Not enabled" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "활성화되지 않음" } }
+      }
+    },
+    "settings.login_item.status.requires_approval" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Approval required in System Settings" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "시스템 설정에서 승인 필요" } }
+      }
+    },
+    "settings.login_item.toggle" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Launch Token Jar at login" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "로그인 시 Token Jar 실행" } }
+      }
+    },
     "settings.move_down" : {
       "extractionState" : "manual",
       "localizations" : {

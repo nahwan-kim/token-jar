@@ -3,6 +3,8 @@ import Foundation
 import TokenTankCore
 import TokenTankDomain
 import TokenTankProviders
+import AppKit
+import ServiceManagement
 
 struct CredentialField: Identifiable, Sendable {
     let providerID: ProviderID
@@ -45,6 +47,77 @@ struct CodexAccountMenuValue: Equatable, Identifiable, Sendable {
     let isStale: Bool
 
     var id: String { sourceID }
+}
+enum LaunchAtLoginStatus: Equatable, Sendable {
+    case enabled
+    case notRegistered
+    case requiresApproval
+    case notFound
+
+    var isRegistered: Bool {
+        switch self {
+        case .enabled, .requiresApproval:
+            return true
+        case .notRegistered, .notFound:
+            return false
+        }
+    }
+}
+
+@MainActor
+protocol LaunchAtLoginServicing: AnyObject {
+    var status: LaunchAtLoginStatus { get }
+
+    func register() throws
+    func unregister() throws
+    func openSystemSettings()
+}
+
+@MainActor
+final class SMAppLaunchAtLoginService: LaunchAtLoginServicing {
+    private let service = SMAppService.mainApp
+
+    var status: LaunchAtLoginStatus {
+        switch service.status {
+        case .enabled:
+            return .enabled
+        case .notRegistered:
+            return .notRegistered
+        case .requiresApproval:
+            return .requiresApproval
+        case .notFound:
+            return .notFound
+        @unknown default:
+            return .notFound
+        }
+    }
+
+    func register() throws {
+        try service.register()
+    }
+
+    func unregister() throws {
+        try service.unregister()
+    }
+
+    func openSystemSettings() {
+        SMAppService.openSystemSettingsLoginItems()
+    }
+}
+
+@MainActor
+private final class DisabledLaunchAtLoginService: LaunchAtLoginServicing {
+    private(set) var status: LaunchAtLoginStatus = .notRegistered
+
+    func register() throws {
+        status = .enabled
+    }
+
+    func unregister() throws {
+        status = .notRegistered
+    }
+
+    func openSystemSettings() {}
 }
 
 @MainActor
@@ -125,6 +198,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var credentialErrorCodes: [ProviderID: String] = [:]
     @Published private(set) var canCheckForUpdates = false
     @Published private(set) var updaterError = false
+    @Published private(set) var launchAtLoginStatus: LaunchAtLoginStatus
+    @Published private(set) var launchAtLoginError: Error?
     @Published private var automaticUpdateChecksEnabled: Bool
     var automaticallyChecksForUpdates: Bool {
         get { automaticUpdateChecksEnabled }
@@ -156,6 +231,8 @@ final class AppModel: ObservableObject {
     private var lastLoggedStateCodes: [ProviderID: String] = [:]
     private let updater: (any AppUpdating)?
     private var updaterStartAttempted = false
+    private let launchAtLoginService: any LaunchAtLoginServicing
+    private var applicationActivationObserver: AnyCancellable?
 
     init(
         adapters suppliedAdapters: [any ProviderAdapter]? = nil,
@@ -163,9 +240,28 @@ final class AppModel: ObservableObject {
         preferencesStore suppliedPreferencesStore: (any PreferencesStore)? = nil,
         context suppliedContext: CollectionContext? = nil,
         languageDefaults: UserDefaults = .standard,
-        updater suppliedUpdater: (any AppUpdating)? = nil
+        updater suppliedUpdater: (any AppUpdating)? = nil,
+        launchAtLoginService suppliedLaunchAtLoginService: (any LaunchAtLoginServicing)? = nil
     ) {
         self.languageDefaults = languageDefaults
+        let resolvedLaunchAtLoginService: any LaunchAtLoginServicing = {
+            if let suppliedLaunchAtLoginService { return suppliedLaunchAtLoginService }
+            #if UITEST
+            return DisabledLaunchAtLoginService()
+            #else
+            guard
+                suppliedContext == nil,
+                NSClassFromString("XCTestCase") == nil,
+                ProcessInfo.processInfo.environment["TOKENTANK_DISABLE_AUTOSTART"] != "1"
+            else {
+                return DisabledLaunchAtLoginService()
+            }
+            return SMAppLaunchAtLoginService()
+            #endif
+        }()
+        self.launchAtLoginService = resolvedLaunchAtLoginService
+        self._launchAtLoginStatus = Published(initialValue: resolvedLaunchAtLoginService.status)
+        self._launchAtLoginError = Published(initialValue: nil)
         let resolvedUpdater: (any AppUpdating)? = {
             if let suppliedUpdater { return suppliedUpdater }
             #if UITEST
@@ -222,6 +318,13 @@ final class AppModel: ObservableObject {
             guard let self, !self.isStopping, !self.updaterError else { return }
             self.canCheckForUpdates = canCheckForUpdates
         }
+        applicationActivationObserver = NotificationCenter.default
+            .publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.refreshLaunchAtLoginStatus()
+                }
+            }
     }
 
     deinit {
@@ -349,6 +452,39 @@ final class AppModel: ObservableObject {
             updater.canCheckForUpdates
         else { return }
         updater.checkForUpdates()
+    }
+    var isLaunchAtLoginEnabled: Bool {
+        launchAtLoginStatus.isRegistered
+    }
+
+    func refreshLaunchAtLoginStatus() {
+        guard !isStopping else { return }
+        launchAtLoginStatus = launchAtLoginService.status
+        launchAtLoginError = nil
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        guard !isStopping else { return }
+        refreshLaunchAtLoginStatus()
+        guard launchAtLoginStatus.isRegistered != enabled else { return }
+
+        do {
+            if enabled {
+                try launchAtLoginService.register()
+            } else {
+                try launchAtLoginService.unregister()
+            }
+        } catch {
+            launchAtLoginError = error
+            launchAtLoginStatus = launchAtLoginService.status
+            return
+        }
+        refreshLaunchAtLoginStatus()
+    }
+
+    func openLaunchAtLoginSettings() {
+        guard !isStopping else { return }
+        launchAtLoginService.openSystemSettings()
     }
 
     func menuValue(for preference: ProviderPreference) -> String {

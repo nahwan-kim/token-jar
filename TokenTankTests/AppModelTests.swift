@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import XCTest
 @testable import TokenTank
 import TokenTankCore
@@ -1148,6 +1149,104 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(updater.automaticallyChecksForUpdates)
     }
 
+    func testLaunchAtLoginEnableAndDisableUseInjectedService() {
+        let service = TestLaunchAtLoginService(status: .notRegistered)
+        let model = makeLaunchAtLoginModel(service)
+
+        XCTAssertEqual(model.launchAtLoginStatus, .notRegistered)
+        XCTAssertFalse(model.isLaunchAtLoginEnabled)
+
+        model.setLaunchAtLogin(true)
+        XCTAssertEqual(service.registerCount, 1)
+        XCTAssertEqual(model.launchAtLoginStatus, .enabled)
+        XCTAssertTrue(model.isLaunchAtLoginEnabled)
+        model.setLaunchAtLogin(true)
+        XCTAssertEqual(service.registerCount, 1)
+
+        model.setLaunchAtLogin(false)
+        XCTAssertEqual(service.unregisterCount, 1)
+        XCTAssertEqual(model.launchAtLoginStatus, .notRegistered)
+        XCTAssertFalse(model.isLaunchAtLoginEnabled)
+    }
+
+    func testLaunchAtLoginErrorsStayReconciledWithServiceStatus() {
+        let service = TestLaunchAtLoginService(status: .notRegistered)
+        let model = makeLaunchAtLoginModel(service)
+
+        service.registerError = .register
+        model.setLaunchAtLogin(true)
+        XCTAssertEqual(model.launchAtLoginStatus, .notRegistered)
+        XCTAssertNotNil(model.launchAtLoginError)
+
+        service.registerError = nil
+        service.status = .enabled
+        model.refreshLaunchAtLoginStatus()
+        XCTAssertEqual(model.launchAtLoginStatus, .enabled)
+        XCTAssertNil(model.launchAtLoginError)
+
+        service.unregisterError = .unregister
+        model.setLaunchAtLogin(false)
+        XCTAssertEqual(model.launchAtLoginStatus, .enabled)
+        XCTAssertNotNil(model.launchAtLoginError)
+
+        service.unregisterError = nil
+        service.status = .notFound
+        model.refreshLaunchAtLoginStatus()
+        XCTAssertEqual(model.launchAtLoginStatus, .notFound)
+        XCTAssertFalse(model.isLaunchAtLoginEnabled)
+        XCTAssertNil(model.launchAtLoginError)
+    }
+
+    func testLaunchAtLoginApprovalOpensLoginItemsSettings() {
+        let service = TestLaunchAtLoginService(status: .requiresApproval)
+        let model = makeLaunchAtLoginModel(service)
+
+        model.refreshLaunchAtLoginStatus()
+        XCTAssertEqual(model.launchAtLoginStatus, .requiresApproval)
+        XCTAssertTrue(model.isLaunchAtLoginEnabled)
+
+        model.openLaunchAtLoginSettings()
+        XCTAssertEqual(service.openSettingsCount, 1)
+
+        model.setLaunchAtLogin(true)
+        XCTAssertEqual(service.registerCount, 0)
+        XCTAssertEqual(model.launchAtLoginStatus, .requiresApproval)
+
+        model.setLaunchAtLogin(false)
+        XCTAssertEqual(service.unregisterCount, 1)
+        XCTAssertEqual(model.launchAtLoginStatus, .notRegistered)
+        XCTAssertFalse(model.isLaunchAtLoginEnabled)
+    }
+
+    func testLaunchAtLoginRefreshesWhenApplicationBecomesActive() async {
+        let service = TestLaunchAtLoginService(status: .notRegistered)
+        let model = makeLaunchAtLoginModel(service)
+
+        model.refreshLaunchAtLoginStatus()
+        XCTAssertEqual(model.launchAtLoginStatus, .notRegistered)
+
+        service.status = .enabled
+        NotificationCenter.default.post(
+            name: NSApplication.didBecomeActiveNotification,
+            object: nil
+        )
+
+        let refreshed = await eventually {
+            model.launchAtLoginStatus == .enabled
+        }
+        XCTAssertTrue(refreshed)
+    }
+
+    private func makeLaunchAtLoginModel(_ service: any LaunchAtLoginServicing) -> AppModel {
+        let credentials = InMemoryCredentialStore()
+        return AppModel(
+            adapters: [],
+            credentialStore: credentials,
+            preferencesStore: MemoryPreferencesStore(),
+            context: makeContext(credentials: credentials),
+            launchAtLoginService: service
+        )
+    }
     private func makeContext(credentials: any AppCredentialStore) -> CollectionContext {
         CollectionContext(
             network: UnavailableNetworkClient(),
@@ -1285,6 +1384,44 @@ private actor TestAppAdapter: ProviderAdapter {
             throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "test.no-result")
         }
         return try results.removeFirst().get()
+    }
+}
+@MainActor
+private final class TestLaunchAtLoginService: LaunchAtLoginServicing {
+    enum TestError: Error {
+        case register
+        case unregister
+    }
+
+    var status: LaunchAtLoginStatus
+    var registerError: TestError?
+    var unregisterError: TestError?
+    private(set) var registerCount = 0
+    private(set) var unregisterCount = 0
+    private(set) var openSettingsCount = 0
+
+    init(status: LaunchAtLoginStatus) {
+        self.status = status
+    }
+
+    func register() throws {
+        registerCount += 1
+        if let registerError {
+            throw registerError
+        }
+        status = .enabled
+    }
+
+    func unregister() throws {
+        unregisterCount += 1
+        if let unregisterError {
+            throw unregisterError
+        }
+        status = .notRegistered
+    }
+
+    func openSystemSettings() {
+        openSettingsCount += 1
     }
 }
 @MainActor

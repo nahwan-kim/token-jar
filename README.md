@@ -32,6 +32,7 @@
 - **Codex 계정별 확인** — 기본 계정과 선택적인 두 번째 `CODEX_HOME`의 한도를 따로 표시합니다.
 - **자동 갱신과 수동 새로고침** — 5분 간격으로 갱신하며, 실패하면 앱 실행 중 마지막 성공 값과 오류 상태를 구분합니다.
 - **한국어와 English** — 설정에서 바로 전환합니다.
+- **로그인 시 자동 실행 선택** — 설정에서 ‘로그인 시 실행’을 직접 켜거나 끌 수 있습니다. macOS 승인이 필요하면 시스템 설정에서 허용하며, 기본값은 꺼짐입니다.
 - **네이티브 macOS 앱** — SwiftUI 기반. Dock 아이콘과 내장 브라우저 없이 동작하며, Sparkle 업데이트 창에서 새 버전을 내려받아 설치·재시작할 수 있습니다.
 
 ## 시작하기
@@ -51,6 +52,7 @@ Gatekeeper 전체 비활성화나 quarantine 속성 제거는 필요하지 않�
 1. 사용할 서비스의 공식 앱이나 CLI에 먼저 로그인합니다.
 2. Token Jar를 실행하고 메뉴 막대에서 사용량 창을 엽니다.
 3. 설정에서 표시할 서비스와 대표 한도를 선택합니다.
+4. 필요하면 설정의 ‘로그인 시 실행’을 켜고 macOS 시스템 설정에서 승인을 완료합니다. 이 옵션은 기본으로 꺼져 있습니다.
 
 Token Jar 자체 계정은 필요하지 않습니다. 세션이 만료되면 해당 서비스의 공식 앱이나 CLI에서 다시 로그인하세요.
 
@@ -133,6 +135,7 @@ Scripts/               접근 경계 검사와 유휴 성능 측정
 ## About
 
 Token Jar is a native macOS menu bar app for checking AI usage limits across Codex, Claude, Grok, Cursor, and Doubao. It keeps provider-specific quotas separate, supports English and Korean, and uses existing official app or CLI sessions rather than introducing another account.
+In Settings, “Launch at Login” is off by default; enable it explicitly and approve it in macOS System Settings when prompted.
 
 Provider names and logos belong to their respective owners. Token Jar is an independent project and is not endorsed by those providers. [CodexBar](https://github.com/steipete/CodexBar) is referenced for provider integration behavior; it is not a runtime dependency. The README banner was generated with GPT Image 2 through ima2 using the app icon as a visual reference.
 
