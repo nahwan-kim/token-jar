@@ -123,26 +123,15 @@ final class AppModel: ObservableObject {
     private let languageDefaults: UserDefaults
     @Published private(set) var isRefreshing = false
     @Published private(set) var credentialErrorCodes: [ProviderID: String] = [:]
-    @Published private(set) var updateStatus: ReleaseUpdateStatus = .idle
-    @Published var automaticallyChecksForUpdates: Bool {
-        didSet {
-            guard automaticallyChecksForUpdates != oldValue else { return }
-            languageDefaults.set(
-                automaticallyChecksForUpdates,
-                forKey: ReleaseUpdateDefaults.automaticChecksEnabledKey
-            )
-            if automaticallyChecksForUpdates {
-                scheduleAutomaticReleaseChecks()
-            } else {
-                updateScheduleTask?.cancel()
-                updateScheduleTask = nil
-                if !updateCheckIsManual {
-                    updateCheckTask?.cancel()
-                    if updateStatus == .checking {
-                        updateStatus = .idle
-                    }
-                }
-            }
+    @Published private(set) var canCheckForUpdates = false
+    @Published private(set) var updaterError = false
+    @Published private var automaticUpdateChecksEnabled: Bool
+    var automaticallyChecksForUpdates: Bool {
+        get { automaticUpdateChecksEnabled }
+        set {
+            guard !isStopping, automaticUpdateChecksEnabled != newValue else { return }
+            updater?.automaticallyChecksForUpdates = newValue
+            automaticUpdateChecksEnabled = updater?.automaticallyChecksForUpdates ?? newValue
         }
     }
     @Published private var credentialDrafts: [String: String] = [:]
@@ -165,12 +154,8 @@ final class AppModel: ObservableObject {
     private var refreshOperations: [UUID: Task<Void, Never>] = [:]
     private var isStopping = false
     private var lastLoggedStateCodes: [ProviderID: String] = [:]
-    private let releaseUpdateChecker: ReleaseUpdateChecker?
-    private let releaseUpdateClock: any TokenTankClock
-    private var updateCheckTask: Task<Void, Never>?
-    private var updateScheduleTask: Task<Void, Never>?
-    private var updateCheckOperationID: UUID?
-    private var updateCheckIsManual = false
+    private let updater: (any AppUpdating)?
+    private var updaterStartAttempted = false
 
     init(
         adapters suppliedAdapters: [any ProviderAdapter]? = nil,
@@ -178,31 +163,28 @@ final class AppModel: ObservableObject {
         preferencesStore suppliedPreferencesStore: (any PreferencesStore)? = nil,
         context suppliedContext: CollectionContext? = nil,
         languageDefaults: UserDefaults = .standard,
-        releaseUpdateTransport: (any ReleaseUpdateTransport)? = nil,
-        releaseUpdateClock: (any TokenTankClock)? = nil,
-        currentVersion: String? = nil
+        updater suppliedUpdater: (any AppUpdating)? = nil
     ) {
         self.languageDefaults = languageDefaults
-        self.automaticallyChecksForUpdates = (
-            languageDefaults.object(forKey: ReleaseUpdateDefaults.automaticChecksEnabledKey) as? NSNumber
-        )?.boolValue ?? true
-        let resolvedReleaseClock: any TokenTankClock
-        if let releaseUpdateClock {
-            resolvedReleaseClock = releaseUpdateClock
-        } else if let suppliedContext {
-            resolvedReleaseClock = suppliedContext.clock
-        } else {
-            resolvedReleaseClock = SystemClock()
-        }
-        self.releaseUpdateClock = resolvedReleaseClock
-        let resolvedTransport: (any ReleaseUpdateTransport)? = releaseUpdateTransport
-            ?? (suppliedContext == nil ? URLSessionReleaseUpdateTransport() : nil)
-        self.releaseUpdateChecker = resolvedTransport.map {
-            ReleaseUpdateChecker(
-                client: GitHubReleaseAPIClient(transport: $0),
-                currentVersion: currentVersion
-            )
-        }
+        let resolvedUpdater: (any AppUpdating)? = {
+            if let suppliedUpdater { return suppliedUpdater }
+            #if UITEST
+            return nil
+            #else
+            guard
+                suppliedContext == nil,
+                NSClassFromString("XCTestCase") == nil,
+                ProcessInfo.processInfo.environment["TOKENTANK_DISABLE_AUTOSTART"] != "1"
+            else { return nil }
+            return AppUpdater()
+            #endif
+        }()
+        self.updater = resolvedUpdater
+        self._canCheckForUpdates = Published(initialValue: resolvedUpdater?.canCheckForUpdates ?? false)
+        self._updaterError = Published(initialValue: false)
+        self._automaticUpdateChecksEnabled = Published(
+            initialValue: resolvedUpdater?.automaticallyChecksForUpdates ?? true
+        )
         self.language = languageDefaults.string(forKey: "appLanguage").flatMap(AppLanguage.init(rawValue:))
             ?? AppLanguage.preferred(Locale.preferredLanguages)
         let defaultAdapters = TokenTankProviderRegistry.defaultAdapters()
@@ -236,13 +218,15 @@ final class AppModel: ObservableObject {
             self.coordinator = RefreshCoordinator(adapters: adapterList, context: context)
             self.diagnostics = diagnostics
         }
+        resolvedUpdater?.onCanCheckForUpdatesChanged = { [weak self] canCheckForUpdates in
+            guard let self, !self.isStopping, !self.updaterError else { return }
+            self.canCheckForUpdates = canCheckForUpdates
+        }
     }
 
     deinit {
         streamTask?.cancel()
         preferenceSaveTask?.cancel()
-        updateCheckTask?.cancel()
-        updateScheduleTask?.cancel()
         for operation in credentialOperations.values { operation.task.cancel() }
         for task in refreshOperations.values { task.cancel() }
     }
@@ -250,6 +234,16 @@ final class AppModel: ObservableObject {
     func ensureStarted() {
         guard !started, !isStopping else { return }
         started = true
+        if !updaterStartAttempted, let updater {
+            updaterStartAttempted = true
+            do {
+                try updater.start()
+                canCheckForUpdates = updater.canCheckForUpdates
+            } catch {
+                updaterError = true
+                canCheckForUpdates = false
+            }
+        }
         let coordinator = coordinator
         let preferencesStore = preferencesStore
         let diagnostics = diagnostics
@@ -278,7 +272,6 @@ final class AppModel: ObservableObject {
             }
             await coordinator.stop()
         }
-        scheduleAutomaticReleaseChecks()
     }
 
     func stop() async {
@@ -287,13 +280,6 @@ final class AppModel: ObservableObject {
         let runningStreamTask = streamTask
         streamTask = nil
         runningStreamTask?.cancel()
-        let pendingUpdateScheduleTask = updateScheduleTask
-        updateScheduleTask = nil
-        pendingUpdateScheduleTask?.cancel()
-        let pendingUpdateCheckTask = updateCheckTask
-        updateCheckTask = nil
-        updateCheckOperationID = nil
-        pendingUpdateCheckTask?.cancel()
 
         let pendingPreferenceTask = preferenceSaveTask
         preferenceSaveTask = nil
@@ -312,8 +298,6 @@ final class AppModel: ObservableObject {
 
         await runningStreamTask?.value
         await pendingPreferenceTask?.value
-        await pendingUpdateScheduleTask?.value
-        await pendingUpdateCheckTask?.value
         for operation in pendingRefreshOperations {
             await operation.value
         }
@@ -334,8 +318,7 @@ final class AppModel: ObservableObject {
         states = Dictionary(uniqueKeysWithValues: ProviderID.allCases.map { ($0, .neverLoaded) })
         isRefreshing = false
         lastLoggedStateCodes.removeAll(keepingCapacity: false)
-        updateStatus = .idle
-        updateCheckIsManual = false
+        canCheckForUpdates = false
         if started {
             await diagnostics.record(
                 DiagnosticEvent(level: .info, category: "lifecycle", code: "lifecycle.stopped")
@@ -358,8 +341,14 @@ final class AppModel: ObservableObject {
         startRefresh(providerID: providerID)
     }
     func checkForUpdates() {
-        guard !isStopping else { return }
-        startReleaseCheck(manual: true)
+        guard
+            started,
+            !isStopping,
+            canCheckForUpdates,
+            let updater,
+            updater.canCheckForUpdates
+        else { return }
+        updater.checkForUpdates()
     }
 
     func menuValue(for preference: ProviderPreference) -> String {
@@ -882,136 +871,6 @@ final class AppModel: ObservableObject {
         credentialOperations[providerID] = CredentialOperation(id: operationID, task: task)
     }
 
-    private func scheduleAutomaticReleaseChecks() {
-        updateScheduleTask?.cancel()
-        updateScheduleTask = nil
-        guard
-            started,
-            automaticallyChecksForUpdates,
-            let checker = releaseUpdateChecker,
-            checker.isApplicable
-        else { return }
-
-        let clock = releaseUpdateClock
-        updateScheduleTask = Task { [weak self, clock] in
-            do {
-                while !Task.isCancelled {
-                    guard
-                        self?.started == true,
-                        self?.isStopping == false,
-                        self?.automaticallyChecksForUpdates == true
-                    else { return }
-
-                    let now = await clock.now()
-                    guard
-                        self?.started == true,
-                        self?.isStopping == false,
-                        self?.automaticallyChecksForUpdates == true
-                    else { return }
-
-                    let delay = self?.automaticReleaseCheckDelay(now: now) ?? 0
-                    if delay > 0 {
-                        try await clock.sleep(for: .seconds(delay))
-                        continue
-                    }
-
-                    self?.startReleaseCheck(manual: false)
-                    try await clock.sleep(for: .seconds(ReleaseUpdateDefaults.interval))
-                }
-            } catch is CancellationError {
-                return
-            } catch {
-                return
-            }
-        }
-    }
-
-    private func automaticReleaseCheckDelay(now: Date) -> TimeInterval {
-        guard let lastAttempt = lastReleaseAttemptDate() else { return 0 }
-        let elapsed = now.timeIntervalSince(lastAttempt)
-        guard elapsed.isFinite else { return 0 }
-        guard elapsed >= 0 else { return 0 }
-        return max(0, ReleaseUpdateDefaults.interval - elapsed)
-    }
-
-    private func lastReleaseAttemptDate() -> Date? {
-        guard let value = languageDefaults.object(forKey: ReleaseUpdateDefaults.lastAttemptDateKey) else {
-            return nil
-        }
-        if let date = value as? Date, date.timeIntervalSince1970.isFinite {
-            return date
-        }
-        if let number = value as? NSNumber, number.doubleValue.isFinite {
-            return Date(timeIntervalSince1970: number.doubleValue)
-        }
-        return nil
-    }
-
-    private func startReleaseCheck(manual: Bool) {
-        guard
-            !isStopping,
-            updateCheckTask == nil,
-            let checker = releaseUpdateChecker,
-            checker.isApplicable
-        else { return }
-
-        let operationID = UUID()
-        let previousStatus = updateStatus
-        let clock = releaseUpdateClock
-        let defaults = languageDefaults
-        updateCheckOperationID = operationID
-        updateCheckIsManual = manual
-        updateStatus = .checking
-
-        updateCheckTask = Task { [weak self, checker, clock, defaults, operationID, previousStatus] in
-            defer { self?.finishReleaseCheck(operationID) }
-
-            do {
-                let now = await clock.now()
-                try Task.checkCancellation()
-                guard self?.isStopping == false else { return }
-
-                if !manual && (self?.automaticReleaseCheckDelay(now: now) ?? 0) > 0 {
-                    if self?.updateStatus == .checking {
-                        self?.updateStatus = previousStatus
-                    }
-                    return
-                }
-
-                defaults.set(
-                    now.timeIntervalSince1970,
-                    forKey: ReleaseUpdateDefaults.lastAttemptDateKey
-                )
-                let result = try await checker.check()
-                try Task.checkCancellation()
-                guard self?.isStopping == false else { return }
-
-                switch result {
-                case .notApplicable:
-                    self?.updateStatus = .idle
-                case .upToDate:
-                    self?.updateStatus = .upToDate
-                case let .available(availability):
-                    self?.updateStatus = .available(
-                        version: availability.version,
-                        url: availability.url
-                    )
-                }
-            } catch is CancellationError {
-                return
-            } catch {
-                guard !Task.isCancelled, self?.isStopping == false else { return }
-                self?.updateStatus = .failed
-            }
-        }
-    }
-
-    private func finishReleaseCheck(_ operationID: UUID) {
-        guard updateCheckOperationID == operationID else { return }
-        updateCheckTask = nil
-        updateCheckOperationID = nil
-        updateCheckIsManual = false
-    }
     private func startRefresh(providerID: ProviderID? = nil) {
         guard !isStopping else { return }
         let operationID = UUID()

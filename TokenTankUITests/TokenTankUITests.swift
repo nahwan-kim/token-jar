@@ -154,12 +154,21 @@ final class TokenTankUITests: XCTestCase {
             .matching(identifier: "settings.updates.current-version")
             .firstMatch
         XCTAssertTrue(currentVersion.waitForExistence(timeout: timeout))
-        let englishVersion = accessibilityText(currentVersion)
+        let englishVersion = accessibilityText(currentVersion).trimmingCharacters(in: .whitespacesAndNewlines)
         XCTAssertTrue(englishVersion.contains("Current version:"))
         let versionRange = try XCTUnwrap(
-            englishVersion.range(of: #"[0-9]+(?:\.[0-9]+){1,2} \([0-9]+\)"#, options: .regularExpression)
+            englishVersion.range(of: #"[0-9]+(?:\.[0-9]+){1,2}"#, options: .regularExpression)
         )
-        let versionAndBuild = String(englishVersion[versionRange])
+        let version = String(englishVersion[versionRange])
+        XCTAssertEqual(englishVersion, "Current version: \(version)")
+
+        let explanation = settings.descendants(matching: .any)
+            .matching(identifier: "settings.updates.explanation")
+            .firstMatch
+        XCTAssertTrue(explanation.waitForExistence(timeout: timeout), settings.debugDescription)
+        let englishExplanation = accessibilityText(explanation)
+        XCTAssertTrue(englishExplanation.contains("Signed updates"))
+        XCTAssertTrue(englishExplanation.contains("Automatic checks"))
 
         let automatic = settings.checkBoxes["settings.updates.automatic"]
         XCTAssertTrue(automatic.waitForExistence(timeout: timeout), settings.debugDescription)
@@ -171,13 +180,14 @@ final class TokenTankUITests: XCTestCase {
 
         let checkNow = settings.buttons["settings.updates.check-now"]
         XCTAssertTrue(checkNow.waitForExistence(timeout: timeout), settings.debugDescription)
+        XCTAssertFalse(checkNow.isEnabled)
 
-        let warning = settings.descendants(matching: .any)
-            .matching(identifier: "settings.updates.manual-install-warning")
+        let gatekeeper = settings.descendants(matching: .any)
+            .matching(identifier: "settings.updates.gatekeeper")
             .firstMatch
-        XCTAssertTrue(warning.waitForExistence(timeout: timeout), settings.debugDescription)
-        reveal(warning, in: settings)
-        XCTAssertTrue(accessibilityText(warning).contains("unnotarized"))
+        XCTAssertTrue(gatekeeper.waitForExistence(timeout: timeout), settings.debugDescription)
+        reveal(gatekeeper, in: settings)
+        XCTAssertTrue(accessibilityText(gatekeeper).contains("unnotarized"))
 
         let privacy = settings.descendants(matching: .any)
             .matching(identifier: "settings.updates.privacy")
@@ -192,14 +202,19 @@ final class TokenTankUITests: XCTestCase {
         app.menuItems["한국어"].click()
 
         XCTAssertTrue(
-            warning.waitForExistence(timeout: timeout),
+            explanation.waitForExistence(timeout: timeout),
             settings.debugDescription
         )
-        XCTAssertTrue(accessibilityText(warning).contains("공증되지"))
+        XCTAssertTrue(accessibilityText(explanation).contains("서명된 업데이트"))
+        XCTAssertTrue(accessibilityText(explanation).contains("자동 확인"))
+        XCTAssertTrue(gatekeeper.waitForExistence(timeout: timeout), settings.debugDescription)
+        XCTAssertTrue(accessibilityText(gatekeeper).contains("공증되지"))
         XCTAssertTrue(accessibilityText(privacy).contains("GitHub"))
         XCTAssertTrue(accessibilityText(privacy).contains("IP"))
-        XCTAssertTrue(accessibilityText(currentVersion).contains("현재 버전:"))
-        XCTAssertTrue(accessibilityText(currentVersion).contains(versionAndBuild))
+        XCTAssertEqual(
+            accessibilityText(currentVersion).trimmingCharacters(in: .whitespacesAndNewlines),
+            "현재 버전: \(version)"
+        )
         XCTAssertEqual(settings.checkBoxes["settings.summary.percent-sign"].label, "% 기호 표시")
 
         picker.click()

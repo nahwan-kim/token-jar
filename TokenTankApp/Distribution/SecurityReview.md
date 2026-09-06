@@ -166,26 +166,41 @@ Required findings:
 
 - Developer ID Application identity and Team ID match the release record; designated requirement is captured from the signed app, not invented.
 - The embedded Developer ID profile authorizes the exact application identifier used as the data-protection Keychain default group; profile-derived application/team identifiers and any Keychain group contain no extra shared group.
-- Hardened Runtime is enabled. App Sandbox is absent for v1, and no JIT, unsigned executable memory, library-validation bypass, broad temporary exception, privileged helper, Automation, or Apple Events entitlement is present.
-- `otool -L` and nested bundle inspection show no WebKit/browser runtime, SafariServices, Sparkle/updater framework, update agent, login item, XPC/helper, or privileged installer payload.
-- `LSUIElement` remains true; no Dock/browser/updater/helper process is introduced. An in-process public GitHub release check can notify users of newer versions; there is no update signing key, automatic download, or replacement path.
+- Hardened Runtime remains enabled. The user approved only `com.apple.security.cs.disable-library-validation=true` for ad-hoc hosts to load Sparkle without a Team ID. App Sandbox, JIT, unsigned executable memory, Automation, Apple Events, and broad temporary exceptions remain absent. Re-enable library validation for Developer ID distribution.
+- Only pinned Sparkle 2.9.6 and its exact framework/Autoupdate/Updater.app/distributed XPC inventory are approved. Lookalike or extra payloads are rejected. WebKit references are vendor-only; `SUShowReleaseNotes=false` disables HTML release-note UI.
+- `LSUIElement` remains true. No login item or embedded browser is added. Sparkle's audited installer/relaunch processes may run during user-approved updates; the application delegate finishes provider shutdown before relaunch.
 
-### Release availability checking
+### Native signed-update threat model
 
-The app composition layer, separate from Provider capabilities, may request public
-release metadata from `https://api.github.com/repos/nahwan-kim/token-jar/releases`.
-No provider credentials, usage values, account identifiers, cookies, or telemetry
-are sent. GitHub necessarily receives ordinary connection metadata such as the
-client IP address. The ephemeral client rejects redirects and bounds time and
-response size. Automatic checks are limited to once per 24 hours, can be disabled
-in Settings, and stop with the app; manual checks are user-initiated. The preference
-and last-attempt time are app-owned UserDefaults, not provider snapshots.
-Prereleases participate because this is the current distribution channel; drafts
-and malformed version tags must not become update candidates. Release links are
-constructed for the fixed official repository rather than trusting response URLs,
-and open in the external browser only after an explicit click. Release metadata
-does not authenticate executable code. Installation remains manual and retains all
-Gatekeeper, checksum, provenance, and rollback requirements above.
+Sparkle replaces the JSON checker entirely: scheduling, preferences, download,
+verification, installation and relaunch are vendor-managed. Provider capabilities
+are unchanged; no shell installer or parallel notification checker remains.
+
+| Threat | Required control |
+| --- | --- |
+| Feed compromise | HTTPS signed appcast, pinned `SUPublicEDKey`, `SURequireSignedFeed=true`, `SUSignedFeedFailureExpirationInterval=0`; invalid metadata fails closed indefinitely |
+| Corrupt/substituted archive | Ed25519 signature and `SUVerifyUpdateBeforeExtraction=true`, then Sparkle's installation checks |
+| Unreviewed executable | Exact pinned vendor inventory, strict signatures, host/dependency import and payload gates; no blanket helper allowance |
+| Signing-key theft/loss | Operator login Keychain account `token-jar-updates`; no private-key export/logging/publication; secure Keychain backup; key loss requires a manually installed new trust root |
+| Silent install | Automatic checks can be disabled; `SUAllowsAutomaticUpdates=false` and `SUAutomaticallyUpdate=false`; native update approval required |
+| Provider data leakage | No account/usage/credentials passed to Sparkle; system profiling and release notes disabled |
+| Shutdown race | Preserve asynchronous AppModel termination before replacement/relaunch |
+| Bad signed release | Retain prior verified app/assets/feed; test old-to-new installation; publish assets before feed; monotonic build numbers and manual rollback |
+| Library injection risk | Approved host-only library-validation exception, all other Hardened Runtime protections retained, exact entitlement dictionary audited; remove exception when Developer ID becomes available |
+
+The fixed feed is
+`https://raw.githubusercontent.com/nahwan-kim/token-jar/main/appcast.xml`.
+Packaging generates versioned archive URLs in this repository's GitHub Releases.
+GitHub/CDN receives ordinary HTTP connection metadata including IP address.
+Sparkle may follow hosting redirects; cryptographic validation, not a zero-redirect
+claim, is the update trust boundary. Its app-private preferences, cache and
+staging files contain update material, not provider snapshots.
+
+Ad-hoc signing is not Apple publisher verification. EdDSA authenticates continuity
+from the public key embedded at first manual installation, not the initial
+download's provenance. Gatekeeper, quarantine, translocation, read-only locations,
+and authorization remain ordinary macOS gates. Never remove quarantine or disable
+Gatekeeper/SIP to make tests pass. Versions through 0.1.3 need manual bootstrap.
 
 | Inspection | Actual output reference | Reviewer result |
 | --- | --- | --- |
@@ -205,8 +220,9 @@ Gatekeeper, checksum, provenance, and rollback requirements above.
 | External CLI/app owner session | read buffer only | no copy | owner store only | exact accepted source only | never | buffer released after parse |
 | Display preferences and stable opaque representative quota ID | UI/process lifetime | no | UserDefaults only; account/source identity components are SHA-256-digested before ID construction | none | no secrets or raw account identifiers | user reset/remove |
 | Errors/correlation IDs | in-memory state | no | no raw payload | no secret headers/body | redacted class only | cleared on quit |
+| Update feed/archive | Sparkle operation lifetime | release signing key only on operator machine, never client | Sparkle preferences/cache/staging | signed GitHub feed and versioned GitHub/CDN archive | Sparkle update status, no provider data | Sparkle-managed cleanup |
 
-`PrivacyInfo.xcprivacy` declares only app-private `UserDefaults` (`CA92.1`). Core no longer directly calls Apple's listed FileTimestamp required-reason APIs: exact owner-path identity is checked against the opened descriptor, the byte cap is enforced with `lseek`, and immutable SQLite reads are bound to that descriptor through `/dev/fd`. Do not add `3B52.1` for the fixed automatic Cursor.app path; it is not a specifically user-granted file. Any future direct required-reason API use must stop release until its implementation and approved reason match.
+The host `PrivacyInfo.xcprivacy` declares app-private `UserDefaults` (`CA92.1`). Host/Core direct FileTimestamp imports remain prohibited. The pinned Sparkle 2.9.6 payload does not ship a separate privacy manifest; updater-only filesystem imports are an explicit vendor exception, not evidence of App Store privacy compliance. A future App Store/privacy submission requires a separate review of Sparkle's actual required-reason API uses and declarations. Do not add `3B52.1` for the automatic Cursor.app path or copy an unrelated SDK's reason.
 
 ## AC-11 numeric evidence procedure
 

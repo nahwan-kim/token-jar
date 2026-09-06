@@ -14,39 +14,86 @@ payloads, failing tests, or known unsafe behavior still block this channel.
 Unperformed live-provider, clean-host, Intel-hardware, UI, and idle measurements
 must be disclosed in the release notes rather than represented as passes.
 
-### Build and package
+### Build, sign, and package
 
-Use a clean source revision, an unused derived-data/staging directory outside the
-repository, and the actual version/build numbers for the candidate. For v0.1.0:
+Use a clean revision and unused derived-data/output directories outside the
+repository. Resolve the pinned Sparkle 2.9.6 package and retain Package.resolved.
+Build a universal Release app with real, monotonically increasing version/build
+numbers. Do not reuse the notification-only 0.1.3 (4) identity for a new release.
 
 ```sh
 xcodebuild -project TokenTank.xcodeproj -scheme TokenTank \
   -configuration Release -destination 'generic/platform=macOS' \
-  -derivedDataPath /tmp/token-jar-v0.1.0 \
+  -derivedDataPath /tmp/token-jar-candidate \
   ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO \
-  DEVELOPMENT_TEAM='' MARKETING_VERSION=0.1.0 CURRENT_PROJECT_VERSION=1 build
+  DEVELOPMENT_TEAM='' MARKETING_VERSION=0.1.5 CURRENT_PROJECT_VERSION=6 build
 ```
 
-Copy `Build/Products/Release/Token Jar.app` into a new packaging directory.
-Include `LICENSE` and `THIRD_PARTY_NOTICES` inside the app's `Contents/Resources`
-before signing so notices travel with the app. Sign the final bundle:
+Use `Scripts/package-release.sh --help` for the required app, output, and Sparkle
+tool paths. The script copies notices, signs Sparkle's nested code inside-out,
+signs the host with the approved entitlement, verifies the bundle, creates a ZIP
+and SHA256SUMS, and generates a signed `appcast.xml` using Sparkle's upstream
+tools. It must fail if the signing key, tools, metadata, or verification is wrong.
+Never replace EdDSA signing with a ZIP checksum.
 
-```sh
-codesign --force --sign - --options runtime --timestamp=none "Token Jar.app"
-codesign --verify --deep --strict --verbose=2 "Token Jar.app"
-codesign --display --verbose=4 "Token Jar.app"
-lipo -archs "Token Jar.app/Contents/MacOS/Token Jar"
-ditto -c -k --keepParent "Token Jar.app" Token-Jar-v0.1.0-universal.zip
-shasum -a 256 Token-Jar-v0.1.0-universal.zip > SHA256SUMS
-```
+The sole approved host entitlement exception is
+`com.apple.security.cs.disable-library-validation=true`: ad-hoc apps lack a Team
+ID with which to load Sparkle under library validation. Hardened Runtime remains
+enabled. Only the pinned Sparkle framework and its audited nested code may be
+embedded. No App Sandbox, JIT, unsigned-executable-memory, automation, unrelated
+helper, or login item exception is authorized. Do not inject a fake Team ID or
+disable Gatekeeper/SIP. Sparkle retains its upstream license in
+THIRD_PARTY_NOTICES, copied inside every release bundle.
 
-No updater, helper, login item, nested executable, additional entitlement, or
-provisioning profile is expected. Never add entitlements to bypass a failed
-runtime check. Do not inject a fake Team ID. Record the source commit, toolchain,
-architectures, final signature verification, test results, and ZIP digest.
-Extract the ZIP into a separate directory, verify the extracted signature and
-version, and smoke-test that exact bundle before uploading. Scan source history
-and release contents for secrets; do not upload build logs or local runtime state.
+Run `Scripts/audit-release.py --help` for the payload/signature audit. Repeat the
+audit on a separately extracted ZIP, smoke-test that exact app, and scan source
+history plus packaged content for secrets. Retain source commit, toolchain,
+architecture, signing, test, and ZIP digest evidence outside the repository.
+
+Packaging also writes `RELEASE_RECEIPT.json`. It distinguishes the tooling tar
+digest from the locked Sparkle package revision and labels source references as
+operator-supplied, not a reproduced source-to-binary proof. Retain the matching
+build command and clean revision separately. Local dirty-tree verification must
+supply `TOKENTANK_SOURCE_HASH=sha256:<64hex>`; it does not authorize publication.
+Outputs are staged on the destination filesystem and never overwrite existing
+files, including a file created during packaging. An interrupted partial output
+is not a finished release; retry into a fresh directory.
+
+Before public feed publication, test the first update from a downloaded,
+quarantined bootstrap approved with ordinary Open Anyway on supported macOS
+versions. A successful non-quarantined local test does not establish this gate.
+The inspected Sparkle 2.9.6 SwiftPM helpers are already ad-hoc signed, without a
+Team ID; there is no upstream Developer ID/notarization identity to preserve in
+that artifact. Keep Gatekeeper and quarantine intact, and disclose unperformed
+clean-host/macOS-version checks.
+
+### Update signing key and feed publication
+
+The real Ed25519 private key is held in the release operator's login Keychain,
+under Sparkle account `token-jar-updates`. It is separate from provider account
+credentials. `generate_keys --account token-jar-updates -p` displays only the
+public key; it must match `SUPublicEDKey` in the app. Never export the private key
+into this repository, release assets, logs, shell arguments, or CI artifacts.
+The public verification key is pinned by `SUPublicEDKey` in
+`TokenTankApp/Supporting/Info.plist` and checked by the packaging/audit tools.
+Preserve an operator-managed secure Keychain backup. Losing this key requires a
+new manually installed trust root; there is no Developer ID key-rotation fallback.
+
+The production feed is
+`https://raw.githubusercontent.com/nahwan-kim/token-jar/main/appcast.xml`.
+Each release's signed feed is an output of packaging, not hand-written metadata.
+Keep `SURequireSignedFeed` and `SUVerifyUpdateBeforeExtraction` enabled, and
+`SUSignedFeedFailureExpirationInterval=0`; never expire into accepting unsigned
+metadata. HTML release notes, system profiling, and silent installation are off.
+
+Publish in this order: pass source CI; create a draft GitHub prerelease with the
+ZIP and checksum; download and verify uploaded bytes; publish the release; then
+publish that exact signed `appcast.xml` at the configured feed URL. Feed changes
+must be byte-preserving because edits invalidate its signature. Do not advertise
+a draft/missing ZIP. Existing apps must successfully verify the new feed and
+archive in an isolated old-to-new installation test before feed publication.
+Keep the previous signed feed and release assets for rollback; do not lower the
+monotonic build number or republish different bytes under an existing release.
 
 ### Credentials and limitations
 
@@ -67,22 +114,21 @@ allow this individual app through System Settings > Privacy & Security > Open
 Anyway, where available. Do not disable Gatekeeper/SIP, delete quarantine
 attributes, bypass malware warnings, or override a managed-device policy.
 
-Quit before manually replacing the app. Keep the previous version until the new
-one launches successfully. The app checks public GitHub release metadata for newer
-versions, including prereleases, and offers an explicit link to the official
-release page. Automatic checks can be disabled in Settings; manual checking remains
-available. This is notification only: no automatic download, installation, helper,
-Homebrew tap, or Gatekeeper bypass is provided.
+For first installation, quit before manually replacing the app and keep the
+previous version until the new one launches successfully. Versions through
+0.1.3 have no in-app installer and require one manual bootstrap installation.
+Subsequent versions use Sparkle's native download, verification, install, and
+relaunch UI. Automatic checks run daily and can be disabled in Settings; installs
+always require user approval. The application delegate completes provider-task
+shutdown before permitting Sparkle's relaunch. Translocation, read-only volumes,
+and protected installation locations can block installation; move the app to
+Applications and follow the ordinary macOS authorization UI rather than bypassing
+protections. No Homebrew tap is provided.
 
-Existing 0.1.0/0.1.1 installations have no checker; users must manually install a
-checker-capable build once. For every release, set `MARKETING_VERSION` to the
-numeric release tag without its leading `v`, and increment `CURRENT_PROJECT_VERSION`.
-The checker compares the installed `CFBundleShortVersionString` with release tags;
-a stale or inflated bundled version suppresses legitimate notifications. Marking
-a GitHub release as a prerelease does not change numeric version precedence.
-Publish the finished ZIP and checksum before making its release visible. Do not
-use drafts or non-version tags as release announcements. The repository's bundled
-version is an unreleased development version, not evidence of a published artifact.
+For every release, `CFBundleVersion` must increase; Sparkle compares this build
+number, not GitHub tag creation time. `CFBundleShortVersionString` is the
+user-visible release version. A repository version or successful local build is
+not evidence that its signed feed and archive have been published.
 
 ## Future channel: Developer ID and notarization
 
@@ -137,7 +183,7 @@ The popup header's **Open in Window** button opens a resizable standalone usage 
 - Install a **Developer ID Application** certificate whose identity exactly fills `{{DEVELOPER_IDENTITY}}`. Keep its private key in the macOS Keychain; never export or place it in the repository.
 - Install the Developer ID provisioning profile named by `{{DEVELOPER_ID_PROFILE_SPECIFIER}}`; its application identifier must be exactly `{{TEAM_ID}}.{{BUNDLE_ID}}`. Do not enable a shared Keychain group.
 - Configure `{{NOTARY_KEYCHAIN_PROFILE}}` locally with `xcrun notarytool store-credentials` or an approved CI secret store. Do not put Apple IDs, issuer IDs, API keys, passwords, or profile contents in command history, workflow YAML, artifacts, or logs.
-- Confirm the product is menu-bar-only (`LSUIElement`), has no App Sandbox entitlement, and enables Hardened Runtime for Release. The app must contain no updater, browser/WebKit runtime, login item, XPC/helper payload, or privileged installer.
+- Confirm the product is menu-bar-only (`LSUIElement`), has no App Sandbox entitlement, and enables Hardened Runtime for Release. Only pinned Sparkle code is an approved updater/helper exception; its WebKit linkage is vendor-only and release-note UI is disabled. A future Developer ID channel must re-enable host library validation and sign every nested code object with the same identity.
 - Confirm Release coverage instrumentation is disabled, dead code and installed symbols are stripped, and the final executable contains both `arm64` and `x86_64` without an absolute user-home build path.
 - Confirm the source and exported binary do not directly call listed FileTimestamp required-reason APIs and the manifest does not claim `3B52.1` for the fixed Cursor.app path. Stop release if a later toolchain scan reports an undeclared or mismatched required-reason API.
 - Stop on any unresolved source/path/permission, accepted-source live validation, security, signing, entitlement, import, notarization, or Gatekeeper finding. Do not weaken Hardened Runtime or substitute an unsigned artifact.
@@ -157,12 +203,12 @@ This is the authoritative evidence map, not a pass claim. Automated rows are re-
 | AC-07 | Exact scoped capabilities, descriptor-bound immutable Cursor reads, owner-session fixtures, mutation assertions, and `Scripts/audit-provider-io.sh` enforce external-owner non-mutation. | Final Cursor owner-path actual-open facts before/after on the frozen candidate. |
 | AC-08 | Closed `CollectionError` mappings and bilingual UI states keep login actions limited to explicit rejection/revocation or missing owner session. | Owner-controlled rejection/session-loss checks for accepted live surfaces. |
 | AC-09 | Keychain tests enforce the data-protection Keychain, fixed accessibility class, app-owned identifier allowlist, value bounds, no plaintext fallback, delete/update behavior, and stale mapping. | Locked-since-boot/unavailable behavior with the final Developer ID identity. |
-| AC-10 | Release build settings, `LSUIElement`, dependency/payload/import/leak scans, and the UI termination test enforce no Dock/browser/updater/helper and a stripped universal artifact. | Repeat against the signed/stapled artifact. |
+| AC-10 | Release settings, `LSUIElement`, exact dependency/payload/import/leak scans, and UI termination tests enforce no Dock/browser UI/unreviewed helpers and a stripped universal artifact. Sparkle is the explicit signed-update exception. | Repeat against the signed/stapled artifact. |
 | AC-11 | `Scripts/measure-idle.sh` validates sample count, cadence, stable PID, CPU/RSS arithmetic, drift, and artifact identity without claiming release sign-off. | Three independent physical reference-host runs with all five Providers reaching terminal state. |
 | AC-12 | The deterministic XCUITest matrix exposes all five groups plus fresh, stale, authentication, permission, offline, missing, zero, direction, reset/freshness, and recovery controls. | Final signed-candidate XCUITest rerun. |
 | AC-13 | `ProviderSources.json`, registry tests, source docs, and fixed network/process boundaries encode one selected surface per Provider; CodexBar is reference-only and the rejected Grok ACP path is inactive. | Capture final documentation revisions and owner-controlled live shapes. |
-| AC-14 | Release/CI gates require universal stripped code, Hardened Runtime, no App Sandbox/updater, exact payload scans, and a source-commit/source-hash plus binary digest receipt with explicit scan outcomes; this runbook fixes manual replacement/provenance. | Developer ID archive/export, notarization response, staple, official HTTPS artifact/digest, and clean-host Gatekeeper evidence. |
-| AC-15 | Exact path/operation capability tests, static Provider I/O audit, descriptor-bound SQLite, Keychain/network bounds, memory-only lifecycle, privacy manifest gate, and empty source entitlements fail closed. | Frozen actual-open/TCC matrix plus final signed security/privacy review. |
+| AC-14 | Release/CI gates require universal stripped code, Hardened Runtime, no App Sandbox, pinned Sparkle-only code, exact payload scans, and source/binary provenance; this runbook defines signed feed publication and rollback. | Developer ID archive/export, notarization, staple, official HTTPS artifacts, and clean-host Gatekeeper evidence. |
+| AC-15 | Exact capabilities, Provider I/O audit, SQLite/Keychain/network bounds, memory-only snapshots, privacy manifest, and exact approved entitlements fail closed. | Frozen actual-open/TCC matrix plus final signed security/privacy review. |
 | AC-16 | Deployment target and CI include macOS 14/current; the catalog gate requires exactly English/Korean translations, and XCUITests cover English, Korean, accessibility, layout matrix, and unknown-language English fallback. | Successful frozen CI matrix and signed-candidate locale rerun. |
 
 AC-01 through AC-16 are conjunctive. The unchecked external cells above are hard release stops and feed the operator sign-off record below.
@@ -210,7 +256,7 @@ Record the complete archive command, tool versions, and actual output. Do not re
 
 ## Export the distributable artifact
 
-Maintain `{{EXPORT_OPTIONS_PLIST}}` outside this repository and review it with the security record. It must select Developer ID distribution and must not introduce an updater, helper, App Sandbox, or broad temporary exception. The operator supplies the exact plist used for this candidate:
+Maintain `{{EXPORT_OPTIONS_PLIST}}` outside this repository and review it with the security record. It must select Developer ID distribution, include signing of pinned Sparkle nested code, and introduce no App Sandbox or unrelated exception. Re-enable library validation for this future channel. The operator supplies the exact plist:
 
 ```sh
 /usr/bin/xcodebuild -exportArchive \
@@ -219,7 +265,7 @@ Maintain `{{EXPORT_OPTIONS_PLIST}}` outside this repository and review it with t
   -exportPath "{{EXPORT_PATH}}"
 ```
 
-For a DMG, package only the verified app using the operator's reviewed packaging procedure. For a ZIP, staple and validate the app before creating the ZIP; retain the exact packaging command and file list. Do not include credentials, source fixtures, diagnostic logs, CI state, or an updater/helper in either artifact.
+For a DMG, package only the verified app using the reviewed procedure. For a ZIP, staple and validate before creating it; retain the command/file list. Sparkle nested code and licenses are required. Credentials, source fixtures, logs, CI state, and unrelated helpers are forbidden.
 
 ## Signature, entitlements, imports, and designated requirement
 
@@ -239,9 +285,9 @@ Record the exact designated requirement as `{{DESIGNATED_REQUIREMENT}}`, signer,
 - Hardened Runtime is present (`ENABLE_HARDENED_RUNTIME=YES`).
 - `com.apple.security.app-sandbox` is absent for v1.
 - The embedded Developer ID profile and final entitlements authorize exactly `{{TEAM_ID}}.{{BUNDLE_ID}}` as the default data-protection Keychain group; no extra shared Keychain group is present.
-- JIT, unsigned executable memory, library-validation bypass, automation, Apple Events, privileged helper, and broad temporary exceptions are absent unless separately approved (none are expected for v1).
+- JIT, unsigned executable memory, automation, Apple Events, and broad temporary exceptions remain absent. The ad-hoc channel has only the explicitly approved library-validation exception; remove it for Developer ID distribution.
 - The app and every nested code object are signed by the intended Developer ID identity.
-- `otool -L`, nested bundles, and payload names contain no WebKit/browser framework, Sparkle/updater framework, update agent, login item, XPC/helper, or privileged installer.
+- Audit exact Sparkle framework/nested code paths, host imports, and all other payloads. WebKit references may occur only within the pinned upstream Sparkle framework; the host does not embed browser or HTML release-note UI.
 
 Any mismatch is a release stop. Do not repair a signature by deleting entitlements after signing; return to the archive/export inputs and retain the failed evidence.
 
@@ -302,9 +348,9 @@ esac
 
 Do not place a release claim in this guide. The operator attaches the actual provenance record and approval separately.
 
-## Manual replacement and rollback (no updater)
+## Manual recovery and rollback
 
-Token Jar has an in-process release availability checker, not an installer. It reads public metadata from `https://api.github.com/repos/nahwan-kim/token-jar/releases` without provider credentials and offers official repository release links opened only on user action. Automatic checks are rate-limited to once per 24 hours and can be disabled in Settings; manual checks are also available. There is **no** update framework, background update agent, login item, privileged installer, update signing key, automatic download, or replacement path.
+The native updater validates both feed and archive EdDSA signatures before installation and never accepts an unsigned fallback. Failed checks/downloads/signatures leave the current app in place. Use manual recovery only for an installation that cannot complete or a bad signed release; retaining prior verified artifacts is mandatory.
 
 1. Download `{{ARTIFACT_FILENAME}}` only from `{{OFFICIAL_DOWNLOAD_URL}}` using an HTTPS-capable client.
 2. Compare the downloaded SHA-256 with `{{ARTIFACT_SHA256}}`; reject a mismatch. Verify Developer ID identity, designated requirement, staple, and Gatekeeper result on the downloaded artifact before opening it.
@@ -312,7 +358,7 @@ Token Jar has an in-process release availability checker, not an installer. It r
 4. Move the verified `Token Jar.app` into the reviewed installation location and launch it once manually. Do not run two copies during replacement. Validate bundle identity and signature again after the move.
 5. If launch, signature, notarization, or source behavior is wrong, quit the candidate and restore the retained prior app from `{{ROLLBACK_DIRECTORY}}`. Re-run signature and Gatekeeper checks; retain both candidate and rollback evidence. Do not use `rm -rf`, an updater helper, or permission changes as a recovery step.
 
-A future automatic installer would require a new threat model, dependency/license review, feed and update-signing design, key custody, rollback plan, privacy disclosure, Hardened Runtime review, and explicit approval. The notification-only checker does not authorize automatic installation or introduce publisher authentication; GitHub metadata and ZIP checksums do not replace Developer ID or notarization.
+Do not disable signed-feed or archive validation, change keys casually, or add a shell replacement helper to recover from an update failure. Key loss requires operator-controlled manual installation; code signatures and EdDSA signatures are different trust systems, and neither ad-hoc signing nor checksums imply Apple notarization.
 
 ## Secret and evidence handling
 
@@ -332,7 +378,7 @@ Leave each item unchecked until the corresponding evidence is attached. This che
 - [ ] `{{ARTIFACT_PATH}}` was notarized; Apple response and `{{NOTARY_REQUEST_UUID}}` are retained.
 - [ ] Stapler validation and clean-host Gatekeeper output are retained.
 - [ ] `{{ARTIFACT_SHA256}}` matches the published artifact at `{{OFFICIAL_DOWNLOAD_URL}}`.
-- [ ] Manual replacement and rollback were reviewed; no updater/helper exists.
+- [ ] Signed update installation and manual rollback were verified; nested code is limited to pinned Sparkle.
 - [ ] Security, privacy, TCC/FDA, and all five Provider source gates are signed off without unresolved blockers.
 
 Operator: `{{RELEASE_OWNER}}`  Date (with offset): `{{SIGNOFF_TIMESTAMP}}`

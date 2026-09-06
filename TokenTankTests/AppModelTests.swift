@@ -1021,305 +1021,133 @@ final class AppModelTests: XCTestCase {
         )
         XCTAssertNil(QuotaDisplayFormatter.value(nil, locale: locale))
     }
-    func testReleaseVersionsOrderPrereleasesAndNormalizeTwoComponentCurrentVersions() {
-        let alpha = ReleaseVersion("1.0.0-alpha")!
-        let alphaOne = ReleaseVersion("1.0.0-alpha.1")!
-        let beta = ReleaseVersion("1.0.0-beta")!
-        let release = ReleaseVersion("1.0.0")!
-
-        XCTAssertLessThan(alpha, alphaOne)
-        XCTAssertLessThan(alphaOne, beta)
-        XCTAssertLessThan(beta, release)
-        XCTAssertEqual(ReleaseVersion("1.2"), ReleaseVersion("1.2.0"))
-        XCTAssertEqual(ReleaseVersion("1.2.3+build.1"), ReleaseVersion("1.2.3+build.2"))
-        XCTAssertNil(ReleaseVersion("1.02.0"))
-        XCTAssertNil(ReleaseVersion("development"))
-    }
-
-    func testReleaseClientFiltersDraftsAndSelectsNewestPrerelease() async throws {
-        let transport = ReleaseFixtureTransport(response: makeReleaseResponse("""
-        [
-          {"tag_name":"v0.1.1","draft":false,"prerelease":true},
-          {"tag_name":"v9.0.0","draft":true,"prerelease":false},
-          {"tag_name":"not-a-version","draft":false,"prerelease":false},
-          {"id":42,"name":"v0.1.2","html_url":"https://evil.example/ignored","tag_name":"v0.1.2","draft":false,"prerelease":true}
-        ]
-        """))
-        let checker = ReleaseUpdateChecker(
-            transport: transport,
-            currentVersion: "0.1.1"
-        )
-
-        let result = try await checker.check()
-        guard case let .available(availability) = result else {
-            return XCTFail("expected a newer prerelease")
-        }
-        XCTAssertEqual(availability.version, "v0.1.2")
-        XCTAssertEqual(
-            availability.url.absoluteString,
-            "https://github.com/nahwan-kim/token-jar/releases/tag/v0.1.2"
-        )
-    }
-
-    func testReleaseClientRejectsMalformedResponsesAndHTTPFailures() async throws {
-        let malformedTransport = ReleaseFixtureTransport(response: makeReleaseResponse("{"))
-        do {
-            _ = try await GitHubReleaseAPIClient(transport: malformedTransport).fetchReleases()
-            XCTFail("malformed JSON should fail")
-        } catch let error as ReleaseUpdateError {
-            XCTAssertEqual(error, .malformedResponse)
-        } catch {
-            XCTFail("unexpected malformed response error")
-        }
-
-        let failedTransport = ReleaseFixtureTransport(
-            response: ReleaseUpdateHTTPResponse(statusCode: 503, body: Data())
-        )
-        do {
-            _ = try await GitHubReleaseAPIClient(transport: failedTransport).fetchReleases()
-            XCTFail("non-success HTTP should fail")
-        } catch let error as ReleaseUpdateError {
-            XCTAssertEqual(error, .httpFailure(statusCode: 503))
-        } catch {
-            XCTFail("unexpected HTTP error")
-        }
-        let oversizedTransport = ReleaseFixtureTransport(
-            response: ReleaseUpdateHTTPResponse(
-                statusCode: 200,
-                body: Data(repeating: 0x20, count: GitHubReleaseAPIClient.maximumResponseBytes + 1)
-            )
-        )
-        do {
-            _ = try await GitHubReleaseAPIClient(transport: oversizedTransport).fetchReleases()
-            XCTFail("oversized response should fail")
-        } catch let error as ReleaseUpdateError {
-            XCTAssertEqual(error, .responseTooLarge)
-        } catch {
-            XCTFail("unexpected oversized response error")
-        }
-    }
-
-    func testReleaseURLIsOfficialAndSafelyEncodesTags() {
-        XCTAssertEqual(
-            GitHubReleaseAPIClient.releaseURL(for: "v1.2.3")?.absoluteString,
-            "https://github.com/nahwan-kim/token-jar/releases/tag/v1.2.3"
-        )
-        XCTAssertEqual(
-            GitHubReleaseAPIClient.releaseURL(for: "v1.2.3+build.7")?.absoluteString,
-            "https://github.com/nahwan-kim/token-jar/releases/tag/v1.2.3%2Bbuild.7"
-        )
-        for unsafeTag in ["v1.2.3/other", "v1.2.3?redirect=1", "https://evil.example/v1.2.3"] {
-            XCTAssertNil(GitHubReleaseAPIClient.releaseURL(for: unsafeTag))
-        }
-    }
-
-    func testReleaseClientUsesFixedPublicRequestWithoutAuthOrCookies() async throws {
-        let transport = ReleaseFixtureTransport(response: makeReleaseResponse("[]"))
-        _ = try await GitHubReleaseAPIClient(transport: transport).fetchReleases()
-        let requestValue = await transport.lastRequest()
-        let request = try XCTUnwrap(requestValue)
-        XCTAssertEqual(request.url, GitHubReleaseAPIClient.endpoint)
-        XCTAssertEqual(request.method, "GET")
-        XCTAssertEqual(request.timeout, GitHubReleaseAPIClient.requestTimeout)
-        XCTAssertNil(request.headers["authorization"])
-        XCTAssertNil(request.headers["cookie"])
-        XCTAssertEqual(request.headers["accept"], "application/vnd.github+json")
-        XCTAssertEqual(request.headers["x-github-api-version"], "2022-11-28")
-    }
-    func testReleaseTransportRejectsRequestsOutsideFixedTimeoutOrEndpoint() async throws {
-        let transport = URLSessionReleaseUpdateTransport()
-        var timeoutRequest = URLRequest(url: GitHubReleaseAPIClient.endpoint)
-        timeoutRequest.httpMethod = "GET"
-        timeoutRequest.timeoutInterval = GitHubReleaseAPIClient.requestTimeout + 1
-        do {
-            _ = try await transport.send(timeoutRequest)
-            XCTFail("request timeout should be bounded")
-        } catch let error as ReleaseUpdateError {
-            XCTAssertEqual(error, .invalidRequest)
-        } catch {
-            XCTFail("unexpected timeout validation error")
-        }
-
-        let unsafeURL = URL(string: "https://example.com/releases")!
-        var unsafeRequest = URLRequest(url: unsafeURL)
-        unsafeRequest.httpMethod = "GET"
-        unsafeRequest.timeoutInterval = GitHubReleaseAPIClient.requestTimeout
-        do {
-            _ = try await transport.send(unsafeRequest)
-            XCTFail("non-official endpoint should be rejected")
-        } catch let error as ReleaseUpdateError {
-            XCTAssertEqual(error, .invalidRequest)
-        } catch {
-            XCTFail("unexpected endpoint validation error")
-        }
-    }
-
-    func testReleaseCheckerDoesNotQueryForInvalidOrDevelopmentCurrentVersion() async throws {
-        let transport = ReleaseFixtureTransport(response: makeReleaseResponse("[]"))
-        for currentVersion in ["development", "0.1.2-dev"] {
-            let checker = ReleaseUpdateChecker(
-                transport: transport,
-                currentVersion: currentVersion
-            )
-            let result = try await checker.check()
-            XCTAssertEqual(result, .notApplicable)
-        }
-        let requestCount = await transport.requestCount()
-        XCTAssertEqual(requestCount, 0)
-    }
-
-    func testAppModelAutomaticChecksRespectDailyThrottle() async throws {
-        let suite = "TokenTankTests.release.throttle.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let now = Date(timeIntervalSince1970: 1_800_000_000)
-        defaults.set(now.timeIntervalSince1970, forKey: ReleaseUpdateDefaults.lastAttemptDateKey)
-        let clock = ReleaseTestClock(now: now)
-        let transport = ReleaseFixtureTransport(response: makeReleaseResponse("[]"))
+    func testUpdaterLifecycleStartsOnceAndForwardsChecksAndPreferenceChanges() async {
+        let updater = TestAppUpdater(canCheckForUpdates: true, automaticallyChecksForUpdates: true)
         let credentials = InMemoryCredentialStore()
         let model = AppModel(
             adapters: [],
             credentialStore: credentials,
             preferencesStore: MemoryPreferencesStore(),
             context: makeContext(credentials: credentials),
-            languageDefaults: defaults,
-            releaseUpdateTransport: transport,
-            releaseUpdateClock: clock,
-            currentVersion: "0.1.1"
+            updater: updater
         )
 
         model.ensureStarted()
-        let schedulerWaiting = await eventually { await clock.waitingCount() > 0 }
-        XCTAssertTrue(schedulerWaiting)
-        let beforeAdvanceCount = await transport.requestCount()
-        XCTAssertEqual(beforeAdvanceCount, 0)
-        await clock.advance(by: .seconds(ReleaseUpdateDefaults.interval))
-        let requestStarted = await eventually { await transport.requestCount() == 1 }
-        XCTAssertTrue(requestStarted)
-        await model.stop()
-    }
-    func testFutureReleaseAttemptDoesNotSuppressChecksAfterClockRollback() async throws {
-        let suite = "TokenTankTests.release.clock-rollback.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let now = Date(timeIntervalSince1970: 1_800_000_000)
-        defaults.set(now.addingTimeInterval(86_400).timeIntervalSince1970,
-                     forKey: ReleaseUpdateDefaults.lastAttemptDateKey)
-        let clock = ReleaseTestClock(now: now)
-        let transport = ReleaseFixtureTransport(response: makeReleaseResponse("[]"))
-        let credentials = InMemoryCredentialStore()
-        let model = AppModel(
-            adapters: [], credentialStore: credentials,
-            preferencesStore: MemoryPreferencesStore(),
-            context: makeContext(credentials: credentials),
-            languageDefaults: defaults, releaseUpdateTransport: transport,
-            releaseUpdateClock: clock, currentVersion: "0.1.1"
-        )
         model.ensureStarted()
-        let checked = await eventually { await transport.requestCount() == 1 }
-        XCTAssertTrue(checked)
-        XCTAssertEqual(defaults.double(forKey: ReleaseUpdateDefaults.lastAttemptDateKey),
-                       now.timeIntervalSince1970)
-        await model.stop()
-    }
-    func testAppModelManualChecksBypassThrottleAndCoalesce() async throws {
-        let suite = "TokenTankTests.release.manual.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let now = Date(timeIntervalSince1970: 1_800_000_000)
-        defaults.set(now.timeIntervalSince1970, forKey: ReleaseUpdateDefaults.lastAttemptDateKey)
-        let clock = ReleaseTestClock(now: now)
-        let transport = ReleaseFixtureTransport(
-            response: makeReleaseResponse("""
-            [{"tag_name":"v0.1.2","draft":false,"prerelease":true}]
-            """)
-        )
-        let credentials = InMemoryCredentialStore()
-        let model = AppModel(
-            adapters: [],
-            credentialStore: credentials,
-            preferencesStore: MemoryPreferencesStore(),
-            context: makeContext(credentials: credentials),
-            languageDefaults: defaults,
-            releaseUpdateTransport: transport,
-            releaseUpdateClock: clock,
-            currentVersion: "0.1.1"
-        )
+        XCTAssertEqual(updater.startCount, 1)
+        XCTAssertTrue(model.canCheckForUpdates)
 
         model.checkForUpdates()
-        let becameAvailable = await eventually {
-            if case .available = model.updateStatus { return true }
-            return false
-        }
-        XCTAssertTrue(becameAvailable)
-        let firstRequestCount = await transport.requestCount()
-        XCTAssertEqual(firstRequestCount, 1)
-        XCTAssertEqual(defaults.double(forKey: ReleaseUpdateDefaults.lastAttemptDateKey), now.timeIntervalSince1970)
+        XCTAssertEqual(updater.checkCount, 1)
 
+        updater.publishCanCheckForUpdates(false)
         model.checkForUpdates()
-        let secondRequestStarted = await eventually { await transport.requestCount() == 2 }
-        XCTAssertTrue(secondRequestStarted)
-        await model.stop()
+        XCTAssertEqual(updater.checkCount, 1)
 
-        let blockingTransport = BlockingReleaseFixtureTransport(response: makeReleaseResponse("[]"))
-        let blockingCredentials = InMemoryCredentialStore()
-        let blockingModel = AppModel(
-            adapters: [],
-            credentialStore: blockingCredentials,
-            preferencesStore: MemoryPreferencesStore(),
-            context: makeContext(credentials: blockingCredentials),
-            languageDefaults: defaults,
-            releaseUpdateTransport: blockingTransport,
-            releaseUpdateClock: clock,
-            currentVersion: "0.1.1"
-        )
-        blockingModel.checkForUpdates()
-        let blockingRequestStarted = await eventually { await blockingTransport.requestCount() == 1 }
-        XCTAssertTrue(blockingRequestStarted)
-        blockingModel.checkForUpdates()
-        await Task.yield()
-        let coalescedRequestCount = await blockingTransport.requestCount()
-        XCTAssertEqual(coalescedRequestCount, 1)
-        await blockingTransport.resume()
-        let becameUpToDate = await eventually {
-            if case .upToDate = blockingModel.updateStatus { return true }
-            return false
-        }
-        XCTAssertTrue(becameUpToDate)
-        await blockingModel.stop()
-    }
+        updater.publishCanCheckForUpdates(true)
+        model.checkForUpdates()
+        XCTAssertEqual(updater.checkCount, 2)
 
-    func testAppModelOptOutCancelsAutomaticCheckAndRestoresIdleStatus() async throws {
-        let suite = "TokenTankTests.release.optout.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let clock = ReleaseTestClock(now: Date(timeIntervalSince1970: 1_800_000_000))
-        let transport = BlockingReleaseFixtureTransport(response: makeReleaseResponse("[]"))
-        let credentials = InMemoryCredentialStore()
-        let model = AppModel(
-            adapters: [],
-            credentialStore: credentials,
-            preferencesStore: MemoryPreferencesStore(),
-            context: makeContext(credentials: credentials),
-            languageDefaults: defaults,
-            releaseUpdateTransport: transport,
-            releaseUpdateClock: clock,
-            currentVersion: "0.1.1"
-        )
-
-        model.ensureStarted()
-        let automaticRequestStarted = await eventually { await transport.requestCount() == 1 }
-        XCTAssertTrue(automaticRequestStarted)
-        XCTAssertEqual(model.updateStatus, .checking)
         model.automaticallyChecksForUpdates = false
-        XCTAssertEqual(model.updateStatus, .idle)
-        XCTAssertFalse(defaults.bool(forKey: ReleaseUpdateDefaults.automaticChecksEnabledKey))
+        XCTAssertFalse(updater.automaticallyChecksForUpdates)
+        model.automaticallyChecksForUpdates = true
+        XCTAssertTrue(updater.automaticallyChecksForUpdates)
+
         await model.stop()
     }
 
-    private func makeReleaseResponse(_ body: String, statusCode: Int = 200) -> ReleaseUpdateHTTPResponse {
-        ReleaseUpdateHTTPResponse(statusCode: statusCode, body: Data(body.utf8))
+    func testUpdaterCanCheckChangesArePublished() async {
+        let updater = TestAppUpdater(canCheckForUpdates: true, automaticallyChecksForUpdates: true)
+        let credentials = InMemoryCredentialStore()
+        let model = AppModel(
+            adapters: [],
+            credentialStore: credentials,
+            preferencesStore: MemoryPreferencesStore(),
+            context: makeContext(credentials: credentials),
+            updater: updater
+        )
+
+        model.ensureStarted()
+        XCTAssertTrue(model.canCheckForUpdates)
+
+        updater.publishCanCheckForUpdates(false)
+        XCTAssertFalse(model.canCheckForUpdates)
+        updater.publishCanCheckForUpdates(true)
+        XCTAssertTrue(model.canCheckForUpdates)
+
+        await model.stop()
     }
+
+    func testInjectedCollectionContextDoesNotConstructUpdater() async {
+        let credentials = InMemoryCredentialStore()
+        let model = AppModel(
+            adapters: [],
+            credentialStore: credentials,
+            preferencesStore: MemoryPreferencesStore(),
+            context: makeContext(credentials: credentials)
+        )
+
+        XCTAssertFalse(model.canCheckForUpdates)
+        XCTAssertTrue(model.automaticallyChecksForUpdates)
+        model.ensureStarted()
+        model.checkForUpdates()
+        XCTAssertFalse(model.updaterError)
+
+        await model.stop()
+    }
+
+    func testUpdaterStartupFailureIsPublishedAndBlocksChecksAndLateCallbacks() async {
+        let updater = TestAppUpdater(canCheckForUpdates: false, automaticallyChecksForUpdates: true)
+        updater.shouldFailToStart = true
+        let credentials = InMemoryCredentialStore()
+        let model = AppModel(
+            adapters: [],
+            credentialStore: credentials,
+            preferencesStore: MemoryPreferencesStore(),
+            context: makeContext(credentials: credentials),
+            updater: updater
+        )
+
+        model.ensureStarted()
+        XCTAssertEqual(updater.startCount, 1)
+        XCTAssertTrue(model.updaterError)
+        XCTAssertFalse(model.canCheckForUpdates)
+
+        updater.publishCanCheckForUpdates(true)
+        XCTAssertFalse(model.canCheckForUpdates)
+        model.checkForUpdates()
+        XCTAssertEqual(updater.checkCount, 0)
+
+        await model.stop()
+    }
+
+    func testUpdaterRejectsChecksAndChangesAfterStop() async {
+        let updater = TestAppUpdater(canCheckForUpdates: true, automaticallyChecksForUpdates: true)
+        let credentials = InMemoryCredentialStore()
+        let model = AppModel(
+            adapters: [],
+            credentialStore: credentials,
+            preferencesStore: MemoryPreferencesStore(),
+            context: makeContext(credentials: credentials),
+            updater: updater
+        )
+
+        model.ensureStarted()
+        model.checkForUpdates()
+        XCTAssertEqual(updater.checkCount, 1)
+
+        await model.stop()
+        XCTAssertFalse(model.canCheckForUpdates)
+
+        updater.publishCanCheckForUpdates(true)
+        model.checkForUpdates()
+        XCTAssertEqual(updater.checkCount, 1)
+
+        model.automaticallyChecksForUpdates = false
+        XCTAssertTrue(model.automaticallyChecksForUpdates)
+        XCTAssertTrue(updater.automaticallyChecksForUpdates)
+    }
+
     private func makeContext(credentials: any AppCredentialStore) -> CollectionContext {
         CollectionContext(
             network: UnavailableNetworkClient(),
@@ -1459,136 +1287,37 @@ private actor TestAppAdapter: ProviderAdapter {
         return try results.removeFirst().get()
     }
 }
-private struct ReleaseRequestSnapshot: Sendable {
-    let url: URL?
-    let method: String?
-    let timeout: TimeInterval
-    let headers: [String: String]
-}
-
-private actor ReleaseFixtureTransport: ReleaseUpdateTransport {
-    private let response: ReleaseUpdateHTTPResponse
-    private(set) var requests: [ReleaseRequestSnapshot] = []
-
-    init(response: ReleaseUpdateHTTPResponse) {
-        self.response = response
+@MainActor
+private final class TestAppUpdater: AppUpdating {
+    enum TestError: Error {
+        case startup
     }
 
-    func send(_ request: URLRequest) async throws -> ReleaseUpdateHTTPResponse {
-        requests.append(
-            ReleaseRequestSnapshot(
-                url: request.url,
-                method: request.httpMethod,
-                timeout: request.timeoutInterval,
-                headers: (request.allHTTPHeaderFields ?? [:]).reduce(into: [String: String]()) {
-                    $0[$1.key.lowercased()] = $1.value
-                }
-            )
-        )
-        return response
+    var canCheckForUpdates: Bool
+    var automaticallyChecksForUpdates: Bool
+    var onCanCheckForUpdatesChanged: (@MainActor @Sendable (Bool) -> Void)?
+    var shouldFailToStart = false
+    private(set) var startCount = 0
+    private(set) var checkCount = 0
+
+    init(canCheckForUpdates: Bool, automaticallyChecksForUpdates: Bool) {
+        self.canCheckForUpdates = canCheckForUpdates
+        self.automaticallyChecksForUpdates = automaticallyChecksForUpdates
     }
 
-    func requestCount() -> Int {
-        requests.count
-    }
-
-    func lastRequest() -> ReleaseRequestSnapshot? {
-        requests.last
-    }
-}
-
-private actor BlockingReleaseFixtureTransport: ReleaseUpdateTransport {
-    private let response: ReleaseUpdateHTTPResponse
-    private var continuation: CheckedContinuation<ReleaseUpdateHTTPResponse, Error>?
-    private(set) var requests = 0
-
-    init(response: ReleaseUpdateHTTPResponse) {
-        self.response = response
-    }
-
-    func send(_ request: URLRequest) async throws -> ReleaseUpdateHTTPResponse {
-        requests += 1
-        try Task.checkCancellation()
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                self.continuation = continuation
-            }
-        } onCancel: {
-            Task { await self.cancelPendingRequest() }
+    func start() throws {
+        startCount += 1
+        if shouldFailToStart {
+            throw TestError.startup
         }
     }
 
-    func requestCount() -> Int {
-        requests
+    func checkForUpdates() {
+        checkCount += 1
     }
 
-    func resume() {
-        continuation?.resume(returning: response)
-        continuation = nil
-    }
-
-    private func cancelPendingRequest() {
-        continuation?.resume(throwing: CancellationError())
-        continuation = nil
-    }
-}
-
-private actor ReleaseTestClock: TokenTankClock {
-    private struct Waiter {
-        let deadline: Date
-        let continuation: CheckedContinuation<Void, Error>
-    }
-
-    private var date: Date
-    private var waiters: [UUID: Waiter] = [:]
-
-    init(now: Date) {
-        date = now
-    }
-
-    func now() -> Date {
-        date
-    }
-    func waitingCount() -> Int {
-        waiters.count
-    }
-
-    func monotonicNow() -> Duration {
-        .zero
-    }
-
-    func sleep(for duration: Duration) async throws {
-        let id = UUID()
-        try Task.checkCancellation()
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                waiters[id] = Waiter(
-                    deadline: date.addingTimeInterval(duration.releaseTimeInterval),
-                    continuation: continuation
-                )
-            }
-        } onCancel: {
-            Task { await self.cancelWaiter(id) }
-        }
-    }
-
-    func advance(by duration: Duration) {
-        date = date.addingTimeInterval(duration.releaseTimeInterval)
-        let ready = waiters.filter { $0.value.deadline <= date }
-        for id in ready.keys {
-            waiters.removeValue(forKey: id)?.continuation.resume()
-        }
-    }
-
-    private func cancelWaiter(_ id: UUID) {
-        waiters.removeValue(forKey: id)?.continuation.resume(throwing: CancellationError())
-    }
-}
-
-private extension Duration {
-    var releaseTimeInterval: TimeInterval {
-        let components = self.components
-        return TimeInterval(components.seconds)
-            + TimeInterval(components.attoseconds) / 1_000_000_000_000_000_000
+    func publishCanCheckForUpdates(_ value: Bool) {
+        canCheckForUpdates = value
+        onCanCheckForUpdatesChanged?(value)
     }
 }
