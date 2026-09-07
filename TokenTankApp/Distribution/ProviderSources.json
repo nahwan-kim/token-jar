@@ -74,11 +74,11 @@
     {
       "provider": "grok",
       "surface": "Grok CLI SuperGrok credits",
-      "selectedSource": "Read-only ~/.grok/auth.json plus cli-chat-proxy.grok.com/v1/billing?format=credits",
+      "selectedSource": "Read-only ~/.grok/auth.json plus cli-chat-proxy.grok.com/v1/billing?format=credits; only when a successful proxy response leaves usage unknown, bearer-only POST https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig with the same captured bearer and a 6-second timeout",
       "sourceStatus": "watch",
       "productionComposition": true,
-      "sourceStatusReason": "This is the CodexBar SuperGrok credits path: the Grok CLI owner session plus the documented CLI-proxy credits endpoint. Token Jar never copies or refreshes the token, never imports browser cookies, never uses grok agent stdio, and never calls the xAI Management prepaid-balance API.",
-      "rejectedAlternative": "The CodexBar-observed Grok Build ACP x.ai/billing extension returned JSON-RPC -32601 (method-not-found) on official Grok 1.0.13; browser-cookie, gRPC-web, and local-session-estimate fallbacks remain prohibited.",
+      "sourceStatusReason": "This is the CodexBar-style SuperGrok credits path: the Grok CLI owner session and CLI-proxy credits endpoint remain primary. Only a successful proxy snapshot with unknown usage may trigger one bearer-only gRPC-web POST to the Grok billing endpoint, using the same captured bearer, an empty data frame, no cookies, and a 6-second timeout. Proxy reset, source metadata, and account identity remain authoritative; web billing supplies usage only. Token Jar never copies or refreshes the token, never imports browser cookies, never uses Grok ACP stdio, and never calls the xAI Management prepaid-balance API.",
+      "rejectedAlternative": "Browser-cookie imports, Grok ACP stdio, local-session estimates, xAI Management API/prepaid-balance calls, and credential refresh or copying remain prohibited. The older Grok Build ACP x.ai/billing probe returned JSON-RPC -32601 (method-not-found) on official Grok 1.0.13.",
       "documentation": [
         "https://github.com/steipete/CodexBar/blob/main/docs/grok.md"
       ],
@@ -87,7 +87,9 @@
       "tokenTankIO": [
         "Open only ~/.grok/auth.json with the exact external-session capability",
         "HTTPS GET https://cli-chat-proxy.grok.com/v1/billing?format=credits with the ephemeral owner bearer",
-        "Expose published creditUsagePercent or the same-row onDemandUsed/onDemandCap ratio under the credits quota",
+        "Only when a successful proxy response leaves usage unknown, POST https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig with the same captured bearer, a 5-byte empty gRPC-web data frame (00 00 00 00 00), no cookies, and a 6-second timeout",
+        "Preserve proxy reset, source metadata, and account identity; adopt a published web percentage, or an omitted proto3 scalar as zero only for a structurally complete response with a recognized current weekly/monthly period containing the refresh time; otherwise retain unknown, including a failed fallback",
+        "Expose published creditUsagePercent or the same-row on-demand used/cap ratio under the credits quota",
         "Display only the selected auth entry's optional email in memory; never infer identity from another entry or token"
       ],
       "externalPaths": [
@@ -95,9 +97,9 @@
       ],
       "tccClass": "none",
       "fdaRequired": false,
-      "liveValidation": "Current-host Grok CLI auth.json exists with an OIDC SuperGrok session; credits payload parsing is fixture-tested.",
-      "mutationRisk": "Read-only exact-path open. No credential copy, refresh, cookie import, or Management API fallback is allowed.",
-      "releaseBlocker": "Revalidate the owner session and sanitized CLI-proxy credits shape through the final frozen candidate"
+      "liveValidation": "2026-09-07 current-host read-only probe reproduced HTTP 200 proxy credits with no creditUsagePercent, onDemandUsed/onDemandCap both zero, and currentPeriod present. The production Swift adapter plus URLSessionNetworkClient then returned used 0%, remaining 100%, and preserved proxy reset through a validated active-period proto3 implicit zero from bearer-only web billing. This matches CodexBar semantics, not an independently published percentage. All 97 package tests and Provider I/O audit passed; packaged-app and final frozen-candidate verification remain pending.",
+      "mutationRisk": "Read-only exact-path open. No credential copy, refresh, cookie import, Management API fallback, or source-store mutation is allowed.",
+      "releaseBlocker": "Revalidate the owner session, primary and fallback request/response shapes, proxy metadata preservation, and sanitized fixture coverage through the final frozen candidate"
     },
     {
       "provider": "cursor",

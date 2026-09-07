@@ -484,6 +484,74 @@ struct SystemInfrastructureTests {
         }
     }
 
+    @Test("Grok bearer retry permits only the exact bounded read-only gRPC request")
+    func grokBillingRetryPolicy() async throws {
+        let endpoint = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig"
+        let headers = [
+            "Accept": "*/*",
+            "Origin": "https://grok.com",
+            "Referer": "https://grok.com/?_s=usage",
+            "x-user-agent": "connect-es/2.1.1",
+            "User-Agent": "TokenJar",
+            "Content-Type": "application/grpc-web+proto",
+            "Authorization": "Bearer fixture-token",
+            "x-grpc-web": "1",
+        ]
+        func request(
+            url: String = endpoint,
+            method: HTTPMethod = .post,
+            body: Data? = Data([0, 0, 0, 0, 0]),
+            timeout: TimeInterval = 6,
+            requestHeaders: [String: String] = headers
+        ) -> NetworkRequest {
+            NetworkRequest(
+                providerID: .grok, url: URL(string: url)!, method: method,
+                headers: requestHeaders, body: body, timeout: timeout
+            )
+        }
+        #expect(URLSessionNetworkClient.isAllowed(request()))
+        for invalid in [
+            request(url: endpoint + "?extra=1"),
+            request(url: endpoint + "/"),
+            request(url: endpoint.replacingOccurrences(of: "grok.com", with: "other.grok.com")),
+            request(url: endpoint.replacingOccurrences(of: "https:", with: "http:")),
+            request(method: .get),
+            request(body: nil),
+            request(body: Data()),
+            request(body: Data([0, 0, 0, 0, 1, 0])),
+            request(timeout: 7),
+            request(timeout: 0),
+        ] {
+            #expect(!URLSessionNetworkClient.isAllowed(invalid))
+        }
+
+        BoundedResponseURLProtocol.setPayload(Data([0, 0, 0, 0, 0]))
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [BoundedResponseURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let client = URLSessionNetworkClient(session: session, maximumResponseBytes: 1024)
+        _ = try await client.send(request())
+        var cookieHeaders = headers
+        cookieHeaders["Cookie"] = "session=forbidden"
+        var wrongType = headers
+        wrongType["Content-Type"] = "application/json"
+        var wrongAuth = headers
+        wrongAuth["Authorization"] = "Basic fixture"
+        var wrongVersion = headers
+        wrongVersion["x-grpc-web"] = "2"
+        for rejectedHeaders in [[:], cookieHeaders, wrongType, wrongAuth, wrongVersion] {
+            do {
+                _ = try await client.send(request(requestHeaders: rejectedHeaders))
+                Issue.record("Expected Grok retry header rejection")
+            } catch let error as CollectionError {
+                #expect(error.diagnosticCode == "network.header-invalid")
+            } catch {
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+    }
+
     @Test("network responses are rejected as soon as the byte limit is crossed")
     func boundedNetworkResponse() async {
         BoundedResponseURLProtocol.setPayload(Data(repeating: 0x41, count: 4))

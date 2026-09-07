@@ -148,7 +148,24 @@ public actor URLSessionNetworkClient: NetworkClient {
         case .codex, .claude, .doubao:
             expectedNames = []
         case .grok:
-            expectedNames = ["accept", "authorization", "x-xai-token-auth"]
+            if request.url.host?.lowercased() == "grok.com" {
+                expectedNames = ["accept", "authorization", "content-type", "x-grpc-web",
+                                 "origin", "referer", "x-user-agent", "user-agent"]
+                let headers = Dictionary(uniqueKeysWithValues: request.headers.map { ($0.key.lowercased(), $0.value) })
+                guard headers["accept"] == "*/*",
+                      headers["origin"] == "https://grok.com",
+                      headers["referer"] == "https://grok.com/?_s=usage",
+                      headers["x-user-agent"] == "connect-es/2.1.1",
+                      headers["user-agent"] == "TokenJar",
+                      headers["content-type"] == "application/grpc-web+proto",
+                      headers["x-grpc-web"] == "1",
+                      let authorization = headers["authorization"],
+                      authorization.hasPrefix("Bearer "),
+                      authorization.count > "Bearer ".count
+                else { return false }
+            } else {
+                expectedNames = ["accept", "authorization", "x-xai-token-auth"]
+            }
         case .cursor:
             expectedNames = ["accept", "cookie"]
         }
@@ -206,6 +223,14 @@ public actor URLSessionNetworkClient: NetworkClient {
         case .codex, .claude, .doubao:
             return false
         case .grok:
+            if host == "grok.com" {
+                return request.method == .post
+                    && components.percentEncodedPath == "/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig"
+                    && components.query == nil
+                    && request.body == Data([0, 0, 0, 0, 0])
+                    && request.timeout > 0
+                    && request.timeout <= 6
+            }
             let items = components.queryItems ?? []
             return request.method == .get
                 && host == "cli-chat-proxy.grok.com"

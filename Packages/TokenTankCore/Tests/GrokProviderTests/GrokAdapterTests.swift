@@ -255,4 +255,333 @@ struct GrokAdapterTests {
         #expect(quota.used == nil)
         #expect(quota.resetsAt != nil)
     }
+    @Test("successful proxy fallback adopts published web usage and preserves proxy authority")
+    func webBillingFallback() async throws {
+        let request = ExternalFileRequest(
+            providerID: .grok,
+            relativePath: ".grok/auth.json",
+            maximumBytes: 64 * 1024
+        )
+        let now = Date(timeIntervalSince1970: 1_850_000_000)
+        let proxyBody = Self.unknownProxyFixture
+        let proxySnapshot = try GrokAdapter.decodeSnapshot(from: proxyBody)
+        let proxyReset = proxySnapshot.quotas.first?.resetsAt
+        let webBody = Self.grpcResponse(Self.publishedPercentPayload(37.5))
+        let network = QueueNetworkClient(
+            results: [
+                .success(NetworkResponse(statusCode: 200, headers: [:], body: proxyBody)),
+                .success(NetworkResponse(statusCode: 200, headers: [:], body: webBody)),
+            ]
+        )
+        let context = TestContextFactory.make(
+            network: network,
+            externalSessions: MemoryExternalSessionReader(files: [request: authFile]),
+            clock: ManualClock(now: now)
+        )
+
+        let snapshot = try await GrokAdapter().fetchSnapshot(context: context)
+        let quota = try #require(snapshot.quotas.first)
+        #expect(quota.percentage.rawText == "37.5")
+        #expect(quota.sourceFields["webPercentSource"] == "grok.com.grpc-web.published")
+        #expect(quota.remaining?.rawText == "62.5")
+        #expect(quota.resetsAt == proxyReset)
+        #expect(snapshot.accountEmail == "fixture@example.com")
+        #expect(snapshot.source == GrokAdapter().sourceDescriptor)
+        #expect(quota.sourceFields["resetSource"] == "2026-09-10T00:00:00Z")
+
+        let requests = await network.requests
+        #expect(requests.count == 2)
+        let webRequest = try #require(requests.last)
+        #expect(webRequest.method == .post)
+        #expect(webRequest.url == GrokWebBilling.endpoint)
+        #expect(webRequest.headers == [
+            "Authorization": "Bearer synthetic-grok-session-token",
+            "Origin": "https://grok.com",
+            "Referer": "https://grok.com/?_s=usage",
+            "Accept": "*/*",
+            "Content-Type": "application/grpc-web+proto",
+            "x-grpc-web": "1",
+            "x-user-agent": "connect-es/2.1.1",
+            "User-Agent": "TokenJar",
+        ])
+        #expect(webRequest.body == Data([0, 0, 0, 0, 0]))
+        #expect(webRequest.timeout == 6)
+    }
+
+    @Test("active weekly or monthly period with omitted usage adopts zero")
+    func webBillingImplicitZero() async throws {
+        let request = ExternalFileRequest(
+            providerID: .grok,
+            relativePath: ".grok/auth.json",
+            maximumBytes: 64 * 1024
+        )
+        let now = Date(timeIntervalSince1970: 1_850_000_000)
+        let proxyReset = try GrokAdapter.decodeSnapshot(from: Self.unknownProxyFixture)
+            .quotas.first?.resetsAt
+        for periodType in [UInt8(1), UInt8(2)] {
+            let network = QueueNetworkClient(
+                results: [
+                    .success(NetworkResponse(statusCode: 200, headers: [:], body: Self.unknownProxyFixture)),
+                    .success(NetworkResponse(
+                        statusCode: 200,
+                        headers: [:],
+                        body: Self.grpcResponse(
+                            Self.activePeriodPayload(
+                                periodType: periodType,
+                                start: 1_840_000_000,
+                                end: 1_900_000_000
+                            )
+                        )
+                    )),
+                ]
+            )
+            let context = TestContextFactory.make(
+                network: network,
+                externalSessions: MemoryExternalSessionReader(files: [request: authFile]),
+                clock: ManualClock(now: now)
+            )
+
+            let snapshot = try await GrokAdapter().fetchSnapshot(context: context)
+            let quota = try #require(snapshot.quotas.first)
+            #expect(quota.percentage.value == 0)
+            #expect(quota.sourceFields["webPercentSource"] == "grok.com.grpc-web.implicit-zero")
+            #expect(quota.resetsAt == proxyReset)
+        }
+    }
+
+    @Test("proxy usage takes precedence and avoids the web retry")
+    func proxyUsagePrecedence() async throws {
+        let request = ExternalFileRequest(
+            providerID: .grok,
+            relativePath: ".grok/auth.json",
+            maximumBytes: 64 * 1024
+        )
+        let network = QueueNetworkClient(
+            results: [.success(NetworkResponse(statusCode: 200, headers: [:], body: fixture))]
+        )
+        let context = TestContextFactory.make(
+            network: network,
+            externalSessions: MemoryExternalSessionReader(files: [request: authFile])
+        )
+
+        let snapshot = try await GrokAdapter().fetchSnapshot(context: context)
+        #expect(snapshot.quotas.first?.percentage.rawText == "37.5")
+        let requests = await network.requests
+        #expect(requests.count == 1)
+    }
+
+    @Test("failed web fallback preserves unknown proxy usage and reset")
+    func failedWebFallbackPreservesProxy() async throws {
+        let request = ExternalFileRequest(
+            providerID: .grok,
+            relativePath: ".grok/auth.json",
+            maximumBytes: 64 * 1024
+        )
+        let proxyReset = try GrokAdapter.decodeSnapshot(from: Self.unknownProxyFixture)
+            .quotas.first?.resetsAt
+        let network = QueueNetworkClient(
+            results: [
+                .success(NetworkResponse(statusCode: 200, headers: [:], body: Self.unknownProxyFixture)),
+                .success(NetworkResponse(statusCode: 503, headers: [:], body: Data("unavailable".utf8))),
+            ]
+        )
+        let context = TestContextFactory.make(
+            network: network,
+            externalSessions: MemoryExternalSessionReader(files: [request: authFile])
+        )
+
+        let snapshot = try await GrokAdapter().fetchSnapshot(context: context)
+        let quota = try #require(snapshot.quotas.first)
+        #expect(quota.percentage.value == nil)
+        #expect(quota.used == nil)
+        #expect(quota.resetsAt == proxyReset)
+        #expect(snapshot.accountEmail == "fixture@example.com")
+        let requests = await network.requests
+        #expect(requests.count == 2)
+    }
+
+    @Test("cancellation from web fallback is propagated")
+    func webBillingCancellation() async throws {
+        let request = ExternalFileRequest(
+            providerID: .grok,
+            relativePath: ".grok/auth.json",
+            maximumBytes: 64 * 1024
+        )
+        let network = CancellationNetworkClient(
+            proxyBody: Self.unknownProxyFixture
+        )
+        let context = TestContextFactory.make(
+            network: network,
+            externalSessions: MemoryExternalSessionReader(files: [request: authFile])
+        )
+
+        do {
+            _ = try await GrokAdapter().fetchSnapshot(context: context)
+            Issue.record("Expected cancellation")
+        } catch is CancellationError {
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test("web parser accepts only valid active periods for implicit zero")
+    func webBillingPeriodValidation() throws {
+        let now = Date(timeIntervalSince1970: 1_850_000_000)
+        let invalidPayloads = [
+            Self.activePeriodPayload(periodType: 0, start: 1_840_000_000, end: 1_900_000_000),
+            Self.activePeriodPayload(periodType: 3, start: 1_840_000_000, end: 1_900_000_000),
+            Self.activePeriodPayload(periodType: 2, start: 1_860_000_000, end: 1_900_000_000),
+            Self.activePeriodPayload(periodType: 2, start: 1_840_000_000, end: 1_850_000_000),
+            Self.activePeriodPayload(periodType: 2, start: 1_840_000_000, end: nil),
+        ]
+        for payload in invalidPayloads {
+            #expect(throws: GrokWebBillingError.self) {
+                try GrokWebBilling.parseGRPCWebResponse(Self.grpcResponse(payload), now: now)
+            }
+        }
+    }
+
+    @Test("web parser rejects malformed protobuf, frame, and grpc status")
+    func webBillingMalformedResponses() throws {
+        let malformedPayloads = [
+            Self.grpcFrame(Data([0x00])),
+            Self.grpcFrame(Self.fixed64Field(tag: [0x89, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02])),
+            Self.grpcFrame(Self.publishedPercentPayload(20) + Data([0x0D, 0x00])),
+            Self.grpcFrame(Self.duplicatePublishedPercentPayload),
+            Self.grpcFrame(Data([0x0A, 0x02, 0x08, 0x01])),
+            Data([0, 0, 0]),
+        ]
+        for data in malformedPayloads {
+            #expect(throws: GrokWebBillingError.self) {
+                try GrokWebBilling.parseGRPCWebResponse(data)
+            }
+        }
+
+        let grpcFailure = Self.grpcFrame(Data("grpc-status: 16\r\ngrpc-message: token%20expired\r\n".utf8), flags: 0x80)
+        #expect(throws: GrokWebBillingError.self) {
+            try GrokWebBilling.parseGRPCWebResponse(grpcFailure)
+        }
+    }
+
+    @Test("unknown length-delimited fields stay opaque")
+    func webBillingUnknownFields() throws {
+        let payload = Self.activePeriodPayload(
+            periodType: 2,
+            start: 1_840_000_000,
+            end: 1_900_000_000
+        ) + Self.lengthDelimited(path: [14], contents: Self.publishedPercentPayload(99))
+        let parsed = try GrokWebBilling.parseGRPCWebResponse(
+            Self.grpcResponse(payload),
+            now: Date(timeIntervalSince1970: 1_850_000_000)
+        )
+        #expect(parsed.usedPercent == 0)
+        #expect(parsed.usedPercentIsImplicitZero)
+        #expect(!parsed.usedPercentIsWirePublished)
+    }
+
+    @Test("known malformed nested messages prevent implicit zero")
+    func webBillingKnownMalformedNested() {
+        let payload = Self.activePeriodPayload(
+            periodType: 2,
+            start: 1_840_000_000,
+            end: 1_900_000_000
+        ) + Self.lengthDelimited(path: [1, 8], contents: Data([0x0D]))
+        #expect(throws: GrokWebBillingError.self) {
+            try GrokWebBilling.parseGRPCWebResponse(Self.grpcResponse(payload))
+        }
+    }
+
+    private struct CancellationNetworkClient: NetworkClient {
+        let proxyBody: Data
+
+        func send(_ request: NetworkRequest) async throws -> NetworkResponse {
+            if request.method == .get {
+                return NetworkResponse(statusCode: 200, headers: [:], body: proxyBody)
+            }
+            throw CancellationError()
+        }
+    }
+
+    private static let unknownProxyFixture = Data(
+        """
+        {
+          "config": {
+            "currentPeriod": {
+              "end": "2026-09-10T00:00:00Z"
+            }
+          }
+        }
+        """.utf8
+    )
+
+    private static func publishedPercentPayload(_ percent: Float) -> Data {
+        var config = Data([0x0D])
+        var bits = percent.bitPattern.littleEndian
+        withUnsafeBytes(of: &bits) { config.append(contentsOf: $0) }
+        return Data([0x0A, UInt8(config.count)]) + config
+    }
+
+    private static var duplicatePublishedPercentPayload: Data {
+        var config = Data()
+        for percent in [Float(20), Float(30)] {
+            config.append(0x0D)
+            var bits = percent.bitPattern.littleEndian
+            withUnsafeBytes(of: &bits) { config.append(contentsOf: $0) }
+        }
+        return Data([0x0A, UInt8(config.count)]) + config
+    }
+
+    private static func activePeriodPayload(
+        periodType: UInt8,
+        start: UInt64,
+        end: UInt64?
+    ) -> Data {
+        var period = Data([0x08, periodType])
+        let startMessage = Data([0x08]) + Self.varint(start)
+        period.append(contentsOf: [0x12, UInt8(startMessage.count)])
+        period.append(contentsOf: startMessage)
+        if let end {
+            let endMessage = Data([0x08]) + Self.varint(end)
+            period.append(contentsOf: [0x1A, UInt8(endMessage.count)])
+            period.append(contentsOf: endMessage)
+        }
+        var config = Data([0x42, UInt8(period.count)])
+        config.append(contentsOf: period)
+        return Data([0x0A, UInt8(config.count)]) + config
+    }
+
+    private static func grpcResponse(_ payload: Data) -> Data {
+        grpcFrame(payload) + grpcFrame(Data("grpc-status: 0\r\n".utf8), flags: 0x80)
+    }
+
+    private static func grpcFrame(_ payload: Data, flags: UInt8 = 0) -> Data {
+        var data = Data([flags])
+        let length = UInt32(payload.count).bigEndian
+        withUnsafeBytes(of: length) { data.append(contentsOf: $0) }
+        data.append(contentsOf: payload)
+        return data
+    }
+
+    private static func lengthDelimited(path: [UInt64], contents: Data) -> Data {
+        var payload = contents
+        for field in path.reversed() {
+            payload = Self.varint((field << 3) | 2) + Self.varint(UInt64(payload.count)) + payload
+        }
+        return payload
+    }
+
+    private static func fixed64Field(tag: [UInt8]) -> Data {
+        Data(tag + [UInt8](repeating: 0, count: 8))
+    }
+
+    private static func varint(_ value: UInt64) -> Data {
+        var value = value
+        var data = Data()
+        while value >= 0x80 {
+            data.append(UInt8(value & 0x7F) | 0x80)
+            value >>= 7
+        }
+        data.append(UInt8(value))
+        return data
+    }
 }

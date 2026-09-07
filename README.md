@@ -62,18 +62,18 @@ Token Jar 자체 계정은 필요하지 않습니다. 세션이 만료되면 해
 | --- | --- | --- |
 | **Codex** | 공식 `codex app-server`의 구독 사용량 한도 | Codex CLI 로그인. 기본 `~/.codex`, 선택적으로 `~/.codex-secondary` |
 | **Claude** | `~/.claude.json`의 `cachedUsageUtilization` | Claude Code가 기록한 사용량 캐시 |
-| **Grok** | Grok CLI 세션으로 조회한 SuperGrok 크레딧 | Grok CLI 로그인 및 `~/.grok/auth.json` |
+| **Grok** | Grok CLI 세션으로 조회한 SuperGrok 크레딧 (프록시 우선, 사용량 누락 시 동일 세션 bearer의 제한된 billing fallback) | Grok CLI 로그인 및 `~/.grok/auth.json` |
 | **Cursor** | Cursor 로컬 세션으로 조회한 계정 사용량 요약 | Cursor 앱 로그인 |
 | **Doubao** | 공식 `arkcli usage plan --format json`의 플랜 한도 | `arkcli` 설치 및 유효한 SSO 로그인 |
 
-> **연동 범위에 주의하세요.** 모든 서비스가 안정적인 공개 사용량 API를 제공하지는 않습니다. Claude의 로컬 캐시와 Grok·Cursor의 연동은 제공자 변경에 영향을 받을 수 있습니다. 캐시가 오래됐거나 세션·응답 형식이 달라지면 데이터를 만들거나 다른 출처로 대체하지 않고 오류를 표시합니다. API 과금 전체를 합산하는 비용 관리 도구는 아닙니다.
+> **연동 범위에 주의하세요.** 모든 서비스가 안정적인 공개 사용량 API를 제공하지는 않습니다. Claude의 로컬 캐시와 Grok·Cursor의 연동은 제공자 변경에 영향을 받을 수 있습니다. 캐시가 오래됐거나 세션·응답 형식이 달라지거나 승인된 fallback 조건을 벗어나면 데이터를 만들거나 다른 출처로 대체하지 않고 오류를 표시합니다. API 과금 전체를 합산하는 비용 관리 도구는 아닙니다.
 
 정확한 경로, 조회 방식, 알려진 제한과 검증 상태는 [ProviderSources.json](TokenTankApp/Distribution/ProviderSources.json)에 기록되어 있습니다.
 
 ## 내 계정은 원래 있던 곳에
 
 - 공식 도구가 소유한 인증 저장소를 수정하거나, 인증 정보를 별도 파일로 복사·저장·갱신하지 않습니다.
-- Grok·Cursor 조회에 필요한 기존 세션은 메모리에서 사용합니다. 브라우저 쿠키를 가져오지 않습니다.
+- Grok·Cursor 조회에 필요한 기존 세션은 메모리에서 사용합니다. Grok은 프록시 응답에 사용량이 없을 때만 동일 bearer로 제한된 billing fallback을 시도하며, 브라우저 쿠키를 가져오지 않습니다.
 - 사용량 스냅샷은 메모리에만 유지합니다. 표시 설정은 로컬에 저장합니다.
 - Codex와 Doubao는 허용된 공식 CLI를 실행합니다. 공식 CLI 자체의 세션 관리는 해당 도구가 담당합니다.
 - 네트워크 조회가 필요한 서비스는 해당 제공자에 직접 요청합니다. 완전한 오프라인 앱은 아닙니다.

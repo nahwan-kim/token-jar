@@ -14,7 +14,7 @@ public struct GrokAdapter: ProviderAdapter {
             kind: .localSession,
             credentialOwnership: .externalProvider,
             documentationURL: URL(string: "https://github.com/steipete/CodexBar/blob/main/docs/grok.md"),
-            detail: "Read-only Grok CLI ~/.grok/auth.json session plus cli-chat-proxy.grok.com/v1/billing?format=credits. This is the CodexBar SuperGrok credits path. Token Jar never copies or refreshes the token, never imports browser cookies, never uses grok agent stdio, and never calls the xAI Management prepaid-balance API."
+            detail: "Read-only Grok CLI ~/.grok/auth.json session plus cli-chat-proxy.grok.com/v1/billing?format=credits. When that successful proxy snapshot omits usage, Token Jar may make a bearer-only grpc-web POST to grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig using the same captured session token. Proxy reset, source metadata, and account identity remain authoritative; web billing supplies usage only. Token Jar never copies or refreshes the token, never imports browser cookies, never uses grok agent stdio, and never calls the xAI Management prepaid-balance API."
         )
     }
 
@@ -68,13 +68,83 @@ public struct GrokAdapter: ProviderAdapter {
             throw CollectionError(kind: .transientNetwork, diagnosticCode: "grok.credits.network-failed")
         }
         try grokValidate(response, now: now)
-        return try Self.decodeSnapshot(
+        let proxySnapshot = try Self.decodeSnapshot(
             from: response.body,
             refreshedAt: now,
             accountEmail: session.accountEmail
         )
+        guard proxySnapshot.quotas.allSatisfy({ $0.percentage.value == nil }) else {
+            return proxySnapshot
+        }
+
+        do {
+            let webSnapshot = try await GrokWebBilling.fetch(
+                token: session.token,
+                now: now,
+                network: context.network
+            )
+            guard webSnapshot.usedPercent != nil else {
+                return proxySnapshot
+            }
+            return Self.applyingWebPercent(webSnapshot, to: proxySnapshot)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as CollectionError where error.kind == .cancelled {
+            throw error
+        } catch {
+            if Task.isCancelled {
+                throw CancellationError()
+            }
+            return proxySnapshot
+        }
     }
 
+    private static func applyingWebPercent(
+        _ webSnapshot: GrokWebBillingSnapshot,
+        to snapshot: ProviderSnapshot
+    ) -> ProviderSnapshot {
+        guard let percent = webSnapshot.usedPercent,
+              webSnapshot.usedPercentIsWirePublished
+                  || (percent == 0 && webSnapshot.usedPercentIsImplicitZero),
+              percent.isFinite,
+              (0...100).contains(percent)
+        else {
+            return snapshot
+        }
+        let raw = String(percent)
+        guard let decimal = Decimal(string: raw, locale: Locale(identifier: "en_US_POSIX")) else {
+            return snapshot
+        }
+        let remainingDecimal = Decimal(100) - decimal
+        let rawRemaining = NSDecimalNumber(decimal: remainingDecimal).stringValue
+        let webPercentSource = webSnapshot.usedPercentIsWirePublished
+            ? "grok.com.grpc-web.published"
+            : "grok.com.grpc-web.implicit-zero"
+        let quotas = snapshot.quotas.map { quota -> RawQuotaItem in
+            guard quota.id.rawValue == "credits" else { return quota }
+            var sourceFields = quota.sourceFields
+            if sourceFields["webPercentSource"] == nil {
+                sourceFields["webPercentSource"] = webPercentSource
+            }
+            return RawQuotaItem(
+                id: quota.id,
+                originalName: quota.originalName,
+                used: SourceValue(value: decimal, rawText: raw, unit: "%"),
+                remaining: SourceValue(value: remainingDecimal, rawText: rawRemaining, unit: "%"),
+                percentage: SourcePercentage(value: decimal, rawText: raw, meaning: .used),
+                resetsAt: quota.resetsAt,
+                sourceFields: sourceFields
+            )
+        }
+        return ProviderSnapshot(
+            providerID: snapshot.providerID,
+            source: snapshot.source,
+            quotas: quotas,
+            refreshedAt: snapshot.refreshedAt,
+            accountEmail: snapshot.accountEmail,
+            accounts: snapshot.accounts
+        )
+    }
     public static func decodeSnapshot(
         from data: Data,
         refreshedAt: Date = Date()
