@@ -163,6 +163,12 @@ public actor URLSessionNetworkClient: NetworkClient {
                       authorization.hasPrefix("Bearer "),
                       authorization.count > "Bearer ".count
                 else { return false }
+            } else if request.url.host?.lowercased() == "auth.x.ai" {
+                expectedNames = ["accept", "content-type"]
+                let headers = Dictionary(uniqueKeysWithValues: request.headers.map { ($0.key.lowercased(), $0.value) })
+                guard headers["accept"] == "application/json",
+                      headers["content-type"] == "application/x-www-form-urlencoded"
+                else { return false }
             } else {
                 expectedNames = ["accept", "authorization", "x-xai-token-auth"]
             }
@@ -223,6 +229,14 @@ public actor URLSessionNetworkClient: NetworkClient {
         case .codex, .claude, .doubao:
             return false
         case .grok:
+            if host == "auth.x.ai" {
+                return request.method == .post
+                    && components.percentEncodedPath == "/oauth2/token"
+                    && components.query == nil
+                    && request.timeout > 0
+                    && request.timeout <= 15
+                    && refreshTokenFormIsAllowed(request.body)
+            }
             if host == "grok.com" {
                 return request.method == .post
                     && components.percentEncodedPath == "/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig"
@@ -247,9 +261,52 @@ public actor URLSessionNetworkClient: NetworkClient {
                 && request.body == nil
         }
     }
+
+    private static func refreshTokenFormIsAllowed(_ body: Data?) -> Bool {
+        guard let body, !body.isEmpty, body.count <= 32 * 1024,
+              let encoded = String(data: body, encoding: .utf8)
+        else { return false }
+
+        let pairs = encoded.split(separator: "&", omittingEmptySubsequences: false)
+        guard pairs.count == 3 else { return false }
+
+        var fields: [String: String] = [:]
+        for pair in pairs {
+            let components = pair.split(separator: "=", omittingEmptySubsequences: false)
+            guard components.count == 2,
+                  let name = decodeFormComponent(components[0]),
+                  let value = decodeFormComponent(components[1]),
+                  fields.updateValue(value, forKey: name) == nil
+            else { return false }
+        }
+
+        return fields.count == 3
+            && fields["grant_type"] == "refresh_token"
+            && fields["client_id"]?.isEmpty == false
+            && fields["refresh_token"]?.isEmpty == false
+    }
+
+    private static func decodeFormComponent(_ component: Substring) -> String? {
+        guard component.utf8.allSatisfy({
+            isUnescapedFormByte($0) || $0 == 0x2B || $0 == 0x25
+        }) else { return nil }
+        return String(component)
+            .replacingOccurrences(of: "+", with: " ")
+            .removingPercentEncoding
+    }
+
+    private static func isUnescapedFormByte(_ byte: UInt8) -> Bool {
+        switch byte {
+        case 0x30...0x39, 0x41...0x5A, 0x61...0x7A, 0x2A, 0x2D, 0x2E, 0x5F:
+            true
+        default:
+            false
+        }
+    }
+
 }
 
-private final class NoRedirectURLSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+final class NoRedirectURLSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,

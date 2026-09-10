@@ -19,34 +19,23 @@ struct GrokAdapterTests {
         """.utf8
     )
 
-    private let authFile = Data(
-        """
-        {
-          "https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828": {
-            "key": "synthetic-grok-session-token",
-            "refresh_token": "synthetic-refresh",
-            "expires_at": "2099-01-01T00:00:00Z",
-            "auth_mode": "oidc",
-            "email": "fixture@example.com",
-            "team_id": "team-fixture",
-            "user_id": "user-fixture",
-            "first_name": "Fixture",
-            "last_name": "User"
-          }
-        }
-        """.utf8
+    private let session = GrokSession(
+        accessToken: "synthetic-grok-session-token",
+        accountEmail: "fixture@example.com",
+        expiresAt: Date(timeIntervalSince1970: 4_070_908_800)
     )
 
-    @Test("descriptor identifies CodexBar SuperGrok credits, not Management prepaid balance")
+    @Test("descriptor identifies the Grok OAuth refresh and credits services")
     func descriptor() {
         let descriptor = GrokAdapter().sourceDescriptor
         #expect(descriptor.id == "grok.cli-proxy.credits")
         #expect(descriptor.name == "Grok CLI SuperGrok credits")
         #expect(descriptor.kind == .localSession)
         #expect(descriptor.credentialOwnership == .externalProvider)
+        #expect(descriptor.detail.contains("auth.x.ai"))
         #expect(descriptor.detail.contains("cli-chat-proxy.grok.com"))
         #expect(descriptor.detail.contains("never imports browser cookies"))
-        #expect(descriptor.detail.contains("never uses grok agent stdio"))
+        #expect(descriptor.detail.contains("never launches a CLI subprocess"))
         #expect(descriptor.detail.contains("never calls the xAI Management prepaid-balance API"))
     }
 
@@ -86,26 +75,23 @@ struct GrokAdapterTests {
         #expect(quota.sourceFields["percentField"] == "onDemandUsed/onDemandCap")
     }
 
-    @Test("fetch reads the Grok CLI auth file and never uses app-owned Management keys")
+    @Test("fetch uses the shared Grok session and exact proxy request")
     func requestContract() async throws {
-        let request = ExternalFileRequest(
-            providerID: .grok,
-            relativePath: ".grok/auth.json",
-            maximumBytes: 64 * 1024
-        )
         let network = QueueNetworkClient(
             results: [.success(NetworkResponse(statusCode: 200, headers: [:], body: fixture))]
         )
+        let sessions = MemoryGrokSessionProvider(results: [.success(session)])
         let context = TestContextFactory.make(
             network: network,
+            grokSession: sessions,
             credentials: InMemoryCredentialStore(
                 values: [CredentialID(providerID: .grok, name: "management-api-key"): "must-not-be-read"]
-            ),
-            externalSessions: MemoryExternalSessionReader(files: [request: authFile])
+            )
         )
 
         let snapshot = try await GrokAdapter().fetchSnapshot(context: context)
         #expect(snapshot.accountEmail == "fixture@example.com")
+        #expect(await sessions.rejectedAccessTokens == [nil])
         let sent = try #require(await network.requests.first)
         #expect(sent.method == .get)
         #expect(sent.providerID == .grok)
@@ -115,127 +101,144 @@ struct GrokAdapterTests {
         #expect(sent.body == nil)
     }
 
-    @Test("missing or malformed auth email keeps Grok quotas available")
-    func optionalAccountEmail() async throws {
-        let bodies = [
-            Data(
-                """
-                {
-                  "https://auth.x.ai::fixture": {
-                    "key": "synthetic-grok-session-token",
-                    "expires_at": "2099-01-01T00:00:00Z"
-                  }
-                }
-                """.utf8
-            ),
-            Data(
-                """
-                {
-                  "https://auth.x.ai::fixture": {
-                    "key": "synthetic-grok-session-token",
-                    "expires_at": "2099-01-01T00:00:00Z",
-                    "email": "not-an-email"
-                  }
-                }
-                """.utf8
-            ),
-        ]
+    @Test("availability probe performs no session or network I/O")
+    func availabilityProbeIsPure() async {
+        let sessions = MemoryGrokSessionProvider(results: [])
+        let network = QueueNetworkClient(results: [])
+        let availability = await GrokAdapter().probeAvailability(
+            context: TestContextFactory.make(network: network, grokSession: sessions)
+        )
 
-        for body in bodies {
-            let request = ExternalFileRequest(
-                providerID: .grok,
-                relativePath: ".grok/auth.json",
-                maximumBytes: 64 * 1024
-            )
-            let network = QueueNetworkClient(
-                results: [.success(NetworkResponse(statusCode: 200, headers: [:], body: fixture))]
-            )
-            let context = TestContextFactory.make(
-                network: network,
-                externalSessions: MemoryExternalSessionReader(files: [request: body])
-            )
-
-            let snapshot = try await GrokAdapter().fetchSnapshot(context: context)
-            #expect(snapshot.accountEmail == nil)
-            #expect(snapshot.quotas.count == 1)
-        }
-    }
-
-    @Test("missing auth file is source-owner setup, not a Token Jar credential")
-    func missingSession() async {
-        let availability = await GrokAdapter().probeAvailability(context: TestContextFactory.make())
-        guard case let .needsConfiguration(code) = availability else {
-            Issue.record("Expected needsConfiguration")
+        guard case .available = availability else {
+            Issue.record("Expected available descriptor")
             return
         }
-        #expect(code == "grok.cli-session.missing")
-    }
-
-    @Test("expired CLI token fails closed before network access")
-    func expiredSession() async {
-        let expired = Data(
-            """
-            {
-              "https://auth.x.ai::fixture": {
-                "key": "expired-token",
-                "expires_at": "2020-01-01T00:00:00Z"
-              }
-            }
-            """.utf8
-        )
-        let request = ExternalFileRequest(
-            providerID: .grok,
-            relativePath: ".grok/auth.json",
-            maximumBytes: 64 * 1024
-        )
-        let network = QueueNetworkClient(results: [])
-        do {
-            _ = try await GrokAdapter().fetchSnapshot(
-                context: TestContextFactory.make(
-                    network: network,
-                    externalSessions: MemoryExternalSessionReader(files: [request: expired]),
-                    clock: ManualClock(now: Date(timeIntervalSince1970: 1_800_000_000))
-                )
-            )
-            Issue.record("Expected expired session")
-        } catch let error as CollectionError {
-            #expect(error.kind == .authenticationRevoked)
-            #expect(error.diagnosticCode == "grok.cli-session.expired")
-        } catch {
-            Issue.record("Unexpected error: \(error)")
-        }
+        #expect(await sessions.rejectedAccessTokens.isEmpty)
         #expect(await network.requests.isEmpty)
     }
 
-    @Test("management keys and cookie-shaped tokens are rejected")
-    func rejectedTokenShapes() async {
-        let bodies = [
-            Data("{\"https://auth.x.ai::fixture\":{\"key\":\"xai-management\"}}".utf8),
-            Data("{\"https://auth.x.ai::fixture\":{\"key\":\"Cookie: session=abc\"}}".utf8),
-        ]
-        for body in bodies {
-            let request = ExternalFileRequest(
-                providerID: .grok,
-                relativePath: ".grok/auth.json",
-                maximumBytes: 64 * 1024
+    @Test("session failure occurs before billing and requests source-app sign-in")
+    func sessionFailureBeforeBilling() async {
+        let network = QueueNetworkClient(results: [])
+        let sessions = MemoryGrokSessionProvider(results: [
+            .failure(CollectionError(
+                kind: .authenticationRejected,
+                diagnosticCode: "grok.oauth.refresh-rejected"
+            )),
+        ])
+
+        do {
+            _ = try await GrokAdapter().fetchSnapshot(
+                context: TestContextFactory.make(network: network, grokSession: sessions)
             )
-            let network = QueueNetworkClient(results: [])
+            Issue.record("Expected session failure")
+        } catch let error as CollectionError {
+            #expect(error.kind == .authenticationRejected)
+            #expect(error.diagnosticCode == "grok.oauth.refresh-rejected")
+            #expect(error.recoveryAction == .signInSourceApp)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+        #expect(await sessions.rejectedAccessTokens == [nil])
+        #expect(await network.requests.isEmpty)
+    }
+
+    @Test("one proxy authentication rejection renews once with the rejected token")
+    func authenticationRejectionRenewsOnce() async throws {
+        for statusCode in [401, 403] {
+            let oldSession = GrokSession(accessToken: "old-token", accountEmail: "old@example.com")
+            let newSession = GrokSession(accessToken: "new-token", accountEmail: "new@example.com")
+            let sessions = MemoryGrokSessionProvider(results: [
+                .success(oldSession),
+                .success(newSession),
+            ])
+            let network = QueueNetworkClient(results: [
+                .success(NetworkResponse(statusCode: statusCode, headers: [:], body: Data())),
+                .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+            ])
+
+            let snapshot = try await GrokAdapter().fetchSnapshot(
+                context: TestContextFactory.make(network: network, grokSession: sessions)
+            )
+
+            #expect(snapshot.accountEmail == "new@example.com")
+            #expect(await sessions.rejectedAccessTokens == [nil, "old-token"])
+            let requests = await network.requests
+            #expect(requests.count == 2)
+            #expect(requests[0].headers["Authorization"] == "Bearer old-token")
+            #expect(requests[1].headers["Authorization"] == "Bearer new-token")
+        }
+    }
+
+    @Test("a second proxy authentication rejection surfaces without another renewal")
+    func secondAuthenticationRejectionStops() async {
+        for statusCode in [401, 403] {
+            let sessions = MemoryGrokSessionProvider(results: [
+                .success(GrokSession(accessToken: "old-token")),
+                .success(GrokSession(accessToken: "new-token")),
+            ])
+            let network = QueueNetworkClient(results: [
+                .success(NetworkResponse(statusCode: statusCode, headers: [:], body: Data())),
+                .success(NetworkResponse(statusCode: statusCode, headers: [:], body: Data())),
+            ])
+
             do {
                 _ = try await GrokAdapter().fetchSnapshot(
-                    context: TestContextFactory.make(
-                        network: network,
-                        externalSessions: MemoryExternalSessionReader(files: [request: body])
-                    )
+                    context: TestContextFactory.make(network: network, grokSession: sessions)
                 )
-                Issue.record("Expected token rejection")
+                Issue.record("Expected repeated authentication rejection")
             } catch let error as CollectionError {
-                #expect(error.kind == .authenticationRejected)
-                #expect(error.diagnosticCode == "grok.cli-session.token-missing")
+                #expect(error.kind == (statusCode == 401 ? .authenticationRejected : .authenticationRevoked))
+                #expect(error.recoveryAction == .signInSourceApp)
             } catch {
                 Issue.record("Unexpected error: \(error)")
             }
-            #expect(await network.requests.isEmpty)
+            #expect(await sessions.rejectedAccessTokens == [nil, "old-token"])
+            #expect(await network.requests.count == 2)
         }
+    }
+
+    @Test("non-authentication proxy errors do not request renewal")
+    func nonAuthenticationErrorDoesNotRenew() async {
+        let sessions = MemoryGrokSessionProvider(results: [.success(session)])
+        let network = QueueNetworkClient(results: [
+            .success(NetworkResponse(statusCode: 500, headers: [:], body: Data())),
+        ])
+
+        do {
+            _ = try await GrokAdapter().fetchSnapshot(
+                context: TestContextFactory.make(network: network, grokSession: sessions)
+            )
+            Issue.record("Expected proxy failure")
+        } catch let error as CollectionError {
+            #expect(error.kind == .transientNetwork)
+            #expect(error.diagnosticCode == "grok.credits.http-500")
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+        #expect(await sessions.rejectedAccessTokens == [nil])
+        #expect(await network.requests.count == 1)
+    }
+
+    @Test("billing cancellation is propagated without renewal")
+    func billingCancellationDoesNotRenew() async {
+        let sessions = MemoryGrokSessionProvider(results: [.success(session)])
+        let network = QueueNetworkClient(results: [
+            .failure(CollectionError(kind: .cancelled, diagnosticCode: "network.cancelled")),
+        ])
+
+        do {
+            _ = try await GrokAdapter().fetchSnapshot(
+                context: TestContextFactory.make(network: network, grokSession: sessions)
+            )
+            Issue.record("Expected cancellation")
+        } catch let error as CollectionError {
+            #expect(error.kind == .cancelled)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+        #expect(await sessions.rejectedAccessTokens == [nil])
+        #expect(await network.requests.count == 1)
     }
 
     @Test("period-only payload keeps credits without inventing a percent")
@@ -257,11 +260,6 @@ struct GrokAdapterTests {
     }
     @Test("successful proxy fallback adopts published web usage and preserves proxy authority")
     func webBillingFallback() async throws {
-        let request = ExternalFileRequest(
-            providerID: .grok,
-            relativePath: ".grok/auth.json",
-            maximumBytes: 64 * 1024
-        )
         let now = Date(timeIntervalSince1970: 1_850_000_000)
         let proxyBody = Self.unknownProxyFixture
         let proxySnapshot = try GrokAdapter.decodeSnapshot(from: proxyBody)
@@ -275,7 +273,7 @@ struct GrokAdapterTests {
         )
         let context = TestContextFactory.make(
             network: network,
-            externalSessions: MemoryExternalSessionReader(files: [request: authFile]),
+            grokSession: MemoryGrokSessionProvider(results: [.success(session)]),
             clock: ManualClock(now: now)
         )
 
@@ -310,11 +308,6 @@ struct GrokAdapterTests {
 
     @Test("active weekly or monthly period with omitted usage adopts zero")
     func webBillingImplicitZero() async throws {
-        let request = ExternalFileRequest(
-            providerID: .grok,
-            relativePath: ".grok/auth.json",
-            maximumBytes: 64 * 1024
-        )
         let now = Date(timeIntervalSince1970: 1_850_000_000)
         let proxyReset = try GrokAdapter.decodeSnapshot(from: Self.unknownProxyFixture)
             .quotas.first?.resetsAt
@@ -337,7 +330,7 @@ struct GrokAdapterTests {
             )
             let context = TestContextFactory.make(
                 network: network,
-                externalSessions: MemoryExternalSessionReader(files: [request: authFile]),
+                grokSession: MemoryGrokSessionProvider(results: [.success(session)]),
                 clock: ManualClock(now: now)
             )
 
@@ -351,17 +344,12 @@ struct GrokAdapterTests {
 
     @Test("proxy usage takes precedence and avoids the web retry")
     func proxyUsagePrecedence() async throws {
-        let request = ExternalFileRequest(
-            providerID: .grok,
-            relativePath: ".grok/auth.json",
-            maximumBytes: 64 * 1024
-        )
         let network = QueueNetworkClient(
             results: [.success(NetworkResponse(statusCode: 200, headers: [:], body: fixture))]
         )
         let context = TestContextFactory.make(
             network: network,
-            externalSessions: MemoryExternalSessionReader(files: [request: authFile])
+            grokSession: MemoryGrokSessionProvider(results: [.success(session)])
         )
 
         let snapshot = try await GrokAdapter().fetchSnapshot(context: context)
@@ -372,11 +360,6 @@ struct GrokAdapterTests {
 
     @Test("failed web fallback preserves unknown proxy usage and reset")
     func failedWebFallbackPreservesProxy() async throws {
-        let request = ExternalFileRequest(
-            providerID: .grok,
-            relativePath: ".grok/auth.json",
-            maximumBytes: 64 * 1024
-        )
         let proxyReset = try GrokAdapter.decodeSnapshot(from: Self.unknownProxyFixture)
             .quotas.first?.resetsAt
         let network = QueueNetworkClient(
@@ -387,7 +370,7 @@ struct GrokAdapterTests {
         )
         let context = TestContextFactory.make(
             network: network,
-            externalSessions: MemoryExternalSessionReader(files: [request: authFile])
+            grokSession: MemoryGrokSessionProvider(results: [.success(session)])
         )
 
         let snapshot = try await GrokAdapter().fetchSnapshot(context: context)
@@ -402,17 +385,12 @@ struct GrokAdapterTests {
 
     @Test("cancellation from web fallback is propagated")
     func webBillingCancellation() async throws {
-        let request = ExternalFileRequest(
-            providerID: .grok,
-            relativePath: ".grok/auth.json",
-            maximumBytes: 64 * 1024
-        )
         let network = CancellationNetworkClient(
             proxyBody: Self.unknownProxyFixture
         )
         let context = TestContextFactory.make(
             network: network,
-            externalSessions: MemoryExternalSessionReader(files: [request: authFile])
+            grokSession: MemoryGrokSessionProvider(results: [.success(session)])
         )
 
         do {

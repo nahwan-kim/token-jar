@@ -208,6 +208,7 @@ public struct CollectionContext: Sendable {
     public let sqlite: any ReadOnlySQLiteReader
     public let codexAccount: any CodexAccountUsageReader
     public let doubaoPlan: any DoubaoPlanUsageReader
+    public let grokSession: any GrokSessionProviding
     public let clock: any TokenTankClock
     public let diagnostics: any DiagnosticsSink
     public let correlationID: UUID
@@ -219,6 +220,7 @@ public struct CollectionContext: Sendable {
         sqlite: any ReadOnlySQLiteReader,
         codexAccount: any CodexAccountUsageReader,
         doubaoPlan: any DoubaoPlanUsageReader,
+        grokSession: any GrokSessionProviding,
         clock: any TokenTankClock,
         diagnostics: any DiagnosticsSink,
         correlationID: UUID = UUID()
@@ -229,6 +231,7 @@ public struct CollectionContext: Sendable {
         self.sqlite = sqlite
         self.codexAccount = codexAccount
         self.doubaoPlan = doubaoPlan
+        self.grokSession = grokSession
         self.clock = clock
         self.diagnostics = diagnostics
         self.correlationID = correlationID

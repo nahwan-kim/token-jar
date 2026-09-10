@@ -14,63 +14,32 @@ public struct GrokAdapter: ProviderAdapter {
             kind: .localSession,
             credentialOwnership: .externalProvider,
             documentationURL: URL(string: "https://github.com/steipete/CodexBar/blob/main/docs/grok.md"),
-            detail: "Read-only Grok CLI ~/.grok/auth.json session plus cli-chat-proxy.grok.com/v1/billing?format=credits. When that successful proxy snapshot omits usage, Token Jar may make a bearer-only grpc-web POST to grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig using the same captured session token. Proxy reset, source metadata, and account identity remain authoritative; web billing supplies usage only. Token Jar never copies or refreshes the token, never imports browser cookies, never uses grok agent stdio, and never calls the xAI Management prepaid-balance API."
+            detail: "Grok CLI ~/.grok/auth.json OAuth session plus cli-chat-proxy.grok.com/v1/billing?format=credits. Session expiry or one proxy authentication rejection triggers OAuth refresh through auth.x.ai and an atomic update of the same auth file. When that successful proxy snapshot omits usage, Token Jar may make a bearer-only grpc-web POST to grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig using the same captured session token. Proxy reset, source metadata, and account identity remain authoritative; web billing supplies usage only. Token Jar never imports browser cookies, never launches a CLI subprocess, never calls the xAI Management prepaid-balance API, and never maintains a separate token cache."
         )
     }
 
     public init() {}
 
     public func probeAvailability(context: CollectionContext) async -> ProviderAvailability {
-        do {
-            let now = await context.clock.now()
-            _ = try grokSession(from: try await grokAuthFile(in: context), now: now)
-            return .available(sourceDescriptor)
-        } catch is CancellationError {
-            return .unavailable(
-                CollectionError(kind: .cancelled, diagnosticCode: "grok.cli-session.cancelled")
-            )
-        } catch let error as CollectionError {
-            if error.kind == .externalSessionMissing {
-                return .needsConfiguration(code: error.diagnosticCode)
-            }
-            return .unavailable(error)
-        } catch {
-            return .unavailable(
-                CollectionError(kind: .sourceUnavailable, diagnosticCode: "grok.cli-session.unavailable")
-            )
-        }
+        .available(sourceDescriptor)
     }
 
     public func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
-        let now = await context.clock.now()
-        let session = try grokSession(from: try await grokAuthFile(in: context), now: now)
-        guard let url = URL(string: "https://cli-chat-proxy.grok.com/v1/billing?format=credits") else {
-            throw grokMalformedError("grok.credits.request-url-invalid")
+        var session = try await grokSourceSession(in: context, rejectedAccessToken: nil)
+        var refreshedAt = await context.clock.now()
+        var response = try await grokBillingResponse(token: session.accessToken, network: context.network)
+
+        if response.statusCode == 401 || response.statusCode == 403 {
+            let rejectedAccessToken = session.accessToken
+            session = try await grokSourceSession(in: context, rejectedAccessToken: rejectedAccessToken)
+            refreshedAt = await context.clock.now()
+            response = try await grokBillingResponse(token: session.accessToken, network: context.network)
         }
-        let request = NetworkRequest(
-            providerID: .grok,
-            url: url,
-            method: .get,
-            headers: [
-                "Accept": "application/json",
-                "Authorization": "Bearer \(session.token)",
-                "x-xai-token-auth": "xai-grok-cli",
-            ]
-        )
-        let response: NetworkResponse
-        do {
-            response = try await context.network.send(request)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let error as CollectionError {
-            throw error
-        } catch {
-            throw CollectionError(kind: .transientNetwork, diagnosticCode: "grok.credits.network-failed")
-        }
-        try grokValidate(response, now: now)
+
+        try grokValidate(response, now: refreshedAt)
         let proxySnapshot = try Self.decodeSnapshot(
             from: response.body,
-            refreshedAt: now,
+            refreshedAt: refreshedAt,
             accountEmail: session.accountEmail
         )
         guard proxySnapshot.quotas.allSatisfy({ $0.percentage.value == nil }) else {
@@ -79,8 +48,8 @@ public struct GrokAdapter: ProviderAdapter {
 
         do {
             let webSnapshot = try await GrokWebBilling.fetch(
-                token: session.token,
-                now: now,
+                token: session.accessToken,
+                now: refreshedAt,
                 network: context.network
             )
             guard webSnapshot.usedPercent != nil else {
@@ -212,79 +181,66 @@ public struct GrokAdapter: ProviderAdapter {
     }
 }
 
-let grokAuthFileRequest = ExternalFileRequest(
-    providerID: .grok,
-    relativePath: ".grok/auth.json",
-    maximumBytes: 64 * 1024
-)
-
-private struct GrokSession {
-    let token: String
-    let accountEmail: String?
-}
 
 private struct GrokDecimalValue {
     let value: Decimal
     let raw: String
 }
 
-private func grokAuthFile(in context: CollectionContext) async throws -> Data {
+private func grokSourceSession(
+    in context: CollectionContext,
+    rejectedAccessToken: String?
+) async throws -> GrokSession {
     do {
-        return try await context.externalSessions.read(grokAuthFileRequest)
-    } catch let error as CollectionError {
-        if error.kind == .externalSessionMissing {
-            throw CollectionError(
-                kind: .externalSessionMissing,
-                diagnosticCode: "grok.cli-session.missing"
-            )
-        }
-        throw error
+        return try await context.grokSession.session(rejectedAccessToken: rejectedAccessToken)
     } catch is CancellationError {
         throw CancellationError()
-    } catch {
-        throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "grok.cli-session.unavailable")
-    }
-}
-
-private func grokSession(from data: Data, now: Date) throws -> GrokSession {
-    let root = try grokObject(from: data, code: "grok.cli-session.invalid-json")
-    let preferred = grokPreferredEntry(from: root)
-    guard let token = grokString(preferred["key"]), grokTokenLooksUsable(token) else {
-        throw CollectionError(kind: .authenticationRejected, diagnosticCode: "grok.cli-session.token-missing")
-    }
-    if let expiry = grokDate(preferred["expires_at"]), expiry.timeIntervalSince1970 <= now.timeIntervalSince1970 + 60 {
-        throw CollectionError(kind: .authenticationRevoked, diagnosticCode: "grok.cli-session.expired")
-    }
-    return GrokSession(token: token, accountEmail: preferred["email"] as? String)
-}
-
-private func grokPreferredEntry(from root: [String: Any]) -> [String: Any] {
-    let scopes = root.keys.sorted()
-    if let preferred = scopes.first(where: { $0.hasPrefix("https://auth.x.ai::") }),
-       let entry = root[preferred] as? [String: Any]
-    {
-        return entry
-    }
-    if let entry = root["https://accounts.x.ai/sign-in"] as? [String: Any] {
-        return entry
-    }
-    for key in scopes {
-        if let entry = root[key] as? [String: Any], grokString(entry["key"]) != nil {
-            return entry
+    } catch let error as CollectionError {
+        switch error.kind {
+        case .authenticationRejected, .authenticationRevoked, .externalSessionMissing, .appCredentialMissing:
+            throw CollectionError(
+                kind: error.kind,
+                diagnosticCode: error.diagnosticCode,
+                recoveryAction: .signInSourceApp,
+                retryAfter: error.retryAfter
+            )
+        default:
+            throw error
         }
+    } catch {
+        throw CollectionError(
+            kind: .sourceUnavailable,
+            diagnosticCode: "grok.cli-session.unavailable",
+            recoveryAction: .signInSourceApp
+        )
     }
-    return [:]
 }
 
-private func grokTokenLooksUsable(_ token: String) -> Bool {
-    let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty, trimmed.utf8.count <= 8_192 else { return false }
-    let lowered = trimmed.lowercased()
-    if lowered.hasPrefix("xai-") { return false }
-    if lowered.contains("cookie:") { return false }
-    if trimmed.contains("="), trimmed.contains(";") { return false }
-    return trimmed.unicodeScalars.allSatisfy { scalar in
-        scalar.value == 0x09 || (scalar.value >= 0x20 && scalar.value != 0x7F)
+private func grokBillingResponse(
+    token: String,
+    network: any NetworkClient
+) async throws -> NetworkResponse {
+    guard let url = URL(string: "https://cli-chat-proxy.grok.com/v1/billing?format=credits") else {
+        throw grokMalformedError("grok.credits.request-url-invalid")
+    }
+    let request = NetworkRequest(
+        providerID: .grok,
+        url: url,
+        method: .get,
+        headers: [
+            "Accept": "application/json",
+            "Authorization": "Bearer \(token)",
+            "x-xai-token-auth": "xai-grok-cli",
+        ]
+    )
+    do {
+        return try await network.send(request)
+    } catch is CancellationError {
+        throw CancellationError()
+    } catch let error as CollectionError {
+        throw error
+    } catch {
+        throw CollectionError(kind: .transientNetwork, diagnosticCode: "grok.credits.network-failed")
     }
 }
 
@@ -320,9 +276,17 @@ private func grokValidate(_ response: NetworkResponse, now: Date) throws {
             throw grokMalformedError("grok.credits.empty-body")
         }
     case 401:
-        throw CollectionError(kind: .authenticationRejected, diagnosticCode: "grok.credits.authentication.rejected")
+        throw CollectionError(
+            kind: .authenticationRejected,
+            diagnosticCode: "grok.credits.authentication.rejected",
+            recoveryAction: .signInSourceApp
+        )
     case 403:
-        throw CollectionError(kind: .authenticationRevoked, diagnosticCode: "grok.credits.authentication.revoked")
+        throw CollectionError(
+            kind: .authenticationRevoked,
+            diagnosticCode: "grok.credits.authentication.revoked",
+            recoveryAction: .signInSourceApp
+        )
     case 429:
         throw CollectionError(
             kind: .rateLimited,

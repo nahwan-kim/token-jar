@@ -423,6 +423,9 @@ struct RuntimeTests {
                 deniedRequest: Data("external".utf8),
             ]
         )
+        let grokSessions = MemoryGrokSessionProvider(results: [
+            .success(GrokSession(accessToken: "scoped-grok-token", accountEmail: "owner@example.com")),
+        ])
         let credentials = InMemoryCredentialStore()
         let codex = MemoryCodexAccountUsageReader(
             results: [
@@ -434,6 +437,7 @@ struct RuntimeTests {
         let doubao = MemoryDoubaoPlanUsageReader(results: [.success(Data("doubao".utf8))])
         let context = TestContextFactory.make(
             network: network,
+            grokSession: grokSessions,
             credentials: credentials,
             externalSessions: external,
             sqlite: MemorySQLiteReader(values: [
@@ -460,6 +464,10 @@ struct RuntimeTests {
             )
         }?.diagnosticCode == "capability.network.provider-mismatch")
         #expect(await network.requests.isEmpty)
+        #expect(await collectionError {
+            _ = try await scoped.grokSession.session(rejectedAccessToken: "malicious-token")
+        }?.diagnosticCode == "capability.grok-session.denied")
+        #expect(await grokSessions.rejectedAccessTokens.isEmpty)
         #expect(await scoped.externalSessions.exists(claudeRequest) == true)
         #expect(try await scoped.externalSessions.read(claudeRequest) == Data("{\"cachedUsageUtilization\":{}}".utf8))
         #expect(await scoped.externalSessions.exists(deniedRequest) == false)
@@ -480,8 +488,13 @@ struct RuntimeTests {
             _ = try await scoped.codexAccount.readAccounts()
         }?.diagnosticCode == "capability.codex-account.denied")
         let grokScoped = context.scoped(to: .grok)
-        #expect(await grokScoped.externalSessions.exists(grokRequest) == true)
-        #expect(try await grokScoped.externalSessions.read(grokRequest) == Data("{\"https://auth.x.ai::fixture\":{\"key\":\"token\"}}".utf8))
+        #expect(await grokScoped.externalSessions.exists(grokRequest) == false)
+        #expect(await collectionError {
+            _ = try await grokScoped.externalSessions.read(grokRequest)
+        }?.diagnosticCode == "capability.external-session.denied")
+        let scopedGrokSession = try await grokScoped.grokSession.session(rejectedAccessToken: nil)
+        #expect(scopedGrokSession.accessToken == "scoped-grok-token")
+        #expect(await grokSessions.rejectedAccessTokens == [nil])
         let codexScoped = context.scoped(to: .codex)
         #expect(try await codexScoped.codexAccount.readAccounts().count == 1)
         let doubaoScoped = context.scoped(to: .doubao)

@@ -126,12 +126,14 @@ existing release.
 
 ### Credentials and limitations
 
-All five current adapters declare external-provider credential ownership. They
-do not call the app-owned Keychain store or request app-owned credential setup.
-The Core data-protection Keychain implementation remains fail-closed; ad-hoc
-distribution does not promise that app-owned Keychain operations work. A future
-source that requires those operations needs a new signing/runtime review, not a
-plaintext fallback. Official CLI owners may manage their own sessions.
+All five current adapters declare external-provider credential ownership and do
+not request app-owned credential setup. The only direct owner-store mutation is
+the user-approved Grok OIDC renewal described below; it uses a Grok-scoped Core
+capability and never the app-owned Keychain. The Core data-protection Keychain
+implementation remains fail-closed; ad-hoc distribution does not promise that
+app-owned Keychain operations work. A future source that requires those
+operations needs a new signing/runtime review, not a plaintext fallback.
+Official CLI owners otherwise manage their own sessions.
 
 ### Installation, updates, and provenance
 
@@ -218,6 +220,44 @@ CODEX_HOME="$HOME/.codex-secondary" codex -c 'cli_auth_credentials_store="file"'
 
 Treat `~/.codex-secondary/auth.json` as a password: never paste, commit, or export it. Verify the two account emails in the popup; login status alone does not establish different identities. Missing secondary directories are not errors, and a failed secondary refresh must not replace the first account's healthy data. The compact Codex panel shows `email · plan`, one general weekly quota in column 1, and remaining reset-ticket count plus only the nearest future expiry in column 2. Spark is not displayed. The menu shows ordered remaining percentages separated by a middle dot, without aliases or email labels; percentages are never added or averaged. Every provider shows elapsed minutes since its last successful refresh beside its status LED; missing timestamps remain unavailable.
 
+## Grok OAuth renewal and recovery
+
+Token Jar reads the selected OIDC entry in `~/.grok/auth.json`. When its access
+token expires within 60 seconds, or when the first SuperGrok credits proxy
+request returns 401/403, Token Jar checks the fixed `https://auth.x.ai` issuer
+and exact selected client/scope identity, then sends one public-client
+`refresh_token` grant to `https://auth.x.ai/oauth2/token`. Redirects and cookies
+are disabled. After a successful grant, it preserves the new access token and
+expiry plus an optional rotated refresh token in the same owner file, then
+retries the credits proxy once. The existing successful-unknown-usage-only,
+same-session bearer billing enrichment remains unchanged.
+
+Treat `~/.grok/auth.json` as a password: never paste, commit, export, or back it
+up for Token Jar. Renewal uses only a same-directory mode-0600 temporary file
+and atomic replacement. A bounded token-free lock shared only by Token Jar
+processes spans the current-file reread, HTTP rotation, conflict comparison,
+and same-file persistence. Once renewal starts, the shared transaction settles
+regardless of observer cancellation; a canceled observer receives
+`CancellationError` after the commit, while cancellation before renewal starts
+aborts. Token Jar detects an observable external CLI rotation and prefers the
+newer session, but cannot close the final rename window against an uncooperative
+concurrent Grok CLI writer, and the CLI is not assumed to honor Token Jar's
+lock. No browser-cookie import, Grok CLI subprocess or interactive automation,
+manual-token UI, Grok ACP stdio, xAI Management API, or Keychain token cache is
+part of this flow.
+
+If the selected entry has no usable refresh credential, or the token endpoint
+explicitly rejects or revokes it, run `grok login` and retry Token Jar. A network
+error is transient and must not be reported as revocation or trigger a login
+instruction. On 2026-09-11, a token-safe current-host probe used the production
+provider to force one renewal and then fetch real adapter usage; it verified
+rotated access and refresh tokens, matching persisted session, future expiry,
+mode 0600, preserved noncredential metadata, one percentage-bearing quota, and
+matching account identity without printing or copying secrets. This release
+remains **WATCH** because that probe did not cover natural expiry, real HTTP
+401/403 injection, concurrent real CLI rotation, packaged release, another OS,
+CI, or notarization.
+
 The popup header's **Open in Window** button opens a resizable standalone usage window. It shares the popup's data and refresh cycle, remains open when focus moves elsewhere, and reuses the same window on repeated clicks. Closing that window leaves the menu-bar app running; the header button can reopen it. This is a normal desktop window, not an always-on-top overlay.
 
 ## Preconditions and hard stops
@@ -239,17 +279,17 @@ This is the authoritative evidence map, not a pass claim. Automated rows are re-
 | --- | --- | --- |
 | AC-01 | `TokenTankUITests.testMenuBarAccessibilityAndTermination` checks the five-Provider one-line accessible summary, fixed order, service names, and selected percentages. The visual percent-sign preference does not remove percentage semantics from accessibility text. | Final signed-candidate UI rerun. |
 | AC-02 | `AppModelTests` covers explicit representative selection, vanished IDs without substitution, ordering, visibility, percent-sign display, and preference persistence; Settings renders the frozen unavailable state/action. Editable abbreviation inputs are removed; text summaries use service names. | Final signed-candidate Settings smoke test. |
-| AC-03 | Five adapter suites assert exact fixture records, optional/zero preservation, raw fields, stable opaque IDs, and no merge for the accepted primary surfaces. On 2026-09-07, all 97 package tests passed including Grok fallback fixtures for published/implicit-zero usage, invalid periods, malformed protobuf/gRPC, failure/cancellation, and proxy authority. | Sanitized owner-controlled live checklist for all five accepted surfaces on the final frozen candidate. |
+| AC-03 | Historical evidence: on 2026-09-07, all 97 package tests passed for the pre-renewal adapters and Grok fallback fixtures. Current evidence: 117 Swift package tests, 33 app unit tests, and 13 release-tool tests passed, together with the Provider I/O and forbidden FileTimestamp checks; independent integration review was clean and rotation review pass 2 was OKAY. | Final signed-candidate tests and sanitized owner-controlled live checklist; the historical 97-test run is not current renewal evidence. |
 | AC-04 | Domain/adapter suites and the bilingual UI matrix cover original names, exact source values, direction, reset/freshness, literal zero, and `Not provided` / `제공 안 됨`. | Final signed-candidate bilingual smoke test. |
 | AC-05 | `RefreshCoordinator` fake-clock tests cover five-minute cadence, manual coalescing, cancellation, and no overlapping refresh storm. | Normal five-minute terminal-state observation in the frozen AC-11 runs. |
 | AC-06 | Coordinator/AppModel tests cover process-lifetime last-good stale retention, typed cause/action, retry, stop cleanup, and relaunch from `neverLoaded`; no snapshot store exists. | Final process-lifecycle observation on the signed candidate. |
-| AC-07 | Exact scoped capabilities, descriptor-bound immutable Cursor reads, owner-session fixtures, mutation assertions, and `Scripts/audit-provider-io.sh` enforce external-owner non-mutation. | Final Cursor owner-path actual-open facts before/after on the frozen candidate. |
-| AC-08 | Closed `CollectionError` mappings and bilingual UI states keep login actions limited to explicit rejection/revocation or missing owner session. | Owner-controlled rejection/session-loss checks for accepted live surfaces. |
+| AC-07 | Exact scoped capabilities, descriptor-bound immutable Cursor reads, owner-session fixtures, and mutation assertions define external-owner non-mutation except the reviewed Grok same-file renewal. Current Provider I/O and forbidden FileTimestamp checks passed; independent integration review was clean and rotation review pass 2 was OKAY. | Verify the final packaged candidate; exercise concurrent real CLI rotation and final-rename-window behavior, plus final Cursor owner-path actual-open facts. |
+| AC-08 | Closed `CollectionError` mappings and bilingual UI states limit login actions to explicit rejection/revocation or missing owner session; Grok network errors remain transient, while missing/revoked refresh credentials require `grok login`. | Owner-controlled Grok missing/revoked/network-error checks and rejection/session-loss checks for the other accepted live surfaces. |
 | AC-09 | Keychain tests enforce the data-protection Keychain, fixed accessibility class, app-owned identifier allowlist, value bounds, no plaintext fallback, delete/update behavior, and stale mapping. | Locked-since-boot/unavailable behavior with the final Developer ID identity. |
 | AC-10 | Release settings, `LSUIElement`, exact dependency/payload/import/leak scans, and UI termination tests enforce no Dock/browser UI/unreviewed helpers and a stripped universal artifact. Sparkle is the explicit signed-update exception. | Repeat against the signed/stapled artifact. |
 | AC-11 | `Scripts/measure-idle.sh` validates sample count, cadence, stable PID, CPU/RSS arithmetic, drift, and artifact identity without claiming release sign-off. | Three independent physical reference-host runs with all five Providers reaching terminal state. |
 | AC-12 | The deterministic XCUITest matrix exposes all five groups plus fresh, stale, authentication, permission, offline, missing, zero, direction, reset/freshness, and recovery controls. | Final signed-candidate XCUITest rerun. |
-| AC-13 | `ProviderSources.json`, registry tests, source docs, and fixed network/process boundaries encode the selected Provider sources; Grok uses a conditional same-bearer/no-cookie gRPC-web retry with a 6-second request timeout. Current-host production Swift collection on 2026-09-07 returned used 0%, remaining 100% through the validated implicit-zero path, retaining proxy reset; Grok ACP remains inactive. | Capture final documentation revisions and owner-controlled live shapes on the packaged frozen candidate; this source-level probe does not establish packaged-app behavior. |
+| AC-13 | `ProviderSources.json`, source docs, and fixed capability boundaries encode the selected Provider sources. Historical evidence: current-host production Swift collection on 2026-09-07 returned used 0%, remaining 100% through the validated implicit-zero Grok billing path, retaining proxy reset; Grok ACP remained inactive. Current evidence: a token-safe 2026-09-11 production-provider probe forced one renewal and verified access/refresh rotation, matching saved session, future expiry, mode 0600, preserved noncredential metadata, successful real-adapter usage with one percentage-bearing quota, and matching account identity without exposing secrets. | Live-validate natural near-expiry and real proxy HTTP 401/403 paths, concurrent real CLI rotation, recovery classification, owner-controlled response shapes, and the packaged frozen candidate on supported OS versions; complete CI/notarization evidence. |
 | AC-14 | Release/CI gates require universal stripped code, Hardened Runtime, no App Sandbox, pinned Sparkle-only code, exact payload scans, and source/binary provenance; this runbook defines signed feed publication and rollback. | Developer ID archive/export, notarization, staple, official HTTPS artifacts, and clean-host Gatekeeper evidence. |
 | AC-15 | Exact capabilities, Provider I/O audit, SQLite/Keychain/network bounds, memory-only snapshots, privacy manifest, and exact approved entitlements fail closed. | Frozen actual-open/TCC matrix plus final signed security/privacy review. |
 | AC-16 | Deployment target and CI include macOS 14/current; the catalog gate requires exactly English/Korean translations, and XCUITests cover English, Korean, accessibility, layout matrix, and unknown-language English fallback. | Successful frozen CI matrix and signed-candidate locale rerun. |

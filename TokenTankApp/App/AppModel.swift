@@ -307,14 +307,17 @@ final class AppModel: ObservableObject {
             let credentials = suppliedCredentialStore ?? KeychainCredentialStore()
             let diagnostics: any DiagnosticsSink = UnifiedDiagnostics()
             let filesystemPolicy = FilesystemAccessPolicy()
+            let network = URLSessionNetworkClient()
+            let clock = SystemClock()
             let context = CollectionContext(
-                network: URLSessionNetworkClient(),
+                network: network,
                 credentials: credentials,
                 externalSessions: filesystemPolicy,
                 sqlite: SQLiteExternalSessionReader(policy: filesystemPolicy),
                 codexAccount: CodexAppServerUsageReader(),
                 doubaoPlan: ArkCLIPlanUsageReader(),
-                clock: SystemClock(),
+                grokSession: GrokOAuthSessionProvider(network: network, clock: clock),
+                clock: clock,
                 diagnostics: diagnostics
             )
             self.credentialStore = credentials

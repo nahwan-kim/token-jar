@@ -1282,6 +1282,7 @@ final class AppModelTests: XCTestCase {
             sqlite: NoSQLiteReader(),
             codexAccount: NoCodexAccountUsageReader(),
             doubaoPlan: NoDoubaoPlanUsageReader(),
+            grokSession: NoGrokSessionProvider(),
             clock: SystemClock(),
             diagnostics: NoDiagnostics()
         )

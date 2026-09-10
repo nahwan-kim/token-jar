@@ -42,6 +42,23 @@ public actor MemoryExternalSessionReader: ExternalSessionReader {
     }
 }
 
+public actor MemoryGrokSessionProvider: GrokSessionProviding {
+    private var results: [Result<GrokSession, CollectionError>]
+    public private(set) var rejectedAccessTokens: [String?] = []
+
+    public init(results: [Result<GrokSession, CollectionError>]) {
+        self.results = results
+    }
+
+    public func session(rejectedAccessToken: String?) throws -> GrokSession {
+        rejectedAccessTokens.append(rejectedAccessToken)
+        guard !results.isEmpty else {
+            throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "test.grok-session.empty-queue")
+        }
+        return try results.removeFirst().get()
+    }
+}
+
 public actor MemorySQLiteReader: ReadOnlySQLiteReader {
     private var storedValues: [String: String]
 
@@ -204,6 +221,7 @@ public actor QueueProviderAdapter: ProviderAdapter {
 public enum TestContextFactory {
     public static func make(
         network: any NetworkClient = QueueNetworkClient(results: []),
+        grokSession: any GrokSessionProviding = NoGrokSessionProvider(),
         credentials: any AppCredentialStore = InMemoryCredentialStore(),
         externalSessions: any ExternalSessionReader = MemoryExternalSessionReader(),
         sqlite: any ReadOnlySQLiteReader = MemorySQLiteReader(),
@@ -219,6 +237,7 @@ public enum TestContextFactory {
             sqlite: sqlite,
             codexAccount: codexAccount,
             doubaoPlan: doubaoPlan,
+            grokSession: grokSession,
             clock: clock,
             diagnostics: diagnostics
         )

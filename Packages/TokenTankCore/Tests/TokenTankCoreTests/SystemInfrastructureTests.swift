@@ -484,6 +484,134 @@ struct SystemInfrastructureTests {
         }
     }
 
+    @Test("Grok token renewal permits only the exact bounded OAuth request")
+    func grokTokenRenewalPolicy() async throws {
+        let endpoint = "https://auth.x.ai/oauth2/token"
+        let headers = [
+            "Accept": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+        ]
+        func request(
+            providerID: ProviderID = .grok,
+            url: String = endpoint,
+            method: HTTPMethod = .post,
+            body: Data? = Data("grant_type=refresh_token&client_id=client&refresh_token=refresh".utf8),
+            timeout: TimeInterval = 15,
+            requestHeaders: [String: String] = headers
+        ) -> NetworkRequest {
+            NetworkRequest(
+                providerID: providerID,
+                url: URL(string: url)!,
+                method: method,
+                headers: requestHeaders,
+                body: body,
+                timeout: timeout
+            )
+        }
+
+        #expect(URLSessionNetworkClient.isAllowed(request()))
+        #expect(URLSessionNetworkClient.isAllowed(request(url: "https://auth.x.ai:443/oauth2/token")))
+        #expect(URLSessionNetworkClient.isAllowed(request(
+            body: Data("refresh_token=%E3%83%88%E3%83%BC%E3%82%AF%E3%83%B3%2B%26%3D&client_id=client%2Fscope&grant_type=refresh_token".utf8)
+        )))
+        let boundedPrefix = "grant_type=refresh_token&client_id=client&refresh_token="
+        let exactlyBounded = boundedPrefix
+            + String(repeating: "a", count: 32 * 1024 - boundedPrefix.utf8.count)
+        #expect(URLSessionNetworkClient.isAllowed(request(body: Data(exactlyBounded.utf8))))
+
+        let oversized = "grant_type=refresh_token&client_id=client&refresh_token="
+            + String(repeating: "a", count: 32 * 1024)
+        let invalidRequests = [
+            request(providerID: .claude),
+            request(providerID: .codex),
+            request(providerID: .cursor),
+            request(providerID: .doubao),
+            request(url: "http://auth.x.ai/oauth2/token"),
+            request(url: "https://user:password@auth.x.ai/oauth2/token"),
+            request(url: "https://auth.x.ai:444/oauth2/token"),
+            request(url: endpoint + "/"),
+            request(url: endpoint + "?extra=1"),
+            request(url: endpoint + "#fragment"),
+            request(method: .get),
+            request(body: nil),
+            request(body: Data()),
+            request(body: Data("grant_type=refresh_token&client_id=client".utf8)),
+            request(body: Data("grant_type=refresh_token&client_id=client&refresh_token=".utf8)),
+            request(body: Data("grant_type=refresh_token&client_id=&refresh_token=refresh".utf8)),
+            request(body: Data("grant_type=authorization_code&client_id=client&refresh_token=refresh".utf8)),
+            request(body: Data("grant_type=refresh_token&client_id=client&refresh_token=one&refresh_token=two".utf8)),
+            request(body: Data("grant_type=refresh_token&client_id=client&refresh_token=refresh&scope=openid".utf8)),
+            request(body: Data("grant_type=refresh_token&client_id=client&refresh_token=%ZZ".utf8)),
+            request(body: Data("grant_type=refresh_token&client_id=client&refresh_token=raw=value".utf8)),
+            request(body: Data("grant_type=refresh_token&client_id=client&refresh_token=raw token".utf8)),
+            request(body: Data("grant_type=refresh_token&client_id=client&refresh_token=トークン".utf8)),
+            request(body: Data(oversized.utf8)),
+            request(timeout: 0),
+            request(timeout: 15.001),
+        ]
+        for invalid in invalidRequests {
+            #expect(!URLSessionNetworkClient.isAllowed(invalid))
+        }
+
+        BoundedResponseURLProtocol.setPayload(Data("{}".utf8))
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [BoundedResponseURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let client = URLSessionNetworkClient(session: session, maximumResponseBytes: 1024)
+        _ = try await client.send(request())
+
+        let rejectedHeaders = [
+            [:],
+            ["Accept": "application/json"],
+            [
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Authorization": "Bearer must-not-leak",
+            ],
+            [
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Cookie": "session=must-not-leak",
+            ],
+            [
+                "Accept": "*/*",
+                "Content-Type": "application/x-www-form-urlencoded",
+            ],
+            [
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            ],
+        ]
+        for invalidHeaders in rejectedHeaders {
+            do {
+                _ = try await client.send(request(requestHeaders: invalidHeaders))
+                Issue.record("Expected Grok renewal header rejection")
+            } catch let error as CollectionError {
+                #expect(error.kind == .sourceUnavailable)
+                #expect(error.diagnosticCode == "network.header-invalid")
+                #expect(!String(describing: error).contains("must-not-leak"))
+            } catch {
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+        let redirected = URLRequest(url: URL(string: "https://attacker.invalid/capture")!)
+        let originalURL = URL(string: endpoint)!
+        let redirectResponse = try #require(HTTPURLResponse(
+            url: originalURL, statusCode: 307, httpVersion: nil,
+            headerFields: ["Location": redirected.url!.absoluteString]
+        ))
+        let redirectDecision: URLRequest? = await withCheckedContinuation { continuation in
+            NoRedirectURLSessionDelegate().urlSession(
+                session,
+                task: session.dataTask(with: originalURL),
+                willPerformHTTPRedirection: redirectResponse,
+                newRequest: redirected
+            ) { continuation.resume(returning: $0) }
+        }
+        #expect(redirectDecision == nil)
+    }
+
     @Test("Grok bearer retry permits only the exact bounded read-only gRPC request")
     func grokBillingRetryPolicy() async throws {
         let endpoint = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig"

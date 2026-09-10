@@ -351,6 +351,7 @@ extension CollectionContext {
             sqlite: ProviderScopedSQLiteReader(providerID: providerID, base: sqlite),
             codexAccount: ProviderScopedCodexAccountReader(providerID: providerID, base: codexAccount),
             doubaoPlan: ProviderScopedDoubaoPlanReader(providerID: providerID, base: doubaoPlan),
+            grokSession: ProviderScopedGrokSessionProvider(providerID: providerID, base: grokSession),
             clock: clock,
             diagnostics: NoDiagnostics(),
             correlationID: correlationID
@@ -370,6 +371,21 @@ private struct ProviderScopedNetworkClient: NetworkClient {
             )
         }
         return try await base.send(request)
+    }
+}
+
+private struct ProviderScopedGrokSessionProvider: GrokSessionProviding {
+    let providerID: ProviderID
+    let base: any GrokSessionProviding
+
+    func session(rejectedAccessToken: String?) async throws -> GrokSession {
+        guard providerID == .grok else {
+            throw CollectionError(
+                kind: .sourceUnavailable,
+                diagnosticCode: "capability.grok-session.denied"
+            )
+        }
+        return try await base.session(rejectedAccessToken: rejectedAccessToken)
     }
 }
 
@@ -433,9 +449,6 @@ private struct ProviderScopedExternalSessionReader: ExternalSessionReader {
         case .claude:
             return request.relativePath == ".claude.json"
                 && request.maximumBytes == 32 * 1024 * 1024
-        case .grok:
-            return request.relativePath == ".grok/auth.json"
-                && request.maximumBytes == 64 * 1024
         default:
             return false
         }
