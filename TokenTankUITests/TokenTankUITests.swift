@@ -2,7 +2,7 @@ import XCTest
 
 @MainActor
 final class TokenTankUITests: XCTestCase {
-    private let app = XCUIApplication(bundleIdentifier: "com.tokentank.TokenTank")
+    private let app = XCUIApplication()
     private let timeout: TimeInterval = 10
     private func accessibilityText(_ element: XCUIElement) -> String {
         let ownValues = [
@@ -341,6 +341,97 @@ final class TokenTankUITests: XCTestCase {
         XCTAssertFalse(app.windows["토큰 항아리"].exists)
         XCTAssertTrue(detail.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "action.quit", "Quit Token Jar")).firstMatch.waitForExistence(timeout: timeout))
         XCTAssertTrue(settings.popUpButtons.matching(NSPredicate(format: "value == %@", "Weekly")).firstMatch.exists)
+    }
+
+    func testLanguageSelectionPersistsAcrossColdRelaunchesWithoutTouchingProductionDefaults() throws {
+        continueAfterFailure = false
+        let productionSuite = "com.tokentank.TokenTank"
+        let productionLanguageBefore = try XCTUnwrap(UserDefaults(suiteName: productionSuite))
+            .string(forKey: "appLanguage")
+        defer {
+            app.terminate()
+            let productionLanguageAfter = UserDefaults(suiteName: productionSuite)?
+                .string(forKey: "appLanguage")
+            XCTAssertEqual(productionLanguageAfter, productionLanguageBefore)
+        }
+
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_SETTINGS"] = "1"
+        app.launchEnvironment["TOKENTANK_UI_STANDALONE"] = "1"
+        app.launch()
+
+        let initialSettings = app.windows["Token Jar UI Test Settings"]
+        XCTAssertTrue(initialSettings.waitForExistence(timeout: 45))
+        initialSettings.click()
+        let initialPicker = initialSettings.popUpButtons["settings.language.picker"]
+        XCTAssertTrue(initialPicker.waitForExistence(timeout: timeout), initialSettings.debugDescription)
+        reveal(initialPicker, in: initialSettings)
+        initialPicker.click()
+        let koreanMenuItem = app.menuItems["한국어"]
+        XCTAssertTrue(koreanMenuItem.waitForExistence(timeout: timeout))
+        koreanMenuItem.click()
+
+        app.terminate()
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: timeout))
+        app.launch()
+
+        let koreanSettings = app.windows["Token Jar UI Test Settings"]
+        XCTAssertTrue(koreanSettings.waitForExistence(timeout: 45))
+        koreanSettings.click()
+        let koreanPicker = koreanSettings.popUpButtons["settings.language.picker"]
+        XCTAssertTrue(koreanPicker.waitForExistence(timeout: timeout), koreanSettings.debugDescription)
+        reveal(koreanPicker, in: koreanSettings)
+        XCTAssertEqual(koreanPicker.value as? String, "한국어")
+        let koreanPercentSign = koreanSettings.checkBoxes["settings.summary.percent-sign"]
+        reveal(koreanPercentSign, in: koreanSettings)
+        XCTAssertTrue(koreanPercentSign.waitForExistence(timeout: timeout))
+        XCTAssertEqual(koreanPercentSign.label, "% 기호 표시")
+        let koreanDetail = app.windows["Token Jar UI Test Detail"]
+        XCTAssertTrue(koreanDetail.waitForExistence(timeout: timeout))
+        XCTAssertTrue(
+            koreanDetail.buttons.matching(
+                NSPredicate(
+                    format: "identifier == %@ AND label == %@",
+                    "action.quit",
+                    "토큰 항아리 종료"
+                )
+            ).firstMatch.waitForExistence(timeout: timeout)
+        )
+
+        reveal(koreanPicker, in: koreanSettings, deltaY: 400)
+        koreanPicker.click()
+        let englishMenuItem = app.menuItems["English"]
+        XCTAssertTrue(englishMenuItem.waitForExistence(timeout: timeout))
+        englishMenuItem.click()
+
+        app.terminate()
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: timeout))
+        app.launch()
+
+        let englishSettings = app.windows["Token Jar UI Test Settings"]
+        XCTAssertTrue(englishSettings.waitForExistence(timeout: 45))
+        englishSettings.click()
+        let englishPicker = englishSettings.popUpButtons["settings.language.picker"]
+        XCTAssertTrue(englishPicker.waitForExistence(timeout: timeout), englishSettings.debugDescription)
+        reveal(englishPicker, in: englishSettings)
+        XCTAssertEqual(englishPicker.value as? String, "English")
+        let englishPercentSign = englishSettings.checkBoxes["settings.summary.percent-sign"]
+        reveal(englishPercentSign, in: englishSettings)
+        XCTAssertTrue(englishPercentSign.waitForExistence(timeout: timeout))
+        XCTAssertEqual(englishPercentSign.label, "Show % symbol")
+        let englishDetail = app.windows["Token Jar UI Test Detail"]
+        XCTAssertTrue(englishDetail.waitForExistence(timeout: timeout))
+        XCTAssertTrue(
+            englishDetail.buttons.matching(
+                NSPredicate(
+                    format: "identifier == %@ AND label == %@",
+                    "action.quit",
+                    "Quit Token Jar"
+                )
+            ).firstMatch.waitForExistence(timeout: timeout)
+        )
     }
     func testFableUsesWeeklyGaugeLayout() {
         continueAfterFailure = false

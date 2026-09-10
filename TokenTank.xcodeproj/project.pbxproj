@@ -594,7 +594,8 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1.9;
 				ONLY_ACTIVE_ARCH = YES;
-				PRODUCT_BUNDLE_IDENTIFIER = com.tokentank.TokenTank;
+				/* Keep UI-test defaults isolated from the production preferences domain. */
+				PRODUCT_BUNDLE_IDENTIFIER = com.tokentank.TokenTank.UITestHost;
 				PRODUCT_MODULE_NAME = TokenTank;
 				PRODUCT_NAME = "Token Jar";
 				SWIFT_VERSION = 6.0;

@@ -296,7 +296,7 @@ This is the authoritative evidence map, not a pass claim. Automated rows are re-
 
 AC-01 through AC-16 are conjunctive. The unchecked external cells above are hard release stops and feed the operator sign-off record below.
 
-The Settings language picker switches English/한국어 immediately across open windows and persists the selection. On first launch, Korean system language selects Korean; other languages select English. Quota reset countdowns use elapsed days and whole hours (under one hour is explicit), while reset-ticket expirations show full local dates, times, and time zones. Missing expiration data is not inferred.
+The Settings language picker switches English/한국어 immediately across open windows and persists the selection under the stable release bundle domain (`com.tokentank.TokenTank`) and `appLanguage` key, which remain unchanged when the app bundle is replaced. The UITest host uses the isolated `com.tokentank.TokenTank.UITestHost` identity so language UI coverage cannot modify production preferences. XCUITests select both Korean and English through the UI and verify each selection and localized settings/quit UI after a cold process relaunch without an `appLanguage` launch argument. This coverage does not claim that a Sparkle installation test was run. On first launch, Korean system language selects Korean; other languages select English. Quota reset countdowns use elapsed days and whole hours (under one hour is explicit), while reset-ticket expirations show full local dates, times, and time zones. Missing expiration data is not inferred.
 
 ## Archive with Developer ID and Hardened Runtime
 

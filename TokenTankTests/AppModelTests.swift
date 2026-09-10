@@ -50,14 +50,27 @@ final class AppModelTests: XCTestCase {
         let model = AppModel(adapters: [], languageDefaults: defaults)
         model.language = .korean
         XCTAssertEqual(model.locale.language.languageCode?.identifier, "ko")
-        XCTAssertEqual(AppModel(adapters: [], languageDefaults: defaults).language, .korean)
+
+        let persistedKoreanDefaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        XCTAssertEqual(persistedKoreanDefaults.string(forKey: "appLanguage"), "ko")
+        XCTAssertEqual(AppModel(adapters: [], languageDefaults: persistedKoreanDefaults).language, .korean)
+
         model.language = .english
-        XCTAssertEqual(AppModel(adapters: [], languageDefaults: defaults).language, .english)
+        let persistedEnglishDefaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        XCTAssertEqual(persistedEnglishDefaults.string(forKey: "appLanguage"), "en")
+        XCTAssertEqual(AppModel(adapters: [], languageDefaults: persistedEnglishDefaults).language, .english)
         XCTAssertEqual(AppLanguage.preferred(["ko-KR"]), .korean)
         XCTAssertEqual(AppLanguage.preferred(["en_US"]), .english)
         XCTAssertEqual(AppLanguage.preferred(["ja-JP"]), .english)
         XCTAssertEqual(AppLanguage.preferred([]), .english)
     }
+
+#if UITEST
+    func testUITestHostUsesIsolatedBundleIdentifier() {
+        XCTAssertEqual(Bundle.main.bundleIdentifier, "com.tokentank.TokenTank.UITestHost")
+        XCTAssertNotEqual(Bundle.main.bundleIdentifier, "com.tokentank.TokenTank")
+    }
+#endif
 
     func testResetCountdownUsesElapsedDaysAndHours() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
