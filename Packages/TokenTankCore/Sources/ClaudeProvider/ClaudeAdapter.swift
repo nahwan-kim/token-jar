@@ -9,212 +9,98 @@ public struct ClaudeAdapter: ProviderAdapter {
 
     public var sourceDescriptor: ProviderSourceDescriptor {
         ProviderSourceDescriptor(
-            id: "claude.code.local-usage-cache",
-            name: "Claude Code local usage cache",
+            id: "claude.oauth.usage",
+            name: "Claude Code OAuth usage",
             kind: .localSession,
             credentialOwnership: .externalProvider,
-            documentationURL: URL(string: "https://www.onorca.dev/docs/agents/usage-tracking"),
-            detail: "Read-only Claude Code ~/.claude.json cachedUsageUtilization. This is the same local session and weekly usage Orca displays. Token Jar never reads Claude credentials, never calls the organization Admin API, and never presents invented quota."
+            documentationURL: URL(string: "https://github.com/steipete/CodexBar/blob/main/docs/claude.md"),
+            detail: "Claude Code OAuth session with Anthropic's OAuth usage endpoint. Token Jar uses the owner-managed session without copying credentials and fails closed when live usage is unavailable."
         )
     }
 
     public init() {}
 
     public func probeAvailability(context: CollectionContext) async -> ProviderAvailability {
-        do {
-            _ = try await claudeUsageCache(in: context)
-            return .available(sourceDescriptor)
-        } catch is CancellationError {
-            return .unavailable(
-                CollectionError(kind: .cancelled, diagnosticCode: "claude.usage-cache.cancelled")
-            )
-        } catch let error as CollectionError {
-            return .unavailable(error)
-        } catch {
-            return .unavailable(
-                CollectionError(kind: .sourceUnavailable, diagnosticCode: "claude.usage-cache.unavailable")
-            )
-        }
+        .available(sourceDescriptor)
     }
 
     public func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
-        let now = await context.clock.now()
-        let data = try await claudeUsageCache(in: context)
-        return try Self.decodeSnapshot(from: data, refreshedAt: now)
+        let session = try await claudeSourceSession(in: context)
+        let response = try await claudeResponse(
+            path: "/api/oauth/usage",
+            token: session.accessToken,
+            timeout: 30,
+            network: context.network
+        )
+        let validationNow = await context.clock.now()
+        try claudeValidate(response, now: validationNow)
+        let quotas = try Self.decodeQuotas(from: response.body)
+        let refreshedAt = await context.clock.now()
+        let profile = try await claudeProfile(token: session.accessToken, network: context.network)
+        let email = profile.email
+        let plan = claudeNonempty(session.subscriptionType)
+            ?? profile.organizationPlan
+            ?? claudeNonempty(session.rateLimitTier)
+        let account = ProviderAccountSnapshot(
+            sourceID: "claude.oauth",
+            quotas: quotas,
+            refreshedAt: refreshedAt,
+            accountEmail: email,
+            plan: plan
+        )
+        return ProviderSnapshot(
+            providerID: .claude,
+            source: sourceDescriptor,
+            quotas: quotas,
+            refreshedAt: refreshedAt,
+            accountEmail: email,
+            accounts: [account]
+        )
     }
 
     public static func decodeSnapshot(
         from data: Data,
         refreshedAt: Date = Date()
     ) throws -> ProviderSnapshot {
-        let root = try claudeObject(from: data)
-        guard let cache = root["cachedUsageUtilization"] as? [String: Any] else {
-            throw claudeSchemaError("claude.usage-cache.missing")
-        }
-        guard let utilization = cache["utilization"] as? [String: Any] else {
-            throw claudeSchemaError("claude.usage-cache.utilization-missing")
-        }
-
-        var quotas: [RawQuotaItem] = []
-        if let limits = utilization["limits"] as? [Any], !limits.isEmpty {
-            for (index, value) in limits.enumerated() {
-                try claudeAppendLimit(value, index: index, to: &quotas)
-            }
-        } else {
-            for key in claudeWindowKeys {
-                try claudeAppendWindow(utilization[key], name: key, to: &quotas)
-            }
-        }
-        guard !quotas.isEmpty else {
-            throw claudeMalformedError("claude.usage-cache.empty")
-        }
-        guard Set(quotas.map(\.id)).count == quotas.count else {
-            throw claudeSchemaError("claude.usage-cache.duplicate-identity")
-        }
-
+        let quotas = try decodeQuotas(from: data)
         return ProviderSnapshot(
             providerID: .claude,
             source: ClaudeAdapter().sourceDescriptor,
             quotas: quotas,
-            refreshedAt: refreshedAt,
-            accountEmail: claudeAccountEmail(from: root)
+            refreshedAt: refreshedAt
         )
     }
 
-    public static func decode(data: Data, refreshedAt: Date) throws -> ProviderSnapshot {
-        try decodeSnapshot(from: data, refreshedAt: refreshedAt)
-    }
-}
 
-let claudeUsageCacheRequest = ExternalFileRequest(
-    providerID: .claude,
-    relativePath: ".claude.json",
-    maximumBytes: 32 * 1024 * 1024
-)
+    private static func decodeQuotas(from data: Data) throws -> [RawQuotaItem] {
+        let root = try claudeObject(from: data)
+        var quotas: [RawQuotaItem] = []
+        var identities: Set<RawQuotaID> = []
 
-private let claudeWindowKeys = [
-    "five_hour",
-    "seven_day",
-    "seven_day_opus",
-    "seven_day_sonnet",
-]
-
-private func claudeUsageCache(in context: CollectionContext) async throws -> Data {
-    do {
-        return try await context.externalSessions.read(claudeUsageCacheRequest)
-    } catch let error as CollectionError {
-        if error.kind == .externalSessionMissing {
-            throw CollectionError(
-                kind: .externalSessionMissing,
-                diagnosticCode: "claude.usage-cache.missing"
-            )
+        var hasLimits = false
+        if let value = root["limits"], !(value is NSNull) {
+            guard let limits = value as? [Any] else {
+                throw claudeSchemaError("claude.oauth.usage.limits-invalid")
+            }
+            hasLimits = !limits.isEmpty
+            for limit in limits {
+                try claudeAppendLimit(limit, to: &quotas, identities: &identities)
+            }
         }
-        throw error
-    } catch is CancellationError {
-        throw CancellationError()
-    } catch {
-        throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "claude.usage-cache.unavailable")
-    }
-}
 
-private func claudeAppendLimit(
-    _ value: Any,
-    index: Int,
-    to quotas: inout [RawQuotaItem]
-) throws {
-    guard let limit = value as? [String: Any] else {
-        throw claudeSchemaError("claude.usage-cache.limit-invalid")
-    }
-    guard let kind = claudeString(limit["kind"]), !kind.isEmpty else {
-        throw claudeSchemaError("claude.usage-cache.limit-kind-missing")
-    }
-    guard let percent = claudeNonnegativeDecimal(limit["percent"]) else {
-        throw claudeSchemaError("claude.usage-cache.limit-percent-missing")
-    }
-    let scopeName = claudeScopeName(limit["scope"])
-    let originalName = scopeName.map { "\(kind).\($0)" } ?? kind
-    var fields: [String: String] = [
-        "kind": kind,
-        "percent": percent.raw,
-    ]
-    if let group = claudeString(limit["group"]) { fields["group"] = group }
-    if let resetRaw = claudeString(limit["resets_at"]) { fields["resets_at"] = resetRaw }
-    if let scopeName { fields["scope"] = scopeName }
-    quotas.append(
-        claudeQuota(
-            identity: ["limit", kind, scopeName ?? "\(index)"],
-            originalName: originalName,
-            percent: percent,
-            resetsAt: claudeDate(limit["resets_at"]),
-            fields: fields
-        )
-    )
-}
+        let standardWindows = ["five_hour", "seven_day"]
+        let scopedWindows = ["seven_day_opus", "seven_day_sonnet"]
+        let supplementalWindows = ["seven_day_oauth_apps", "seven_day_routines", "seven_day_cowork"]
+        for name in (hasLimits ? scopedWindows + supplementalWindows : standardWindows + scopedWindows + supplementalWindows) {
+            try claudeAppendWindow(root[name], name: name, to: &quotas, identities: &identities)
+        }
+        try claudeAppendExtraUsage(root["extra_usage"], to: &quotas, identities: &identities)
 
-private func claudeAppendWindow(
-    _ value: Any?,
-    name: String,
-    to quotas: inout [RawQuotaItem]
-) throws {
-    guard let value, !(value is NSNull) else { return }
-    guard let window = value as? [String: Any] else {
-        throw claudeSchemaError("claude.usage-cache.window-invalid")
+        guard !quotas.isEmpty else {
+            throw claudeMalformedError("claude.oauth.usage.empty-success")
+        }
+        return quotas
     }
-    guard let percent = claudeNonnegativeDecimal(window["utilization"]) else {
-        return
-    }
-    var fields: [String: String] = [
-        "window": name,
-        "utilization": percent.raw,
-    ]
-    if let resetRaw = claudeString(window["resets_at"]) { fields["resets_at"] = resetRaw }
-    quotas.append(
-        claudeQuota(
-            identity: ["window", name],
-            originalName: name,
-            percent: percent,
-            resetsAt: claudeDate(window["resets_at"]),
-            fields: fields
-        )
-    )
-}
-
-private func claudeQuota(
-    identity: [String],
-    originalName: String,
-    percent: ClaudeDecimalValue,
-    resetsAt: Date?,
-    fields: [String: String]
-) -> RawQuotaItem {
-    let remainingPercent = Decimal(100) - percent.value
-    return RawQuotaItem(
-        id: StableSourceID.make(prefix: "claude", components: identity),
-        originalName: originalName,
-        used: SourceValue(value: percent.value, rawText: percent.raw, unit: "%"),
-        remaining: remainingPercent >= 0
-            ? SourceValue(
-                value: remainingPercent,
-                rawText: NSDecimalNumber(decimal: remainingPercent).stringValue,
-                unit: "%"
-            )
-            : nil,
-        percentage: SourcePercentage(value: percent.value, rawText: percent.raw, meaning: .used),
-        resetsAt: resetsAt,
-        sourceFields: fields
-    )
-}
-
-private func claudeAccountEmail(from root: [String: Any]) -> String? {
-    guard let oauthAccount = root["oauthAccount"] as? [String: Any] else { return nil }
-    return oauthAccount["emailAddress"] as? String
-}
-
-private func claudeScopeName(_ value: Any?) -> String? {
-    guard let object = value as? [String: Any] else { return nil }
-    if let model = object["model"] as? [String: Any] {
-        return claudeString(model["display_name"]) ?? claudeString(model["id"])
-    }
-    return claudeString(object["display_name"]) ?? claudeString(object["surface"])
 }
 
 private struct ClaudeDecimalValue {
@@ -222,54 +108,358 @@ private struct ClaudeDecimalValue {
     let raw: String
 }
 
+private func claudeSourceSession(in context: CollectionContext) async throws -> ClaudeSession {
+    do {
+        return try await context.claudeSession.session(allowInteraction: context.isUserInitiated)
+    } catch is CancellationError {
+        throw CancellationError()
+    } catch let error as CollectionError {
+        throw error
+    } catch {
+        throw CollectionError(
+            kind: .sourceUnavailable,
+            diagnosticCode: "claude.oauth.session-unavailable",
+            recoveryAction: .signInSourceApp
+        )
+    }
+}
+
+private func claudeHeaders(_ token: String) -> [String: String] {
+    [
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": "Bearer \(token)",
+        "anthropic-beta": "oauth-2025-04-20",
+        "User-Agent": "claude-code/2.1.0",
+    ]
+}
+
+private func claudeResponse(
+    path: String,
+    token: String,
+    timeout: TimeInterval,
+    network: any NetworkClient
+) async throws -> NetworkResponse {
+    guard let url = URL(string: "https://api.anthropic.com\(path)") else {
+        throw claudeMalformedError("claude.oauth.request-url-invalid")
+    }
+    let request = NetworkRequest(
+        providerID: .claude,
+        url: url,
+        method: .get,
+        headers: claudeHeaders(token),
+        timeout: timeout
+    )
+    do {
+        return try await network.send(request)
+    } catch is CancellationError {
+        throw CancellationError()
+    } catch let error as CollectionError {
+        throw error
+    } catch {
+        throw CollectionError(kind: .transientNetwork, diagnosticCode: "claude.oauth.network-failed")
+    }
+}
+
+private func claudeValidate(_ response: NetworkResponse, now: Date) throws {
+    switch response.statusCode {
+    case 200:
+        guard !response.body.isEmpty else {
+            throw claudeMalformedError("claude.oauth.usage.empty-body")
+        }
+    case 401:
+        throw CollectionError(
+            kind: .authenticationRejected,
+            diagnosticCode: "claude.oauth.authentication-rejected",
+            recoveryAction: .signInSourceApp
+        )
+    case 403:
+        throw CollectionError(
+            kind: .authenticationRejected,
+            diagnosticCode: "claude.oauth.scope-rejected",
+            recoveryAction: .signInSourceApp
+        )
+    case 429:
+        throw CollectionError(
+            kind: .rateLimited,
+            diagnosticCode: "claude.oauth.rate-limited",
+            retryAfter: claudeRetryAfter(response.header("Retry-After"), now: now)
+        )
+    default:
+        throw CollectionError(kind: .transientNetwork, diagnosticCode: "claude.oauth.http-error")
+    }
+}
+
+private func claudeRetryAfter(_ raw: String?, now: Date) -> Date {
+    if let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+       let seconds = TimeInterval(raw), seconds.isFinite, (0...86_400).contains(seconds) {
+        return now.addingTimeInterval(seconds)
+    }
+    if let raw {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss zzz"
+        if let date = formatter.date(from: raw),
+           date > now,
+           date.timeIntervalSince(now) <= 86_400 {
+            return date
+        }
+    }
+    return now.addingTimeInterval(300)
+}
+
+private struct ClaudeProfile {
+    let email: String?
+    let organizationPlan: String?
+}
+
+private func claudeProfile(token: String, network: any NetworkClient) async throws -> ClaudeProfile {
+    do {
+        let response = try await claudeResponse(
+            path: "/api/oauth/profile",
+            token: token,
+            timeout: 15,
+            network: network
+        )
+        guard response.statusCode == 200, !response.body.isEmpty,
+              let root = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any]
+        else { return ClaudeProfile(email: nil, organizationPlan: nil) }
+        let account = root["account"] as? [String: Any]
+        let organization = root["organization"] as? [String: Any]
+        let email = claudeNonempty(account?["email"] as? String)
+            ?? claudeNonempty(account?["emailAddress"] as? String)
+            ?? claudeNonempty(root["email"] as? String)
+        let plan = claudeNonempty(organization?["plan"] as? String)
+            ?? claudeNonempty(organization?["subscription_type"] as? String)
+            ?? claudeNonempty(organization?["organization_type"] as? String)
+        return ClaudeProfile(email: email, organizationPlan: plan)
+    } catch is CancellationError {
+        throw CancellationError()
+    } catch let error as CollectionError where error.kind == .cancelled {
+        throw error
+    } catch {
+        return ClaudeProfile(email: nil, organizationPlan: nil)
+    }
+}
+
+private func claudeAppendLimit(
+    _ value: Any,
+    to quotas: inout [RawQuotaItem],
+    identities: inout Set<RawQuotaID>
+) throws {
+    guard let limit = value as? [String: Any],
+          let kind = claudeNonempty(limit["kind"] as? String),
+          ["session", "weekly_all", "weekly_scoped"].contains(kind),
+          let percent = claudePercentage(limit["percent"])
+    else { throw claudeSchemaError("claude.oauth.usage.limit-invalid") }
+    let scopeName: String?
+    if kind == "weekly_scoped" {
+        scopeName = try claudeScopeName(limit["scope"], required: true)
+    } else {
+        scopeName = nil
+    }
+    let originalName = scopeName.map { "\(kind).\($0)" } ?? kind
+    let resetsAt = try claudeOptionalDate(limit, key: "resets_at")
+    var fields = ["kind": kind, "percent": percent.raw]
+    if let group = claudeNonempty(limit["group"] as? String) { fields["group"] = group }
+    if let scopeName { fields["scope"] = scopeName }
+    if let raw = limit["resets_at"] as? String { fields["resets_at"] = raw }
+    if let active = limit["is_active"] {
+        guard let active = active as? Bool else {
+            throw claudeSchemaError("claude.oauth.usage.limit-active-invalid")
+        }
+        fields["is_active"] = String(active)
+    }
+    let identity = ["limit", kind, scopeName ?? "all"]
+    try claudeAppendQuota(
+        identity: identity,
+        originalName: originalName,
+        percent: percent,
+        resetsAt: resetsAt,
+        fields: fields,
+        to: &quotas,
+        identities: &identities
+    )
+}
+
+private func claudeAppendWindow(
+    _ value: Any?,
+    name: String,
+    to quotas: inout [RawQuotaItem],
+    identities: inout Set<RawQuotaID>
+) throws {
+    guard let value, !(value is NSNull) else { return }
+    guard let window = value as? [String: Any] else {
+        throw claudeSchemaError("claude.oauth.usage.window-invalid")
+    }
+    guard let utilization = window["utilization"], !(utilization is NSNull) else { return }
+    guard let percent = claudePercentage(utilization) else {
+        throw claudeSchemaError("claude.oauth.usage.window-invalid")
+    }
+    let resetsAt = try claudeOptionalDate(window, key: "resets_at")
+    var fields = ["window": name, "utilization": percent.raw]
+    if let raw = window["resets_at"] as? String { fields["resets_at"] = raw }
+    try claudeAppendQuota(
+        identity: ["window", name],
+        originalName: name,
+        percent: percent,
+        resetsAt: resetsAt,
+        fields: fields,
+        to: &quotas,
+        identities: &identities
+    )
+}
+
+private func claudeAppendExtraUsage(
+    _ value: Any?,
+    to quotas: inout [RawQuotaItem],
+    identities: inout Set<RawQuotaID>
+) throws {
+    guard let value, !(value is NSNull), let extra = value as? [String: Any],
+          extra["is_enabled"] as? Bool == true,
+          let used = claudeNonnegativeDecimal(extra["used_credits"]),
+          let limit = claudeNonnegativeDecimal(extra["monthly_limit"]), limit.value > 0
+    else { return }
+
+    let percent: ClaudeDecimalValue?
+    if let utilization = extra["utilization"], !(utilization is NSNull) {
+        guard let parsed = claudePercentage(utilization) else { return }
+        percent = parsed
+    } else {
+        percent = nil
+    }
+    let remainingValue = limit.value - used.value
+    let remaining = remainingValue >= 0
+        ? SourceValue(
+            value: remainingValue,
+            rawText: NSDecimalNumber(decimal: remainingValue).stringValue,
+            unit: claudeNonempty(extra["currency"] as? String)
+        )
+        : nil
+    var fields = [
+        "used_credits": used.raw,
+        "monthly_limit": limit.raw,
+    ]
+    if let percent { fields["utilization"] = percent.raw }
+    if let currency = claudeNonempty(extra["currency"] as? String) { fields["currency"] = currency }
+    let id = StableSourceID.make(prefix: "claude", components: ["extra_usage"])
+    guard identities.insert(id).inserted else {
+        throw claudeSchemaError("claude.oauth.usage.duplicate-identity")
+    }
+    quotas.append(RawQuotaItem(
+        id: id,
+        originalName: "extra_usage",
+        used: SourceValue(value: used.value, rawText: used.raw, unit: fields["currency"]),
+        remaining: remaining,
+        percentage: percent.map {
+            SourcePercentage(value: $0.value, rawText: $0.raw, meaning: .used)
+        } ?? .missing(meaning: .used),
+        resetsAt: nil,
+        sourceFields: fields
+    ))
+}
+
+private func claudeAppendQuota(
+    identity: [String],
+    originalName: String,
+    percent: ClaudeDecimalValue,
+    resetsAt: Date?,
+    fields: [String: String],
+    to quotas: inout [RawQuotaItem],
+    identities: inout Set<RawQuotaID>
+) throws {
+    let id = StableSourceID.make(prefix: "claude", components: identity)
+    guard identities.insert(id).inserted else {
+        throw claudeSchemaError("claude.oauth.usage.duplicate-identity")
+    }
+    let remainingValue = Decimal(100) - percent.value
+    let remaining = remainingValue >= 0
+        ? SourceValue(
+            value: remainingValue,
+            rawText: NSDecimalNumber(decimal: remainingValue).stringValue,
+            unit: "%"
+        )
+        : nil
+    quotas.append(RawQuotaItem(
+        id: id,
+        originalName: originalName,
+        used: SourceValue(value: percent.value, rawText: percent.raw, unit: "%"),
+        remaining: remaining,
+        percentage: SourcePercentage(value: percent.value, rawText: percent.raw, meaning: .used),
+        resetsAt: resetsAt,
+        sourceFields: fields
+    ))
+}
+
+private func claudeScopeName(_ value: Any?, required: Bool) throws -> String? {
+    guard let value, !(value is NSNull) else {
+        if required { throw claudeSchemaError("claude.oauth.usage.limit-scope-missing") }
+        return nil
+    }
+    guard let scope = value as? [String: Any], let model = scope["model"] as? [String: Any],
+          let name = claudeNonempty(model["display_name"] as? String)
+            ?? claudeNonempty(model["id"] as? String)
+    else { throw claudeSchemaError("claude.oauth.usage.limit-scope-invalid") }
+    return name
+}
+
+private func claudePercentage(_ value: Any?) -> ClaudeDecimalValue? {
+    claudeNonnegativeDecimal(value)
+}
+
 private func claudeNonnegativeDecimal(_ value: Any?) -> ClaudeDecimalValue? {
     let parsed: ClaudeDecimalValue?
     if let text = value as? String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let decimal = Decimal(string: trimmed, locale: Locale(identifier: "en_US_POSIX")) else {
-            return nil
-        }
+        guard !trimmed.isEmpty,
+              let decimal = Decimal(string: trimmed, locale: Locale(identifier: "en_US_POSIX"))
+        else { return nil }
         parsed = ClaudeDecimalValue(value: decimal, raw: text)
     } else if let number = value as? NSNumber, !JSONScalar.isBoolean(number) {
+        let double = number.doubleValue
+        guard double.isFinite else { return nil }
         parsed = ClaudeDecimalValue(value: number.decimalValue, raw: number.stringValue)
     } else {
         return nil
     }
-    guard parsed!.value >= 0 else { return nil }
+    guard let parsed, parsed.value >= 0 else { return nil }
     return parsed
 }
 
-private func claudeString(_ value: Any?) -> String? {
-    if let text = value as? String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+private func claudeOptionalDate(_ object: [String: Any], key: String) throws -> Date? {
+    guard let value = object[key], !(value is NSNull) else { return nil }
+    guard let raw = value as? String, let date = claudeDate(raw) else {
+        throw claudeSchemaError("claude.oauth.usage.reset-invalid")
     }
-    if let number = value as? NSNumber, !JSONScalar.isBoolean(number) {
-        return number.stringValue
-    }
-    return nil
+    return date
 }
 
-private func claudeDate(_ value: Any?) -> Date? {
-    guard let text = claudeString(value) else { return nil }
+private func claudeDate(_ raw: String) -> Date? {
     let fractional = ISO8601DateFormatter()
     fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let date = fractional.date(from: text) { return date }
-    return ISO8601DateFormatter().date(from: text)
+    if let date = fractional.date(from: raw) { return date }
+    return ISO8601DateFormatter().date(from: raw)
+}
+
+private func claudeNonempty(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
 }
 
 private func claudeObject(from data: Data) throws -> [String: Any] {
-    guard !data.isEmpty else { throw claudeMalformedError("claude.usage-cache.empty-body") }
+    guard !data.isEmpty else { throw claudeMalformedError("claude.oauth.usage.empty-body") }
     do {
-        let object = try JSONSerialization.jsonObject(with: data, options: [])
+        let object = try JSONSerialization.jsonObject(with: data)
         guard let dictionary = object as? [String: Any] else {
-            throw claudeSchemaError("claude.usage-cache.object-required")
+            throw claudeSchemaError("claude.oauth.usage.object-required")
         }
         return dictionary
     } catch let error as CollectionError {
         throw error
     } catch {
-        throw claudeMalformedError("claude.usage-cache.invalid-json")
+        throw claudeMalformedError("claude.oauth.usage.invalid-json")
     }
 }
 

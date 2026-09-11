@@ -7,6 +7,44 @@ import TokenTankDomain
 
 @MainActor
 final class AppModelTests: XCTestCase {
+    func testClaudeRefreshButtonsPermitInteractionButStartupDoesNot() async {
+        let snapshot = makeSnapshot(providerID: .claude, percentage: 24)
+        let adapter = TestAppAdapter(id: .claude, results: [
+            .success(snapshot),
+            .success(makeSnapshot(providerID: .claude, percentage: 25)),
+            .success(makeSnapshot(providerID: .claude, percentage: 26)),
+        ])
+        let credentials = InMemoryCredentialStore()
+        let model = AppModel(
+            adapters: [adapter],
+            credentialStore: credentials,
+            preferencesStore: MemoryPreferencesStore(),
+            context: makeContext(credentials: credentials)
+        )
+        model.ensureStarted()
+        let loaded = await eventually {
+            if case .fresh = model.states[.claude] { return true }
+            return false
+        }
+        XCTAssertTrue(loaded)
+        let startupInteractions = await adapter.interactions
+        XCTAssertEqual(startupInteractions, [false])
+
+        model.refresh(.claude)
+        let singleRefreshed = await eventually {
+            model.states[.claude]?.snapshot?.quotas.first?.percentage.value == 25
+        }
+        XCTAssertTrue(singleRefreshed)
+        model.refreshAll()
+        let allRefreshed = await eventually {
+            model.states[.claude]?.snapshot?.quotas.first?.percentage.value == 26
+        }
+        XCTAssertTrue(allRefreshed)
+        let interactions = await adapter.interactions
+        XCTAssertEqual(interactions, [false, true, true])
+        await model.stop()
+    }
+
     func testWholeProviderFailuresMarkEveryRetainedAccountStale() {
         let previous = makeSnapshot(providerID: .codex, percentage: 26)
         let accounts = [CodexAccountSource.primary, .secondary].map {
@@ -699,7 +737,7 @@ final class AppModelTests: XCTestCase {
             "error.keychain": ("Keychain unavailable", "키체인을 사용할 수 없음"),
             "action.retry": ("Retry", "다시 시도"),
             "action.wait": ("Wait for next refresh", "다음 갱신까지 대기"),
-            "action.sign_in_source": ("Sign in again in the source app", "원본 앱에서 다시 로그인"),
+            "action.sign_in_source": ("Sign in again in the source app, then Refresh", "원본 앱에서 다시 로그인한 뒤 새로고침"),
             "action.sign_in_token_tank": ("Sign in to Token Jar", "토큰 항아리에서 로그인"),
             "action.allow_system_settings": ("Allow access in System Settings", "시스템 설정에서 접근 허용"),
             "state.selected_unavailable": ("Selected quota unavailable", "선택한 할당량을 사용할 수 없음"),
@@ -1296,6 +1334,7 @@ final class AppModelTests: XCTestCase {
             codexAccount: NoCodexAccountUsageReader(),
             doubaoPlan: NoDoubaoPlanUsageReader(),
             grokSession: NoGrokSessionProvider(),
+            claudeSession: NoClaudeSessionProvider(),
             clock: SystemClock(),
             diagnostics: NoDiagnostics()
         )
@@ -1398,6 +1437,7 @@ private actor TestAppAdapter: ProviderAdapter {
     nonisolated let sourceDescriptor: ProviderSourceDescriptor
     private var results: [Result<ProviderSnapshot, CollectionError>]
     private(set) var fetchCount = 0
+    private(set) var interactions: [Bool] = []
 
     init(id: ProviderID, results: [Result<ProviderSnapshot, CollectionError>]) {
         let descriptor = ProviderSourceDescriptor(
@@ -1421,6 +1461,7 @@ private actor TestAppAdapter: ProviderAdapter {
 
     func fetchSnapshot(context: CollectionContext) throws -> ProviderSnapshot {
         fetchCount += 1
+        interactions.append(context.isUserInitiated)
         guard !results.isEmpty else {
             throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "test.no-result")
         }

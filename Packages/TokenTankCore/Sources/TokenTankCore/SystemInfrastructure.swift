@@ -145,8 +145,21 @@ public actor URLSessionNetworkClient: NetworkClient {
 
         let expectedNames: Set<String>
         switch request.providerID {
-        case .codex, .claude, .doubao:
+        case .codex, .doubao:
             expectedNames = []
+        case .claude:
+            expectedNames = ["accept", "authorization", "anthropic-beta", "content-type", "user-agent"]
+            let headers = Dictionary(uniqueKeysWithValues: request.headers.map { ($0.key.lowercased(), $0.value) })
+            guard headers["accept"] == "application/json",
+                  headers["content-type"] == "application/json",
+                  headers["anthropic-beta"] == "oauth-2025-04-20",
+                  headers["user-agent"] == "claude-code/2.1.0",
+                  let authorization = headers["authorization"],
+                  authorization.hasPrefix("Bearer "),
+                  authorization.count > "Bearer ".count,
+                  authorization.utf8.allSatisfy({ $0 >= 0x21 && $0 <= 0x7E || $0 == 0x20 }),
+                  !authorization.dropFirst("Bearer ".count).contains(" ")
+            else { return false }
         case .grok:
             if request.url.host?.lowercased() == "grok.com" {
                 expectedNames = ["accept", "authorization", "content-type", "x-grpc-web",
@@ -226,8 +239,16 @@ public actor URLSessionNetworkClient: NetworkClient {
         else { return false }
 
         switch request.providerID {
-        case .codex, .claude, .doubao:
+        case .codex, .doubao:
             return false
+        case .claude:
+            return request.method == .get
+                && host == "api.anthropic.com"
+                && ["/api/oauth/usage", "/api/oauth/profile"].contains(components.percentEncodedPath)
+                && components.query == nil
+                && request.body == nil
+                && request.timeout > 0
+                && request.timeout <= (components.percentEncodedPath == "/api/oauth/profile" ? 15 : 30)
         case .grok:
             if host == "auth.x.ai" {
                 return request.method == .post

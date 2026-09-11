@@ -209,9 +209,11 @@ public struct CollectionContext: Sendable {
     public let codexAccount: any CodexAccountUsageReader
     public let doubaoPlan: any DoubaoPlanUsageReader
     public let grokSession: any GrokSessionProviding
+    public let claudeSession: any ClaudeSessionProviding
     public let clock: any TokenTankClock
     public let diagnostics: any DiagnosticsSink
     public let correlationID: UUID
+    public let isUserInitiated: Bool
 
     public init(
         network: any NetworkClient,
@@ -221,9 +223,11 @@ public struct CollectionContext: Sendable {
         codexAccount: any CodexAccountUsageReader,
         doubaoPlan: any DoubaoPlanUsageReader,
         grokSession: any GrokSessionProviding,
+        claudeSession: any ClaudeSessionProviding,
         clock: any TokenTankClock,
         diagnostics: any DiagnosticsSink,
-        correlationID: UUID = UUID()
+        correlationID: UUID = UUID(),
+        isUserInitiated: Bool = false
     ) {
         self.network = network
         self.credentials = credentials
@@ -232,9 +236,11 @@ public struct CollectionContext: Sendable {
         self.codexAccount = codexAccount
         self.doubaoPlan = doubaoPlan
         self.grokSession = grokSession
+        self.claudeSession = claudeSession
         self.clock = clock
         self.diagnostics = diagnostics
         self.correlationID = correlationID
+        self.isUserInitiated = isUserInitiated
     }
 }
 

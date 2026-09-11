@@ -484,6 +484,109 @@ struct SystemInfrastructureTests {
         }
     }
 
+    @Test("Claude OAuth permits only bounded usage and same-token profile GET requests")
+    func claudeOAuthNetworkPolicy() async throws {
+        let endpoint = "https://api.anthropic.com/api/oauth/usage"
+        let headers = [
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": "Bearer synthetic-token",
+            "anthropic-beta": "oauth-2025-04-20",
+            "User-Agent": "claude-code/2.1.0",
+        ]
+        func request(
+            url: String = endpoint,
+            method: HTTPMethod = .get,
+            body: Data? = nil,
+            timeout: TimeInterval = 30,
+            requestHeaders: [String: String] = headers
+        ) -> NetworkRequest {
+            NetworkRequest(
+                providerID: .claude, url: URL(string: url)!, method: method,
+                headers: requestHeaders, body: body, timeout: timeout
+            )
+        }
+        #expect(URLSessionNetworkClient.isAllowed(request()))
+        #expect(URLSessionNetworkClient.isAllowed(request(
+            url: "https://api.anthropic.com:443/api/oauth/usage"
+        )))
+        #expect(URLSessionNetworkClient.isAllowed(request(
+            url: "https://api.anthropic.com/api/oauth/profile", timeout: 15
+        )))
+        let disallowed = [
+            request(url: endpoint + "?token=forbidden"),
+            request(url: endpoint + "?"),
+            request(url: endpoint + "#fragment"),
+            request(url: endpoint + "/"),
+            request(url: "https://api.anthropic.com/api/oauth/%75sage"),
+            request(url: "https://api.anthropic.com/api/oauth/../usage"),
+            request(url: "https://api.anthropic.com:444/api/oauth/usage"),
+            request(url: "https://attacker@api.anthropic.com/api/oauth/usage"),
+            request(url: "https://api.anthropic.com.attacker.invalid/api/oauth/usage"),
+            request(url: "http://api.anthropic.com/api/oauth/usage"),
+            request(url: "https://api.anthropic.com/v1/messages"),
+            request(url: "https://platform.claude.com/v1/oauth/token", method: .post),
+            request(url: "https://claude.ai/api/organizations"),
+            request(url: "https://api.anthropic.com/api/oauth/profile", timeout: 16),
+            request(method: .post),
+            request(body: Data()),
+            request(timeout: 31),
+            request(timeout: 0),
+            request(timeout: .infinity),
+            request(timeout: .nan),
+        ]
+        for candidate in disallowed {
+            #expect(!URLSessionNetworkClient.isAllowed(candidate))
+        }
+
+        BoundedResponseURLProtocol.setPayload(Data("{}".utf8))
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [BoundedResponseURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let client = URLSessionNetworkClient(session: session, maximumResponseBytes: 1024)
+        _ = try await client.send(request())
+        _ = try await client.send(request(url: "https://api.anthropic.com/api/oauth/profile", timeout: 15))
+
+        var wrongHeaders: [[String: String]] = [[:]]
+        for (name, value) in [
+            ("Cookie", "forbidden=cookie"),
+            ("Authorization", "Bearer "),
+            ("Authorization", "Bearer embedded space"),
+            ("Authorization", "Bearer synthetic\r\nInjected: value"),
+            ("Authorization", "Basic synthetic"),
+            ("Authorization", "Bearer synthetic\tvalue"),
+            ("anthropic-beta", "wrong-version"),
+            ("Content-Type", "text/plain"),
+            ("User-Agent", "arbitrary-agent"),
+            ("Accept", "*/*"),
+            ("authorization", "Bearer duplicate-case"),
+        ] {
+            var changed = headers
+            changed[name] = value
+            wrongHeaders.append(changed)
+        }
+        for candidate in wrongHeaders {
+            await expectCollectionError(kind: .sourceUnavailable, code: "network.header-invalid") {
+                _ = try await client.send(request(requestHeaders: candidate))
+            }
+        }
+
+        let originalURL = URL(string: endpoint)!
+        let response = try #require(HTTPURLResponse(
+            url: originalURL, statusCode: 302, httpVersion: nil,
+            headerFields: ["Location": "https://attacker.invalid/steal"]
+        ))
+        let redirected: URLRequest? = await withCheckedContinuation { continuation in
+            NoRedirectURLSessionDelegate().urlSession(
+                session, task: session.dataTask(with: originalURL),
+                willPerformHTTPRedirection: response,
+                newRequest: URLRequest(url: URL(string: "https://attacker.invalid/steal")!)
+            ) { continuation.resume(returning: $0) }
+        }
+        #expect(redirected == nil)
+    }
+
     @Test("Grok token renewal permits only the exact bounded OAuth request")
     func grokTokenRenewalPolicy() async throws {
         let endpoint = "https://auth.x.ai/oauth2/token"

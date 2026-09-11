@@ -151,7 +151,7 @@ public actor RefreshCoordinator {
         return stream
     }
 
-    public func refreshAll() async {
+    public func refreshAll(userInitiated: Bool = false) async {
         guard acceptingRefreshes else { return }
         let providerIDs = ProviderID.allCases.filter { adapters[$0] != nil }
         var start = 0
@@ -161,7 +161,7 @@ public actor RefreshCoordinator {
             await withTaskGroup(of: Void.self) { group in
                 for providerID in batch {
                     group.addTask { [weak self] in
-                        await self?.refresh(providerID)
+                        await self?.refresh(providerID, userInitiated: userInitiated)
                     }
                 }
             }
@@ -169,7 +169,7 @@ public actor RefreshCoordinator {
         }
     }
 
-    public func refresh(_ providerID: ProviderID) async {
+    public func refresh(_ providerID: ProviderID, userInitiated: Bool = false) async {
         guard acceptingRefreshes else { return }
         guard let adapter = adapters[providerID] else { return }
 
@@ -199,7 +199,9 @@ public actor RefreshCoordinator {
         states[providerID] = .refreshing(previous: previous)
         emitStates()
 
-        let providerContext = self.context.scoped(to: providerID, correlationID: correlationID)
+        let providerContext = self.context.scoped(
+            to: providerID, correlationID: correlationID, isUserInitiated: userInitiated
+        )
         let task = Task<ProviderSnapshot, Error> {
             switch await adapter.probeAvailability(context: providerContext) {
             case let .available(source):
@@ -343,18 +345,26 @@ public actor RefreshCoordinator {
 }
 
 extension CollectionContext {
-    func scoped(to providerID: ProviderID, correlationID: UUID = UUID()) -> CollectionContext {
+    func scoped(
+        to providerID: ProviderID,
+        correlationID: UUID = UUID(),
+        isUserInitiated: Bool = false
+    ) -> CollectionContext {
         CollectionContext(
             network: ProviderScopedNetworkClient(providerID: providerID, base: network),
             credentials: ProviderScopedCredentialStore(providerID: providerID, base: credentials),
-            externalSessions: ProviderScopedExternalSessionReader(providerID: providerID, base: externalSessions),
+            externalSessions: ProviderDeniedExternalSessionReader(),
             sqlite: ProviderScopedSQLiteReader(providerID: providerID, base: sqlite),
             codexAccount: ProviderScopedCodexAccountReader(providerID: providerID, base: codexAccount),
             doubaoPlan: ProviderScopedDoubaoPlanReader(providerID: providerID, base: doubaoPlan),
             grokSession: ProviderScopedGrokSessionProvider(providerID: providerID, base: grokSession),
+            claudeSession: ProviderScopedClaudeSessionProvider(
+                providerID: providerID, base: claudeSession, isUserInitiated: isUserInitiated
+            ),
             clock: clock,
             diagnostics: NoDiagnostics(),
-            correlationID: correlationID
+            correlationID: correlationID,
+            isUserInitiated: isUserInitiated
         )
     }
 }
@@ -386,6 +396,22 @@ private struct ProviderScopedGrokSessionProvider: GrokSessionProviding {
             )
         }
         return try await base.session(rejectedAccessToken: rejectedAccessToken)
+    }
+}
+
+private struct ProviderScopedClaudeSessionProvider: ClaudeSessionProviding {
+    let providerID: ProviderID
+    let base: any ClaudeSessionProviding
+    let isUserInitiated: Bool
+
+    func session(allowInteraction: Bool) async throws -> ClaudeSession {
+        guard providerID == .claude, !allowInteraction || isUserInitiated else {
+            throw CollectionError(
+                kind: .sourceUnavailable,
+                diagnosticCode: "capability.claude-session.denied"
+            )
+        }
+        return try await base.session(allowInteraction: allowInteraction)
     }
 }
 
@@ -424,34 +450,14 @@ private struct ProviderScopedCredentialStore: AppCredentialStore {
     }
 }
 
-private struct ProviderScopedExternalSessionReader: ExternalSessionReader {
-    let providerID: ProviderID
-    let base: any ExternalSessionReader
-
-    func exists(_ request: ExternalFileRequest) async -> Bool {
-        guard isAllowed(request) else { return false }
-        return await base.exists(request)
-    }
+private struct ProviderDeniedExternalSessionReader: ExternalSessionReader {
+    func exists(_ request: ExternalFileRequest) async -> Bool { false }
 
     func read(_ request: ExternalFileRequest) async throws -> Data {
-        guard isAllowed(request) else {
-            throw CollectionError(
-                kind: .sourceUnavailable,
-                diagnosticCode: "capability.external-session.denied"
-            )
-        }
-        return try await base.read(request)
-    }
-
-    private func isAllowed(_ request: ExternalFileRequest) -> Bool {
-        guard request.providerID == providerID, request.root == .home else { return false }
-        switch providerID {
-        case .claude:
-            return request.relativePath == ".claude.json"
-                && request.maximumBytes == 32 * 1024 * 1024
-        default:
-            return false
-        }
+        throw CollectionError(
+            kind: .sourceUnavailable,
+            diagnosticCode: "capability.external-session.denied"
+        )
     }
 }
 

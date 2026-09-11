@@ -67,8 +67,8 @@
     "action.sign_in_source" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign in again in the source app" } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "원본 앱에서 다시 로그인" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign in again in the source app, then Refresh" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "원본 앱에서 다시 로그인한 뒤 새로고침" } }
       }
     },
     "action.sign_in_token_tank" : {
@@ -501,8 +501,8 @@
     "source.detail.claude" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read-only Claude Code local usage cache. Sign in through Claude; Token Jar never reads its credentials." } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Claude Code 로컬 사용량 캐시를 읽기 전용으로 사용합니다. Claude에서 로그인하며 토큰 항아리는 자격 증명을 읽지 않습니다." } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Live Claude usage through the native Claude Code OAuth session. Automatic refresh never prompts for Keychain access; manual Refresh can let Claude Code renew an expired session." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "네이티브 Claude Code OAuth 세션으로 라이브 사용량을 조회합니다. 자동 갱신은 키체인 접근을 요청하지 않으며, 수동 새로고침에서는 만료된 세션을 Claude Code가 갱신할 수 있습니다." } }
       }
     },
     "source.detail.codex" : {

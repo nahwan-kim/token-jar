@@ -58,6 +58,25 @@ public actor MemoryGrokSessionProvider: GrokSessionProviding {
         return try results.removeFirst().get()
     }
 }
+public actor MemoryClaudeSessionProvider: ClaudeSessionProviding {
+    private var results: [Result<ClaudeSession, CollectionError>]
+    public private(set) var allowInteractionRequests: [Bool] = []
+
+    public init(results: [Result<ClaudeSession, CollectionError>]) {
+        self.results = results
+    }
+
+    public func session(allowInteraction: Bool) throws -> ClaudeSession {
+        allowInteractionRequests.append(allowInteraction)
+        guard !results.isEmpty else {
+            throw CollectionError(
+                kind: .sourceUnavailable,
+                diagnosticCode: "test.claude-session.empty-queue"
+            )
+        }
+        return try results.removeFirst().get()
+    }
+}
 
 public actor MemorySQLiteReader: ReadOnlySQLiteReader {
     private var storedValues: [String: String]
@@ -222,13 +241,15 @@ public enum TestContextFactory {
     public static func make(
         network: any NetworkClient = QueueNetworkClient(results: []),
         grokSession: any GrokSessionProviding = NoGrokSessionProvider(),
+        claudeSession: any ClaudeSessionProviding = NoClaudeSessionProvider(),
         credentials: any AppCredentialStore = InMemoryCredentialStore(),
         externalSessions: any ExternalSessionReader = MemoryExternalSessionReader(),
         sqlite: any ReadOnlySQLiteReader = MemorySQLiteReader(),
         codexAccount: any CodexAccountUsageReader = MemoryCodexAccountUsageReader(results: []),
         doubaoPlan: any DoubaoPlanUsageReader = MemoryDoubaoPlanUsageReader(results: []),
         clock: any TokenTankClock = ManualClock(),
-        diagnostics: any DiagnosticsSink = RecordingDiagnostics()
+        diagnostics: any DiagnosticsSink = RecordingDiagnostics(),
+        isUserInitiated: Bool = false
     ) -> CollectionContext {
         CollectionContext(
             network: network,
@@ -238,8 +259,10 @@ public enum TestContextFactory {
             codexAccount: codexAccount,
             doubaoPlan: doubaoPlan,
             grokSession: grokSession,
+            claudeSession: claudeSession,
             clock: clock,
-            diagnostics: diagnostics
+            diagnostics: diagnostics,
+            isUserInitiated: isUserInitiated
         )
     }
 

@@ -15,9 +15,9 @@ struct ProviderRegistryTests {
     @Test("narrower and undocumented source semantics remain explicit")
     func sourceSemanticsAreExplicit() {
         let byID = Dictionary(uniqueKeysWithValues: TokenTankProviderRegistry.defaultAdapters().map { ($0.id, $0) })
-        #expect(byID[.claude]?.sourceDescriptor.id == "claude.code.local-usage-cache")
+        #expect(byID[.claude]?.sourceDescriptor.id == "claude.oauth.usage")
         #expect(byID[.claude]?.sourceDescriptor.kind == .localSession)
-        #expect(byID[.claude]?.sourceDescriptor.detail.contains("Orca") == true)
+        #expect(byID[.claude]?.sourceDescriptor.detail.contains("Orca") == false)
         #expect(byID[.grok]?.sourceDescriptor.id == "grok.cli-proxy.credits")
         #expect(byID[.grok]?.sourceDescriptor.kind == .localSession)
         #expect(byID[.grok]?.sourceDescriptor.detail.contains("cli-chat-proxy.grok.com") == true)

@@ -6,6 +6,29 @@ import TokenTankTestSupport
 
 @Suite("Refresh and persistence behavior", .serialized)
 struct RuntimeTests {
+    @Test("only explicit user refresh permits Claude interaction and consent never leaks to background")
+    func claudeManualInteractionBoundary() async throws {
+        let sessions = RecordingClaudeSessions()
+        let context = TestContextFactory.make(claudeSession: sessions)
+        let coordinator = RefreshCoordinator(adapters: [InteractionAwareClaudeAdapter()], context: context)
+        await coordinator.refresh(.claude)
+        await coordinator.refreshAll(userInitiated: true)
+        await coordinator.refresh(.claude)
+        #expect(await sessions.interactions == [false, true, false])
+        guard case .fresh = await coordinator.state(for: .claude) else {
+            Issue.record("Expected successful scoped session reads")
+            return
+        }
+
+        let manual = context.scoped(to: .claude, isUserInitiated: true)
+        _ = try await manual.claudeSession.session(allowInteraction: true)
+        let nonClaude = context.scoped(to: .cursor, isUserInitiated: true)
+        #expect(await collectionError {
+            _ = try await nonClaude.claudeSession.session(allowInteraction: true)
+        }?.diagnosticCode == "capability.claude-session.denied")
+        #expect(await sessions.interactions == [false, true, false, true])
+    }
+
     @Test("transient failure retains the process-lifetime last success as stale")
     func staleRetainsLastSuccess() async {
         let snapshot = TestContextFactory.snapshot(providerID: .codex)
@@ -468,8 +491,10 @@ struct RuntimeTests {
             _ = try await scoped.grokSession.session(rejectedAccessToken: "malicious-token")
         }?.diagnosticCode == "capability.grok-session.denied")
         #expect(await grokSessions.rejectedAccessTokens.isEmpty)
-        #expect(await scoped.externalSessions.exists(claudeRequest) == true)
-        #expect(try await scoped.externalSessions.read(claudeRequest) == Data("{\"cachedUsageUtilization\":{}}".utf8))
+        #expect(await scoped.externalSessions.exists(claudeRequest) == false)
+        #expect(await collectionError {
+            _ = try await scoped.externalSessions.read(claudeRequest)
+        }?.diagnosticCode == "capability.external-session.denied")
         #expect(await scoped.externalSessions.exists(deniedRequest) == false)
         #expect(await scoped.externalSessions.exists(grokRequest) == false)
         #expect(await collectionError {
@@ -502,6 +527,18 @@ struct RuntimeTests {
         #expect(await collectionError {
             _ = try await scoped.doubaoPlan.readPlanUsage()
         }?.diagnosticCode == "capability.doubao-plan.denied")
+        #expect(await collectionError {
+            _ = try await grokScoped.claudeSession.session(allowInteraction: false)
+        }?.diagnosticCode == "capability.claude-session.denied")
+        #expect(await collectionError {
+            _ = try await scoped.claudeSession.session(allowInteraction: true)
+        }?.diagnosticCode == "capability.claude-session.denied")
+        let nativeClaudeRequest = ExternalFileRequest(
+            providerID: .claude, relativePath: ".claude/.credentials.json", maximumBytes: 64 * 1024
+        )
+        #expect(await collectionError {
+            _ = try await scoped.externalSessions.read(nativeClaudeRequest)
+        }?.diagnosticCode == "capability.external-session.denied")
 
         let cursorScoped = context.scoped(to: .cursor)
         let cursorRequest = ExternalFileRequest(
@@ -722,5 +759,32 @@ private actor AdvancingProviderAdapter: ProviderAdapter {
             await clock.advance(by: .seconds(301))
         }
         return snapshot
+    }
+}
+
+private actor RecordingClaudeSessions: ClaudeSessionProviding {
+    private(set) var interactions: [Bool] = []
+
+    func session(allowInteraction: Bool) -> ClaudeSession {
+        interactions.append(allowInteraction)
+        return ClaudeSession(accessToken: "synthetic", expiresAt: Date(timeIntervalSince1970: 2_000_000_000))
+    }
+}
+
+private struct InteractionAwareClaudeAdapter: ProviderAdapter {
+    let id: ProviderID = .claude
+    let displayName = "Claude"
+    let defaultAbbreviation = "CLD"
+    var sourceDescriptor: ProviderSourceDescriptor {
+        TestContextFactory.snapshot(providerID: .claude).source
+    }
+
+    func probeAvailability(context: CollectionContext) async -> ProviderAvailability {
+        .available(sourceDescriptor)
+    }
+
+    func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
+        _ = try await context.claudeSession.session(allowInteraction: context.isUserInitiated)
+        return TestContextFactory.snapshot(providerID: .claude)
     }
 }

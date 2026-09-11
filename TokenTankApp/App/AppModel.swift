@@ -317,6 +317,7 @@ final class AppModel: ObservableObject {
                 codexAccount: CodexAppServerUsageReader(),
                 doubaoPlan: ArkCLIPlanUsageReader(),
                 grokSession: GrokOAuthSessionProvider(network: network, clock: clock),
+                claudeSession: ClaudeCodeSessionProvider(clock: clock),
                 clock: clock,
                 diagnostics: diagnostics
             )
@@ -1024,9 +1025,9 @@ final class AppModel: ObservableObject {
         let coordinator = coordinator
         let task = Task { [weak self, coordinator] in
             if let providerID {
-                await coordinator.refresh(providerID)
+                await coordinator.refresh(providerID, userInitiated: true)
             } else {
-                await coordinator.refreshAll()
+                await coordinator.refreshAll(userInitiated: true)
             }
             self?.finishRefreshOperation(operationID)
         }
