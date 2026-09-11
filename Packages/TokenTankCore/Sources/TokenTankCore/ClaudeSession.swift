@@ -43,7 +43,7 @@ protocol ClaudeCredentialReading: Sendable {
     func readKeychain(allowInteraction: Bool) async throws -> Data?
 }
 
-private final class ClaudeKeychainQueryGate: @unchecked Sendable {
+final class ClaudeKeychainQueryGate: @unchecked Sendable {
     private let lock = NSLock()
     private var completed = false
     private var acceptingWaiters = true
@@ -57,9 +57,9 @@ private final class ClaudeKeychainQueryGate: @unchecked Sendable {
     }
 
     func wait(id: UUID) async throws -> Data? {
-        try Task.checkCancellation()
         return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
                 let immediate: Result<Data?, Error>? = lock.withLock {
                     if cancelledBeforeRegistration.remove(id) != nil {
                         return .failure(CancellationError())

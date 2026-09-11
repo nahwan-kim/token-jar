@@ -15,9 +15,11 @@ struct ClaudeCLIAuthRefresherTests {
         env > "$PWD/environment"
         pwd > "$PWD/directory"
         printf 'Welcome to Claude Code\n'
+        printf 'shift+tab to cycle modes\\n'
         IFS= read -r command
         printf '%s\n' "$command" > "$PWD/input"
         printf 'Claude Code Status\n'
+        sleep 0.1
         IFS= read -r command
         printf '%s\n' "$command" >> "$PWD/input"
         """)
@@ -45,15 +47,84 @@ struct ClaudeCLIAuthRefresherTests {
         #expect(try fixture.text("directory").trimmingCharacters(in: .whitespacesAndNewlines) == fixture.workspace.path)
     }
 
+    @Test("waits for complete trust and input screens before sending any command")
+    func streamedTerminalReadiness() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let executable = try fixture.script("streamed-readiness", body: """
+        printf 'Permission check before workspace prompt\\n'
+        sleep 0.05
+        printf 'Is this a project you created or one you trust?\\n'
+        if IFS= read -r -t 1 early; then
+          printf 'premature-trust\\n' > "$PWD/readiness"
+          exit 1
+        fi
+        printf 'Enter to confirm\\n'
+        printf 'waiting-trust\\n' > "$PWD/readiness"
+        IFS= read -r trust
+        printf '%s\\n' "$trust" > "$PWD/readiness-input"
+        printf 'Claude Code v2.1.234\\n'
+        if IFS= read -r -t 1 early; then
+          printf 'premature-status\\n' > "$PWD/readiness"
+          exit 1
+        fi
+        printf 'shift+tab to cycle modes\\n'
+        printf 'waiting-status\\n' > "$PWD/readiness"
+        IFS= read -r status
+        printf '%s\\n' "$status" >> "$PWD/readiness-input"
+        printf 'Claude Code Status\\n'
+        printf 'waiting-exit\\n' > "$PWD/readiness"
+        IFS= read -r exit_command
+        printf '%s\\n' "$exit_command" >> "$PWD/readiness-input"
+        printf 'complete\\n' > "$PWD/readiness"
+        """)
+
+        do {
+            try await fixture.refresher(executable: executable, timeout: .seconds(6)).refresh()
+        } catch {
+            #expect(try fixture.lines("readiness") == ["complete"])
+            throw error
+        }
+
+        let input = try fixture.lines("readiness-input")
+        #expect(input.first == "")
+        #expect(input.dropFirst().first == "/status")
+        #expect(input.last?.contains("/exit") == true)
+        #expect(try fixture.lines("readiness") == ["complete"])
+    }
+
+    @Test("bounds graceful exit when the owner ignores exit and termination")
+    func unresponsiveGracefulExitIsBounded() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let executable = try fixture.script("ignores-exit", body: """
+        trap '' HUP TERM
+        printf '%s\\n' "$$" > "$PWD/owner-pid"
+        printf 'Welcome to Claude Code\\n'
+        printf 'shift+tab to cycle modes\\n'
+        IFS= read -r status
+        printf 'Claude Code Status\\n'
+        while :; do sleep 1; done
+        """)
+        let start = ContinuousClock.now
+
+        try await fixture.refresher(executable: executable).refresh()
+
+        #expect(start.duration(to: .now) < .seconds(3))
+        try await assertProcessExited(pidAt: fixture.workspace.appendingPathComponent("owner-pid"))
+    }
+
     @Test("acknowledges only the exact trust prompt for its empty workspace")
     func trustPromptAllowlist() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
         let executable = try fixture.script("trust", body: """
         printf 'Do you trust the files in this folder?\n'
+        printf 'Enter to confirm\\n'
         IFS= read -r trust
         printf '%s\n' "$trust" > "$PWD/trust-input"
         printf 'Welcome to Claude Code\n'
+        printf 'shift+tab to cycle modes\\n'
         IFS= read -r status
         printf '%s\n' "$status" >> "$PWD/trust-input"
         printf 'Claude Code Status\n'
@@ -73,10 +144,12 @@ struct ClaudeCLIAuthRefresherTests {
         defer { fixture.remove() }
         let executable = try fixture.script("ansi-status", body: """
         printf '\\033[1mIs\\033[1Cthis\\033[1Ca\\033[1Cproject\\033[1Cyou\\033[1Ccreated\\033[1Cor\\033[1Cone\\033[1Cyou\\033[1Ctrust?\\033[0m\\n'
+        printf '\\033[1mEnter\\033[1Cto\\033[1Cconfirm\\033[0m\\n'
         IFS= read -r trust
         printf '%s\\n' "$trust" > "$PWD/ansi-input"
         printf 'Directory name: temporary\\n'
         printf '\\033[38;2;200;200;200mClaude\\033[1CCode\\033[1Cv2.1.234\\033[0m\\n'
+        printf 'shift+tab to cycle modes\\n'
         IFS= read -r status
         printf '%s\\n' "$status" >> "$PWD/ansi-input"
         printf '\\033[1mLogin\\033[1Cmethod:\\033[0m\\n'
@@ -84,6 +157,27 @@ struct ClaudeCLIAuthRefresherTests {
         """)
         try await fixture.refresher(executable: executable).refresh()
         #expect(try fixture.lines("ansi-input") == ["", "/status"])
+    }
+
+    @Test("changed trust-question punctuation is never acknowledged")
+    func changedTrustPunctuationIsDenied() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let executable = try fixture.script("changed-trust", body: """
+        printf 'untouched\\n' > "$PWD/marker"
+        printf 'Do you trust the files in this folder!\\nEnter to confirm\\n'
+        if IFS= read -r answer; then
+          printf 'answered\\n' > "$PWD/marker"
+        fi
+        sleep 5
+        """)
+
+        let error = await collectionError {
+            try await fixture.refresher(executable: executable, timeout: .seconds(1)).refresh()
+        }
+
+        #expect(error?.diagnosticCode == "claude.auth-refresh.timeout")
+        #expect(try fixture.lines("marker") == ["untouched"])
     }
 
     @Test("does not answer an unrecognized prompt")
@@ -145,6 +239,7 @@ struct ClaudeCLIAuthRefresherTests {
         let executable = try fixture.script("timeout", body: """
         printf '%s\\n' $$ > "$PWD/pid"
         printf 'Welcome to Claude Code\n'
+        printf 'shift+tab to cycle modes\\n'
         sleep 30
         """)
         let refresher = fixture.refresher(executable: executable, timeout: .seconds(1))
@@ -163,6 +258,7 @@ struct ClaudeCLIAuthRefresherTests {
         sleep 30 &
         printf '%s\n' "$!" > "$PWD/child-pid"
         printf 'Welcome to Claude Code\n'
+        printf 'shift+tab to cycle modes\\n'
         sleep 30
         """)
         let refresher = fixture.refresher(executable: executable, timeout: .seconds(1))
@@ -180,6 +276,7 @@ struct ClaudeCLIAuthRefresherTests {
         let executable = try fixture.script("early-exit", body: """
         printf '%s\\n' $$ > "$PWD/pid"
         printf 'Welcome to Claude Code\n'
+        printf 'shift+tab to cycle modes\\n'
         exit 0
         """)
 
@@ -198,12 +295,14 @@ struct ClaudeCLIAuthRefresherTests {
         let exitAfterBanner = try fixture.script("exit-after-banner", body: """
         printf '%s\\n' $$ > "$PWD/pid"
         printf 'Welcome to Claude Code\n'
+        printf 'shift+tab to cycle modes\\n'
         exit 0
         """)
         // Exits right after consuming `/status`: the write succeeds and the exit is seen by polling.
         let exitAfterStatus = try fixture.script("exit-after-status", body: """
         printf '%s\\n' $$ > "$PWD/pid"
         printf 'Welcome to Claude Code\n'
+        printf 'shift+tab to cycle modes\\n'
         IFS= read -r command
         exit 0
         """)
@@ -228,6 +327,7 @@ struct ClaudeCLIAuthRefresherTests {
         let executable = try fixture.script("cancel", body: """
         printf '%s\\n' $$ > "$PWD/pid"
         printf 'Welcome to Claude Code\n'
+        printf 'shift+tab to cycle modes\\n'
         sleep 30
         """)
         let refresher = fixture.refresher(executable: executable, timeout: .seconds(5))
@@ -288,7 +388,7 @@ private struct Fixture {
 
     func script(_ name: String, body: String) throws -> URL {
         let url = root.appendingPathComponent(name)
-        try Data("#!/bin/sh\n\(body)\n".utf8).write(to: url, options: .atomic)
+        try Data("#!/bin/sh\nset -e\n\(body)\n".utf8).write(to: url, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
         return url
     }

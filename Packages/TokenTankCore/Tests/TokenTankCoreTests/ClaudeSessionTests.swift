@@ -222,6 +222,31 @@ struct ClaudeSessionTests {
         lookup.releaseFirst()
     }
 
+    @Test("cancellation before waiter registration seals an already-started query")
+    func cancelledBeforeWaiterRegistrationSealsQuery() async {
+        let gate = ClaudeKeychainQueryGate()
+        let observer = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await gate.wait(id: UUID())
+        }
+        do {
+            _ = try await observer.value
+            Issue.record("Expected cancellation")
+        } catch is CancellationError {} catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+
+        let next = UUID()
+        gate.scheduleTimeout(for: next, after: 0.1)
+        await expectError(
+            .keychainUnavailable,
+            code: "claude.session.keychain.query-in-flight",
+            recoveryAction: .retry
+        ) {
+            try await gate.wait(id: next)
+        }
+    }
+
     @Test("pre-cancelled and locked reads start no Keychain worker")
     func guardedKeychainReadStartsNoWorker() async {
         let root = temporaryDirectory()

@@ -149,6 +149,7 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
         var statusSent = false
         var trustAcknowledged = false
         var statusObserved = false
+        var lastOutputAt = clock.now
 
         while clock.now < deadline {
             try Task.checkCancellation()
@@ -162,7 +163,11 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
             if !chunk.isEmpty {
                 outputCount += chunk.count
                 Self.appendSanitizedScanText(chunk, to: &scanTail)
+                lastOutputAt = clock.now
+            }
 
+            // A question or banner can arrive before its interactive screen is ready.
+            if !scanTail.isEmpty, lastOutputAt.duration(to: clock.now) >= .milliseconds(100) {
                 let normalized = Self.normalized(scanTail)
                 if statusSent, Self.statusMarkers.map(Self.normalized).contains(where: normalized.contains) {
                     statusObserved = true
@@ -171,6 +176,10 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
                    !trustAcknowledged {
                     guard workspaceWasEmpty else {
                         throw failure(.sourceUnavailable, "claude.auth-refresh.interaction-rejected")
+                    }
+                    guard normalized.contains(Self.normalized("Enter to confirm")) else {
+                        try await Task.sleep(for: .milliseconds(25))
+                        continue
                     }
                     try await send(Data("\r".utf8), to: descriptors.primary, pid: pid)
                     trustAcknowledged = true
@@ -186,7 +195,9 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
                         "claude.auth-refresh.interaction-rejected.\(Self.normalized(marker))"
                     )
                 }
-                if !statusSent, Self.readyMarkers.map(Self.normalized).contains(where: normalized.contains) {
+                if !statusSent,
+                   Self.readyMarkers.map(Self.normalized).contains(where: normalized.contains),
+                   normalized.contains(Self.normalized("shift+tab")) {
                     try await send(Data("/status\r".utf8), to: descriptors.primary, pid: pid)
                     statusSent = true
                     scanTail.removeAll(keepingCapacity: true)
@@ -195,6 +206,9 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
 
             if statusObserved {
                 try? Self.writeFully(Data("\u{1b}/exit\r".utf8), to: descriptors.primary)
+                // Keep the PTY open until the owner has a bounded chance to consume /exit.
+                let exitBudget = min(Duration.seconds(1), clock.now.duration(to: deadline))
+                _ = try await Self.childExited(pid, within: exitBudget)
                 return
             }
             try await Task.sleep(for: .milliseconds(25))
@@ -238,7 +252,11 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
         var attributes: posix_spawnattr_t? = nil
         guard posix_spawnattr_init(&attributes) == 0 else { throw POSIXError(.EIO) }
         defer { posix_spawnattr_destroy(&attributes) }
-        guard posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP)) == 0,
+        var signalMask = sigset_t()
+        // Swift worker threads block signals that the owner and its timers need.
+        guard sigemptyset(&signalMask) == 0,
+              posix_spawnattr_setsigmask(&attributes, &signalMask) == 0,
+              posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK)) == 0,
               posix_spawnattr_setpgroup(&attributes, 0) == 0
         else { throw POSIXError(.EIO) }
 
@@ -350,11 +368,13 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
     }
 
     private nonisolated static func normalized(_ text: String) -> String {
-        String(plainText(text).lowercased().unicodeScalars.filter(CharacterSet.alphanumerics.contains))
+        String(plainText(text).lowercased().unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) })
     }
 
     private nonisolated static func plainText(_ text: String) -> String {
         text.replacingOccurrences(
+            of: "\u{1b}\\[[0-9]*C", with: " ", options: .regularExpression
+        ).replacingOccurrences(
             of: "\u{1b}\\[[0-?]*[ -/]*[@-~]", with: "", options: .regularExpression
         )
     }
