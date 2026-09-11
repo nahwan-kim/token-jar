@@ -351,10 +351,14 @@ struct ClaudeCLIAuthRefresherTests {
         let fixture = try Fixture()
         defer { fixture.remove() }
         let executable = try fixture.script("oversized", body: """
-        exec /usr/bin/yes 'SECRET-RAW-TUI-OUTPUT-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
+        printf 'SECRET-RAW-TUI-OUTPUT'
+        printf '%262145s' ''
+        sleep 30
         """)
 
-        let error = await collectionError { try await fixture.refresher(executable: executable).refresh() }
+        let error = await collectionError {
+            try await fixture.refresher(executable: executable, timeout: .seconds(15)).refresh()
+        }
 
         #expect(error?.diagnosticCode == "claude.auth-refresh.output-size-limit")
         #expect(!String(describing: error).contains("SECRET-RAW-TUI-OUTPUT"))

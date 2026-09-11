@@ -734,17 +734,19 @@ private final class GatedNativeKeychainLookup: @unchecked Sendable {
     }
 
     func waitForCalls(_ expected: Int) async {
-        for _ in 0..<10_000 {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while ContinuousClock.now < deadline {
             if callCount >= expected { return }
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(1))
         }
         Issue.record("Keychain lookup did not start")
     }
 
     func waitForCompletions(_ expected: Int) async {
-        for _ in 0..<10_000 {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while ContinuousClock.now < deadline {
             if lock.withLock({ completions }) >= expected { return }
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(1))
         }
         Issue.record("Keychain lookup did not complete")
     }
