@@ -252,12 +252,12 @@ jobs:
             'DEAD_CODE_STRIPPING = YES' \
             'DEPLOYMENT_POSTPROCESSING = YES' \
             'STRIP_INSTALLED_PRODUCT = YES'; do
-            if ! printf '%s\n' "$build_settings" | /usr/bin/grep -Fq "$expected"; then
+            if ! /usr/bin/grep -Fq "$expected" <<< "$build_settings"; then
               echo "::error::Missing Release build setting: $expected"
               exit 1
             fi
           done
-          if printf '%s\n' "$build_settings" | /usr/bin/grep -Eq 'ENABLE_APP_SANDBOX = YES'; then
+          if /usr/bin/grep -Eq 'ENABLE_APP_SANDBOX = YES' <<< "$build_settings"; then
             echo "::error::App Sandbox must remain disabled for v1."
             exit 1
           fi
