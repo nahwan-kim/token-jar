@@ -883,6 +883,26 @@ final class AppModel: ObservableObject {
             resetsAt: nil,
             accountEmail: "claude.long.account.name.for.compact.layout@example.com"
         )
+        let claudeState: CollectionState
+        if ProcessInfo.processInfo.environment["TOKENTANK_UI_CLAUDE_AUTH_FAILURE"] == "1" {
+            claudeState = .authenticationActionRequired(
+                snapshot: claude,
+                failure: CollectionError(
+                    kind: .authenticationRejected,
+                    diagnosticCode: "ui-test.claude.authentication",
+                    recoveryAction: .signInSourceApp
+                )
+            )
+        } else {
+            claudeState = .stale(
+                snapshot: claude,
+                failure: CollectionError(
+                    kind: .offline,
+                    diagnosticCode: "ui-test.claude.offline"
+                ),
+                failedAt: now
+            )
+        }
         let doubao = snapshot(
             .doubao,
             originalName: "5h",
@@ -894,14 +914,7 @@ final class AppModel: ObservableObject {
         )
         states = [
             .codex: .fresh(codex),
-            .claude: .stale(
-                snapshot: claude,
-                failure: CollectionError(
-                    kind: .offline,
-                    diagnosticCode: "ui-test.claude.offline"
-                ),
-                failedAt: now
-            ),
+            .claude: claudeState,
             .grok: .authenticationActionRequired(
                 snapshot: nil,
                 failure: CollectionError(

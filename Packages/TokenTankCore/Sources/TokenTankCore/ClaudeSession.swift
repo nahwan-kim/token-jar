@@ -26,14 +26,18 @@ public struct ClaudeSession: Sendable, Equatable {
 }
 
 public protocol ClaudeSessionProviding: Sendable {
-    func session(allowInteraction: Bool) async throws -> ClaudeSession
+    func session(allowInteraction: Bool, rejectedAccessToken: String?) async throws -> ClaudeSession
 }
 
 public struct NoClaudeSessionProvider: ClaudeSessionProviding {
     public init() {}
 
-    public func session(allowInteraction: Bool) async throws -> ClaudeSession {
+    public func session(
+        allowInteraction: Bool,
+        rejectedAccessToken: String?
+    ) async throws -> ClaudeSession {
         _ = allowInteraction
+        _ = rejectedAccessToken
         throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "claude.session.disabled")
     }
 }
@@ -327,10 +331,17 @@ enum ClaudeNativeKeychainAccess {
 }
 
 public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
+    private static let minimumValidity: TimeInterval = 60
+    private static let failedRenewalCooldown: TimeInterval = 300
+
     private let clock: any TokenTankClock
     private let credentials: any ClaudeCredentialReading
     private let refresher: any ClaudeAuthRefreshing
     private var renewalTask: Task<ClaudeSession, Error>?
+    private var renewalID: UUID?
+    private var failedRenewals: [String: Date] = [:]
+    private var rejectedFileToken: String?
+    private var rejectedKeychainToken: String?
 
     public init(
         clock: any TokenTankClock = SystemClock(),
@@ -351,47 +362,175 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
         self.refresher = refresher
     }
 
-    public func session(allowInteraction: Bool) async throws -> ClaudeSession {
+    public func session(
+        allowInteraction: Bool,
+        rejectedAccessToken: String?
+    ) async throws -> ClaudeSession {
         try Task.checkCancellation()
-        let state = try await credentialState(allowInteraction: allowInteraction)
-        if let fresh = state.fresh { return fresh }
-        guard !state.expiredTokens.isEmpty else {
+        let initialState = try await credentialState(
+            allowInteraction: allowInteraction,
+            rejectedAccessToken: rejectedAccessToken
+        )
+        if let fresh = initialState.fresh {
+            failedRenewals.removeAll()
+            return fresh
+        }
+        guard !initialState.unusableTokens.isEmpty else {
             throw CollectionError(
                 kind: .externalSessionMissing,
                 diagnosticCode: "claude.session.credentials-missing",
                 recoveryAction: .signInSourceApp
             )
         }
-        guard allowInteraction else { throw retryAuthenticationRequired("claude.session.expired") }
 
         if let renewalTask {
-            return try await waitForRenewal(renewalTask)
+            return try await waitForRenewal(
+                renewalTask,
+                rejectedAccessToken: rejectedAccessToken
+            )
         }
+
         try Task.checkCancellation()
-        let expiredTokens = state.expiredTokens
-        let task = Task { try await self.renew(previousTokens: expiredTokens) }
+        let reloadedState = try await credentialState(
+            allowInteraction: allowInteraction,
+            rejectedAccessToken: rejectedAccessToken
+        )
+        if let fresh = reloadedState.fresh {
+            failedRenewals.removeAll()
+            return fresh
+        }
+        guard !reloadedState.unusableTokens.isEmpty else {
+            throw CollectionError(
+                kind: .externalSessionMissing,
+                diagnosticCode: "claude.session.credentials-missing",
+                recoveryAction: .signInSourceApp
+            )
+        }
+
+        if let renewalTask {
+            return try await waitForRenewal(
+                renewalTask,
+                rejectedAccessToken: rejectedAccessToken
+            )
+        }
+
+        let previousTokens = initialState.unusableTokens.union(reloadedState.unusableTokens)
+        let now = await clock.now()
+        failedRenewals = failedRenewals.filter {
+            previousTokens.contains($0.key)
+                && $0.value.addingTimeInterval(Self.failedRenewalCooldown) > now
+        }
+        if !allowInteraction {
+            let coolingDown = previousTokens.contains {
+                failedRenewals[$0] != nil
+            }
+            if coolingDown {
+                throw CollectionError(
+                    kind: .authenticationRejected,
+                    diagnosticCode: "claude.session.refresh.cooldown",
+                    recoveryAction: .waitForNextRefresh
+                )
+            }
+        }
+
+        if let renewalTask {
+            return try await waitForRenewal(
+                renewalTask,
+                rejectedAccessToken: rejectedAccessToken
+            )
+        }
+
+        try Task.checkCancellation()
+        let id = UUID()
+        renewalID = id
+        let task = Task {
+            do {
+                let session = try await self.renew(
+                    previousTokens: previousTokens,
+                    allowInteraction: allowInteraction,
+                    rejectedAccessToken: rejectedAccessToken
+                )
+                self.settleRenewal(
+                    id: id,
+                    failedTokens: previousTokens,
+                    at: nil
+                )
+                return session
+            } catch {
+                let failedAt = await self.clock.now()
+                self.settleRenewal(
+                    id: id,
+                    failedTokens: previousTokens,
+                    at: failedAt
+                )
+                throw error
+            }
+        }
         renewalTask = task
-        do {
-            let result = try await waitForRenewal(task)
-            renewalTask = nil
-            return result
-        } catch {
-            renewalTask = nil
-            throw error
+        return try await waitForRenewal(
+            task,
+            rejectedAccessToken: rejectedAccessToken
+        )
+    }
+
+    private func settleRenewal(
+        id: UUID,
+        failedTokens: Set<String>,
+        at date: Date?
+    ) {
+        guard renewalID == id else { return }
+        renewalTask = nil
+        renewalID = nil
+        if let date {
+            for token in failedTokens {
+                failedRenewals[token] = date
+            }
+        } else {
+            for token in failedTokens {
+                failedRenewals[token] = nil
+            }
         }
     }
 
-    private func waitForRenewal(_ task: Task<ClaudeSession, Error>) async throws -> ClaudeSession {
+    private func waitForRenewal(
+        _ task: Task<ClaudeSession, Error>,
+        rejectedAccessToken: String?
+    ) async throws -> ClaudeSession {
         let session = try await task.value
         try Task.checkCancellation()
+        guard !tokenIsRejected(session.accessToken, explicit: rejectedAccessToken) else {
+            throw retryAuthenticationRequired("claude.session.refresh.token-rejected")
+        }
         return session
     }
 
-    private func renew(previousTokens: Set<String>) async throws -> ClaudeSession {
-        try await refresher.refresh()
-        let state = try await credentialState(allowInteraction: true)
+    private func renew(
+        previousTokens: Set<String>,
+        allowInteraction: Bool,
+        rejectedAccessToken: String?
+    ) async throws -> ClaudeSession {
+        do {
+            try await refresher.refresh()
+        } catch let refreshError {
+            do {
+                let state = try await credentialState(
+                    allowInteraction: allowInteraction,
+                    rejectedAccessToken: rejectedAccessToken
+                )
+                if let session = state.fresh,
+                   !previousTokens.contains(session.accessToken) {
+                    return session
+                }
+            } catch {}
+            throw refreshError
+        }
+
+        let state = try await credentialState(
+            allowInteraction: allowInteraction,
+            rejectedAccessToken: rejectedAccessToken
+        )
         guard let session = state.fresh else {
-            if state.expiredTokens.isEmpty {
+            if state.unusableTokens.isEmpty {
                 throw CollectionError(
                     kind: .externalSessionMissing,
                     diagnosticCode: "claude.session.refresh.credentials-missing",
@@ -406,23 +545,57 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
         return session
     }
 
-    private func credentialState(allowInteraction: Bool) async throws -> CredentialState {
-        var expiredTokens: Set<String> = []
-        if let data = try await credentials.readFile(),
-           let session = try decodeClaudeSession(data) {
-            let now = await clock.now()
-            if session.expiresAt > now { return CredentialState(fresh: session, expiredTokens: []) }
-            expiredTokens.insert(session.accessToken)
+    private func tokenIsRejected(_ token: String, explicit: String?) -> Bool {
+        token == explicit
+            || token == rejectedFileToken
+            || token == rejectedKeychainToken
+    }
+    private func credentialState(
+        allowInteraction: Bool,
+        rejectedAccessToken: String?
+    ) async throws -> CredentialState {
+        var unusableTokens: Set<String> = []
+        if let data = try await credentials.readFile() {
+            if let session = try decodeClaudeSession(data) {
+                if rejectedFileToken != session.accessToken {
+                    rejectedFileToken = nil
+                }
+                if session.accessToken == rejectedAccessToken {
+                    rejectedFileToken = session.accessToken
+                }
+                let now = await clock.now()
+                if !tokenIsRejected(session.accessToken, explicit: rejectedAccessToken),
+                   session.expiresAt > now.addingTimeInterval(Self.minimumValidity) {
+                    return CredentialState(fresh: session, unusableTokens: [])
+                }
+                unusableTokens.insert(session.accessToken)
+            } else {
+                rejectedFileToken = nil
+            }
+        } else {
+            rejectedFileToken = nil
         }
 
         do {
-            if let data = try await credentials.readKeychain(allowInteraction: allowInteraction),
-               let session = try decodeClaudeSession(data) {
-                let now = await clock.now()
-                if session.expiresAt > now {
-                    return CredentialState(fresh: session, expiredTokens: expiredTokens)
+            if let data = try await credentials.readKeychain(allowInteraction: allowInteraction) {
+                if let session = try decodeClaudeSession(data) {
+                    if rejectedKeychainToken != session.accessToken {
+                        rejectedKeychainToken = nil
+                    }
+                    if session.accessToken == rejectedAccessToken {
+                        rejectedKeychainToken = session.accessToken
+                    }
+                    let now = await clock.now()
+                    if !tokenIsRejected(session.accessToken, explicit: rejectedAccessToken),
+                       session.expiresAt > now.addingTimeInterval(Self.minimumValidity) {
+                        return CredentialState(fresh: session, unusableTokens: unusableTokens)
+                    }
+                    unusableTokens.insert(session.accessToken)
+                } else {
+                    rejectedKeychainToken = nil
                 }
-                expiredTokens.insert(session.accessToken)
+            } else {
+                rejectedKeychainToken = nil
             }
         } catch let error as CollectionError where error.kind == .keychainUnavailable {
             throw CollectionError(
@@ -432,13 +605,13 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
                 retryAfter: error.retryAfter
             )
         }
-        return CredentialState(fresh: nil, expiredTokens: expiredTokens)
+        return CredentialState(fresh: nil, unusableTokens: unusableTokens)
     }
 }
 
 private struct CredentialState {
     let fresh: ClaudeSession?
-    let expiredTokens: Set<String>
+    let unusableTokens: Set<String>
 }
 
 private func decodeClaudeSession(_ data: Data) throws -> ClaudeSession? {

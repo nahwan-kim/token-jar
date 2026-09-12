@@ -1,3 +1,4 @@
+import CoreGraphics
 import Darwin
 import Foundation
 import TokenTankDomain
@@ -7,10 +8,10 @@ public protocol ClaudeAuthRefreshing: Sendable {
 }
 
 /// Gives Claude Code one bounded opportunity to repair its own OAuth credentials.
-/// A return only means `/status` completed; callers must reload and validate credentials.
+/// A return only means `/usage` completed; callers must reload and validate credentials.
 public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
     private static let maximumOutputBytes = 256 * 1024
-    private static let maximumTimeout: Duration = .seconds(15)
+    private static let maximumTimeout: Duration = .seconds(60)
     /// A PTY write fails with EIO once the child closes its side, which happens during exit slightly
     /// before the kernel publishes the exit status. This bounds how long a failed write waits for
     /// that status before it is reported as an I/O failure rather than a process exit.
@@ -28,9 +29,24 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
         "Is this a project you created or one you trust?",
     ]
     private static let readyMarkers = ["Welcome to Claude Code", "Claude Code v", "Tips for getting started"]
-    private static let statusMarkers = ["Claude Code Status", "Login method:", "Account:"]
     private static let rejectedPromptMarkers = [
-        "log in", "login", "sign in", "permission", "approve", "allow access", "yes/no", "y/n",
+        "log in", "login", "sign in", "approve", "allow access", "permission required",
+        "yes/no", "y/n",
+    ]
+    private static let usageFooterMarkers = [
+        "esc to go back", "press esc to go back", "esc to close", "press esc to close",
+        "esc to return", "esc to exit", "esc to cancel",
+    ]
+    private static let usageAuthenticationFailureMarkers = [
+        "not logged in", "authentication failed", "oauth authentication failed",
+    ]
+    private static let usageTransientFailureMarkers = [
+        "unable to load usage", "failed to load usage",
+    ]
+    private static let usagePlanNoticeMarkers = [
+        "usage is not available for your plan", "usage data is not available for your plan",
+        "subscription does not include usage", "organization does not include usage",
+        "plan does not support usage", "usage is only available for",
     ]
 
     private let executableCandidates: [URL]
@@ -38,6 +54,7 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
     private let timeout: Duration
     private let homeDirectory: URL
     private let fileManager: FileManager
+    private let screenIsUnlocked: @Sendable () -> Bool
 
     private var childPID: pid_t?
     private var processGroup: pid_t?
@@ -54,6 +71,7 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
         self.timeout = Self.maximumTimeout
         self.homeDirectory = homeDirectory
         self.fileManager = .default
+        self.screenIsUnlocked = Self.consoleIsUnlocked
     }
 
     init(
@@ -61,17 +79,26 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
         workingDirectory: URL,
         timeout: Duration,
         homeDirectory: URL,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        screenIsUnlocked: @escaping @Sendable () -> Bool = { true }
     ) {
         self.executableCandidates = executableCandidates
         self.workingDirectory = workingDirectory
         self.timeout = min(max(timeout, .milliseconds(1)), Self.maximumTimeout)
         self.homeDirectory = homeDirectory
         self.fileManager = fileManager
+        self.screenIsUnlocked = screenIsUnlocked
     }
 
     public func refresh() async throws {
         try Task.checkCancellation()
+        guard screenIsUnlocked() else {
+            throw CollectionError(
+                kind: .sourceUnavailable,
+                diagnosticCode: "claude.auth-refresh.screen-locked",
+                recoveryAction: .retry
+            )
+        }
         guard let executable = executableCandidates.first(where: {
             fileManager.isExecutableFile(atPath: $0.path)
         }) else {
@@ -146,9 +173,9 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
         let deadline = clock.now.advanced(by: timeout)
         var outputCount = 0
         var scanTail = ""
-        var statusSent = false
+        var usageSent = false
         var trustAcknowledged = false
-        var statusObserved = false
+        var usageObserved = false
         var lastOutputAt = clock.now
 
         while clock.now < deadline {
@@ -169,8 +196,28 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
             // A question or banner can arrive before its interactive screen is ready.
             if !scanTail.isEmpty, lastOutputAt.duration(to: clock.now) >= .milliseconds(100) {
                 let normalized = Self.normalized(scanTail)
-                if statusSent, Self.statusMarkers.map(Self.normalized).contains(where: normalized.contains) {
-                    statusObserved = true
+                let usageCompletion = usageSent ? Self.usageCompletion(scanTail) : nil
+                if usageSent, Self.trustPrompts.map(Self.normalized).contains(where: normalized.contains) {
+                    throw failure(.sourceUnavailable, "claude.auth-refresh.interaction-rejected")
+                }
+                if usageCompletion != .authenticationFailure, let marker = Self.rejectedPromptMarkers.first(
+                    where: { normalized.contains(Self.normalized($0)) }
+                ) {
+                    throw promptFailure(marker)
+                }
+                if let usageCompletion, lastOutputAt.duration(to: clock.now) >= .seconds(1) {
+                    switch usageCompletion {
+                    case .success:
+                        usageObserved = true
+                    case .authenticationFailure:
+                        throw CollectionError(
+                            kind: .sourceUnavailable,
+                            diagnosticCode: "claude.auth-refresh.login-required",
+                            recoveryAction: .signInSourceApp
+                        )
+                    case .transientFailure:
+                        throw failure(.sourceUnavailable, "claude.auth-refresh.usage-failed")
+                    }
                 }
                 if Self.trustPrompts.map(Self.normalized).contains(where: normalized.contains),
                    !trustAcknowledged {
@@ -187,31 +234,30 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
                     try await Task.sleep(for: .milliseconds(50))
                     continue
                 }
-                let plain = Self.plainText(scanTail).lowercased()
-                if !statusSent, let marker = Self.rejectedPromptMarkers.first(where: plain.contains) {
-                    // Only a fixed allowlisted marker enters diagnostics, never TUI text.
-                    throw failure(
-                        .sourceUnavailable,
-                        "claude.auth-refresh.interaction-rejected.\(Self.normalized(marker))"
-                    )
-                }
-                if !statusSent,
+                if !usageSent,
                    Self.readyMarkers.map(Self.normalized).contains(where: normalized.contains),
                    normalized.contains(Self.normalized("shift+tab")) {
-                    try await send(Data("/status\r".utf8), to: descriptors.primary, pid: pid)
-                    statusSent = true
+                    try await send(Data("/usage\r".utf8), to: descriptors.primary, pid: pid)
+                    usageSent = true
                     scanTail.removeAll(keepingCapacity: true)
                 }
             }
 
-            if statusObserved {
-                try? Self.writeFully(Data("\u{1b}/exit\r".utf8), to: descriptors.primary)
-                // Keep the PTY open until the owner has a bounded chance to consume /exit.
-                let exitBudget = min(Duration.seconds(1), clock.now.duration(to: deadline))
-                _ = try await Self.childExited(pid, within: exitBudget)
+            if usageObserved {
+                try? Self.writeFully(Data("\u{1b}".utf8), to: descriptors.primary)
+                try await Task.sleep(for: .milliseconds(100))
+                try? Self.writeFully(Data("/exit\r".utf8), to: descriptors.primary)
+                // Let the owner finish any credential persistence and exit naturally before cleanup.
+                _ = try await Self.childExited(pid, within: .seconds(5))
                 return
             }
             try await Task.sleep(for: .milliseconds(25))
+        }
+
+        // Without a completed panel, terminal input could answer an unknown prompt. Leave the
+        // owner a final passive persistence window, then terminate without sending any input.
+        if usageSent {
+            _ = try? await Self.childExited(pid, within: .seconds(5))
         }
         throw failure(.sourceUnavailable, "claude.auth-refresh.timeout")
     }
@@ -378,6 +424,58 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
             of: "\u{1b}\\[[0-?]*[ -/]*[@-~]", with: "", options: .regularExpression
         )
     }
+    private enum UsageCompletion: Equatable {
+        case success
+        case authenticationFailure
+        case transientFailure
+    }
+
+    private nonisolated static func usageCompletion(_ text: String) -> UsageCompletion? {
+        let normalizedText = normalized(text)
+        if usageAuthenticationFailureMarkers.map(normalized).contains(where: normalizedText.contains) {
+            return .authenticationFailure
+        }
+        if usageTransientFailureMarkers.map(normalized).contains(where: normalizedText.contains) {
+            return .transientFailure
+        }
+        let hasFooter = usageFooterMarkers.map(normalized).contains(where: normalizedText.contains)
+        if hasFooter,
+           usagePlanNoticeMarkers.map(normalized).contains(where: normalizedText.contains) {
+            return .success
+        }
+
+        // OAuth usage panels contain both periods and a real percentage. A Usage tab title or
+        // loading header alone must never complete the owner operation.
+        let hasPeriods = normalizedText.contains(normalized("current session"))
+            && normalizedText.contains(normalized("current week"))
+        let hasPercentage = normalizedText.range(
+            of: #"(?:100|[0-9]{1,2})(?:\.[0-9]+)?%(?:used|left)"#,
+            options: .regularExpression
+        ) != nil
+        if hasFooter, hasPeriods, hasPercentage {
+            return .success
+        }
+
+        // A credential-less CLI can render its local, non-OAuth session statistics instead.
+        // Recognizing the completed panel is safe; the caller still must reject an unchanged or
+        // missing owner token after this method returns.
+        let hasLocalUsage = normalizedText.contains(normalized("session"))
+            && normalizedText.contains(normalized("total cost:"))
+            && normalizedText.contains(normalized("usage:"))
+            && normalizedText.contains(normalized("input"))
+            && normalizedText.contains(normalized("output"))
+            && normalizedText.contains(normalized("cache read"))
+            && normalizedText.contains(normalized("cache write"))
+            && normalizedText.contains(normalized("esc to cancel"))
+        return hasLocalUsage ? .success : nil
+    }
+
+    private nonisolated static func consoleIsUnlocked() -> Bool {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+              session[kCGSessionOnConsoleKey as String] as? Bool == true
+        else { return false }
+        return session["CGSSessionScreenIsLocked"] as? Bool != true
+    }
 
     private nonisolated static func safeEnvironment(
         homeDirectory: URL,
@@ -397,12 +495,25 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
             "TERM": "xterm-256color",
             "LANG": "en_US.UTF-8",
             "DISABLE_AUTOUPDATER": "1",
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
             "CLAUDE_CODE_SAFE_MODE": "1",
         ]
     }
 
     private nonisolated func failure(_ kind: CollectionErrorKind, _ code: String) -> CollectionError {
-        CollectionError(kind: kind, diagnosticCode: code, recoveryAction: .signInSourceApp)
+        CollectionError(kind: kind, diagnosticCode: code, recoveryAction: .retry)
+    }
+
+    private nonisolated func promptFailure(_ marker: String) -> CollectionError {
+        let normalizedMarker = Self.normalized(marker)
+        let requiresLogin = normalizedMarker == Self.normalized("log in")
+            || normalizedMarker == Self.normalized("login")
+            || normalizedMarker == Self.normalized("sign in")
+        return CollectionError(
+            kind: .sourceUnavailable,
+            diagnosticCode: "claude.auth-refresh.interaction-rejected.\(normalizedMarker)",
+            recoveryAction: requiresLogin ? .signInSourceApp : .retry
+        )
     }
 }
 

@@ -406,9 +406,9 @@ struct ProviderDetailView: View {
         case .neverLoaded, .refreshing, .fresh:
             EmptyView()
         case let .stale(_, failure, _):
-            FailureView(failure: failure, retry: retry, configure: configure)
+            FailureView(providerID: providerID, failure: failure, retry: retry, configure: configure)
         case let .authenticationActionRequired(_, failure):
-            FailureView(failure: failure, retry: retry, configure: configure)
+            FailureView(providerID: providerID, failure: failure, retry: retry, configure: configure)
         }
     }
 
@@ -491,7 +491,8 @@ private struct CodexAccountDetailView: View {
                     .accessibilityIdentifier("\(accessibilityID).status")
             }
             if let failure = account.failure {
-                FailureView(failure: failure, retry: retry, configure: configure, identifierPrefix: accessibilityID)
+                FailureView(providerID: .codex, failure: failure, retry: retry, configure: configure,
+                            identifierPrefix: accessibilityID)
             }
             CodexQuotaColumns(quotas: account.quotas,
                               refreshedAt: account.refreshedAt ?? fallbackRefreshedAt,
@@ -572,6 +573,7 @@ private struct ProviderStatusPresentation {
 }
 
 private struct FailureView: View {
+    let providerID: ProviderID
     let failure: CollectionError
     let retry: () -> Void
     let configure: () -> Void
@@ -647,7 +649,8 @@ private struct FailureView: View {
         switch failure.recoveryAction {
         case .retry: "action.retry"
         case .waitForNextRefresh: "action.wait"
-        case .signInSourceApp: "action.sign_in_source"
+        case .signInSourceApp:
+            providerID == .claude ? "action.sign_in_claude" : "action.sign_in_source"
         case .signInTokenTank: "action.sign_in_token_tank"
         case .allowAccessInSystemSettings: "action.allow_system_settings"
         case .none: "action.none"

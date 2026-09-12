@@ -25,13 +25,30 @@ public struct ClaudeAdapter: ProviderAdapter {
     }
 
     public func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
-        let session = try await claudeSourceSession(in: context)
-        let response = try await claudeResponse(
+        var session = try await claudeSourceSession(in: context, rejectedAccessToken: nil)
+        var response = try await claudeResponse(
             path: "/api/oauth/usage",
             token: session.accessToken,
             timeout: 30,
             network: context.network
         )
+        if response.statusCode == 401 {
+            let rejectedToken = session.accessToken
+            session = try await claudeSourceSession(in: context, rejectedAccessToken: rejectedToken)
+            guard session.accessToken != rejectedToken else {
+                throw CollectionError(
+                    kind: .authenticationRejected,
+                    diagnosticCode: "claude.oauth.authentication-rejected",
+                    recoveryAction: .signInSourceApp
+                )
+            }
+            response = try await claudeResponse(
+                path: "/api/oauth/usage",
+                token: session.accessToken,
+                timeout: 30,
+                network: context.network
+            )
+        }
         let validationNow = await context.clock.now()
         try claudeValidate(response, now: validationNow)
         let quotas = try Self.decodeQuotas(from: response.body)
@@ -108,9 +125,12 @@ private struct ClaudeDecimalValue {
     let raw: String
 }
 
-private func claudeSourceSession(in context: CollectionContext) async throws -> ClaudeSession {
+private func claudeSourceSession(in context: CollectionContext, rejectedAccessToken: String?) async throws -> ClaudeSession {
     do {
-        return try await context.claudeSession.session(allowInteraction: context.isUserInitiated)
+        return try await context.claudeSession.session(
+            allowInteraction: context.isUserInitiated,
+            rejectedAccessToken: rejectedAccessToken
+        )
     } catch is CancellationError {
         throw CancellationError()
     } catch let error as CollectionError {

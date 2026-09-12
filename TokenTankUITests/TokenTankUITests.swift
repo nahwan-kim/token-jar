@@ -476,6 +476,48 @@ final class TokenTankUITests: XCTestCase {
         XCTAssertTrue(window.staticTexts["error.offline"].exists, "Actionable error details remain visible")
     }
 
+    func testClaudeAuthenticationRecoveryShowsTerminalCommandInEnglishAndKorean() {
+        continueAfterFailure = false
+        defer { app.terminate() }
+
+        let locales = [
+            (language: "en", locale: "en_US",
+             claude: "Run claude auth login in Terminal, then Refresh",
+             generic: "Sign in again in the source app, then Refresh"),
+            (language: "ko", locale: "ko_KR",
+             claude: "터미널에서 claude auth login을 실행한 뒤 새로고침",
+             generic: "원본 앱에서 다시 로그인한 뒤 새로고침"),
+        ]
+
+        for locale in locales {
+            app.launchArguments = [
+                "-AppleLanguages", "(\(locale.language))",
+                "-AppleLocale", locale.locale,
+                "-appLanguage", locale.language,
+            ]
+            app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+            app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+            app.launchEnvironment["TOKENTANK_UI_CLAUDE_AUTH_FAILURE"] = "1"
+            app.launch()
+
+            let window = app.windows["Token Jar UI Test Detail"]
+            XCTAssertTrue(window.waitForExistence(timeout: timeout))
+
+            let claudeAction = window.descendants(matching: .any)["provider.claude"]
+                .descendants(matching: .any)["action.signInSourceApp"]
+            XCTAssertTrue(claudeAction.waitForExistence(timeout: timeout))
+            XCTAssertTrue(accessibilityText(claudeAction).contains(locale.claude), accessibilityText(claudeAction))
+
+            let genericAction = window.descendants(matching: .any)["provider.grok"]
+                .descendants(matching: .any)["action.signInSourceApp"]
+            XCTAssertTrue(genericAction.waitForExistence(timeout: timeout))
+            XCTAssertTrue(accessibilityText(genericAction).contains(locale.generic), accessibilityText(genericAction))
+
+            app.terminate()
+            XCTAssertTrue(app.wait(for: .notRunning, timeout: timeout))
+        }
+    }
+
     func testCodexWeeklyAndTicketsUseTwoCompactColumns() {
         continueAfterFailure = false
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appLanguage", "en"]

@@ -194,10 +194,10 @@ struct ClaudeAdapterTests {
         #expect(second.accounts.first?.plan == "Max 5x")
     }
 
-    @Test("authentication and scope rejection are sanitized and never retried")
+    @Test("unchanged authentication and scope rejection are sanitized without a network retry")
     func authenticationFailures() async {
         for status in [401, 403] {
-            let sessions = MemoryClaudeSessionProvider(results: [.success(session)])
+            let sessions = MemoryClaudeSessionProvider(results: [.success(session), .success(session)])
             let network = QueueNetworkClient(results: [
                 .success(NetworkResponse(statusCode: status, headers: [:], body: Data("secret".utf8))),
             ])
@@ -218,7 +218,116 @@ struct ClaudeAdapterTests {
                 Issue.record("Unexpected error: \(error)")
             }
             #expect(await network.requests.count == 1)
-            #expect(await sessions.allowInteractionRequests == [false])
+            #expect(await sessions.allowInteractionRequests == (status == 401 ? [false, false] : [false]))
+            #expect(await sessions.rejectedAccessTokens == (status == 401 ? [nil, session.accessToken] : [nil]))
+        }
+    }
+
+    @Test("401 reloads credentials and retries once using the renewed token for usage and profile")
+    func automaticAuthenticationRecovery() async throws {
+        for userInitiated in [false, true] {
+            let renewed = ClaudeSession(accessToken: "renewed-token", expiresAt: now.addingTimeInterval(3600))
+            let sessions = MemoryClaudeSessionProvider(results: [.success(session), .success(renewed)])
+            let network = QueueNetworkClient(results: [
+                .success(NetworkResponse(statusCode: 401, headers: [:], body: Data("secret".utf8))),
+                .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+                .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{\"account\":{\"email\":\"renewed@example.com\"}}".utf8))),
+            ])
+            let snapshot = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
+                network: network, claudeSession: sessions, isUserInitiated: userInitiated
+            ))
+            #expect(snapshot.quotas.first?.percentage.value == 24)
+            #expect(snapshot.accountEmail == "renewed@example.com")
+            #expect(await sessions.allowInteractionRequests == [userInitiated, userInitiated])
+            #expect(await sessions.rejectedAccessTokens == [nil, session.accessToken])
+            #expect(await network.requests.map { $0.headers["Authorization"] } == [
+                "Bearer synthetic-claude-token", "Bearer renewed-token", "Bearer renewed-token",
+            ])
+        }
+    }
+
+    @Test("a second 401 terminates recovery and retains the previous successful snapshot")
+    func repeatedAuthenticationRejection() async {
+        let renewed = ClaudeSession(accessToken: "renewed-token", expiresAt: now.addingTimeInterval(3600))
+        let sessions = MemoryClaudeSessionProvider(results: [.success(session), .success(session), .success(renewed)])
+        let network = QueueNetworkClient(results: [
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+            .success(NetworkResponse(statusCode: 500, headers: [:], body: Data())),
+            .success(NetworkResponse(statusCode: 401, headers: [:], body: Data())),
+            .success(NetworkResponse(statusCode: 401, headers: [:], body: Data("secret".utf8))),
+        ])
+        let coordinator = RefreshCoordinator(
+            adapters: [ClaudeAdapter()],
+            context: TestContextFactory.make(network: network, claudeSession: sessions)
+        )
+        await coordinator.refresh(.claude)
+        await coordinator.refresh(.claude)
+        guard case let .authenticationActionRequired(previous, failure) = await coordinator.state(for: .claude) else {
+            Issue.record("Expected authentication failure retaining previous snapshot")
+            return
+        }
+        #expect(previous?.quotas.first?.percentage.value == 24)
+        #expect(failure.diagnosticCode == "claude.oauth.authentication-rejected")
+        #expect(await sessions.rejectedAccessTokens == [nil, nil, session.accessToken])
+        #expect(await network.requests.count == 4)
+    }
+
+    @Test("renewal failure and cancellation propagate without another usage request")
+    func failedAuthenticationRecovery() async {
+        for kind in [CollectionErrorKind.transientNetwork, .cancelled, .externalSessionMissing] {
+            let sessions = MemoryClaudeSessionProvider(results: [
+                .success(session),
+                .failure(CollectionError(kind: kind, diagnosticCode: "claude.session.recovery-failed")),
+            ])
+            let network = QueueNetworkClient(results: [
+                .success(NetworkResponse(statusCode: 401, headers: [:], body: Data())),
+            ])
+            do {
+                _ = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
+                    network: network, claudeSession: sessions
+                ))
+                Issue.record("Expected renewal failure")
+            } catch let error as CollectionError {
+                #expect(error.kind == kind)
+                #expect(error.diagnosticCode == "claude.session.recovery-failed")
+            } catch {
+                Issue.record("Unexpected error: \(error)")
+            }
+            #expect(await network.requests.count == 1)
+            #expect(await sessions.allowInteractionRequests == [false, false])
+        }
+    }
+
+    @Test("the single retry preserves scope, rate-limit, network, and malformed-response failures")
+    func retriedFailureClassification() async {
+        let cases: [(Int, Data, CollectionErrorKind)] = [
+            (403, Data(), .authenticationRejected),
+            (429, Data(), .rateLimited),
+            (503, Data(), .transientNetwork),
+            (200, Data("{}".utf8), .malformedResponse),
+        ]
+        for (status, body, expectedKind) in cases {
+            let renewed = ClaudeSession(accessToken: "renewed-token", expiresAt: now.addingTimeInterval(3600))
+            let sessions = MemoryClaudeSessionProvider(results: [.success(session), .success(renewed)])
+            let network = QueueNetworkClient(results: [
+                .success(NetworkResponse(statusCode: 401, headers: [:], body: Data())),
+                .success(NetworkResponse(statusCode: status, headers: ["Retry-After": "120"], body: body)),
+            ])
+            do {
+                _ = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
+                    network: network, claudeSession: sessions, clock: ManualClock(now: now)
+                ))
+                Issue.record("Expected retry failure")
+            } catch let error as CollectionError {
+                #expect(error.kind == expectedKind)
+                if status == 429 {
+                    #expect(error.retryAfter == now.addingTimeInterval(120))
+                }
+            } catch {
+                Issue.record("Unexpected error: \(error)")
+            }
+            #expect(await network.requests.count == 2)
+            #expect(await sessions.rejectedAccessTokens == [nil, session.accessToken])
         }
     }
 

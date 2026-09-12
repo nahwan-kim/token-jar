@@ -6,7 +6,7 @@ import TokenTankDomain
 
 @Suite("Claude CLI OAuth refresher", .serialized)
 struct ClaudeCLIAuthRefresherTests {
-    @Test("uses fixed safe arguments, environment, working directory, and only sends status then exit")
+    @Test("uses fixed safe arguments, environment, working directory, and only sends usage then exit")
     func fixedInvocation() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -18,7 +18,7 @@ struct ClaudeCLIAuthRefresherTests {
         printf 'shift+tab to cycle modes\\n'
         IFS= read -r command
         printf '%s\n' "$command" > "$PWD/input"
-        printf 'Claude Code Status\n'
+        printf 'Currentsession12%%used\\nCurrentweek34%%left\\nEsctocancel\\n'
         sleep 0.1
         IFS= read -r command
         printf '%s\n' "$command" >> "$PWD/input"
@@ -28,8 +28,9 @@ struct ClaudeCLIAuthRefresherTests {
         try await refresher.refresh()
 
         let input = try fixture.text("input")
-        #expect(input.contains("/status"))
+        #expect(input.contains("/usage"))
         #expect(input.contains("/exit"))
+        #expect(try fixture.lines("input").count == 2)
         #expect(!input.contains("prompt"))
         #expect(try fixture.lines("arguments") == [
             "--safe-mode", "--tools", "", "--allowed-tools", "", "--setting-sources", "",
@@ -38,6 +39,7 @@ struct ClaudeCLIAuthRefresherTests {
         let environment = try fixture.text("environment")
         #expect(environment.contains("CLAUDE_CODE_SAFE_MODE=1"))
         #expect(environment.contains("DISABLE_AUTOUPDATER=1"))
+        #expect(environment.contains("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"))
         #expect(!environment.contains("ANTHROPIC_API_KEY"))
         let lines = environment.split(separator: "\n").map(String.init)
         let username = NSUserName()
@@ -65,14 +67,19 @@ struct ClaudeCLIAuthRefresherTests {
         printf '%s\\n' "$trust" > "$PWD/readiness-input"
         printf 'Claude Code v2.1.234\\n'
         if IFS= read -r -t 1 early; then
-          printf 'premature-status\\n' > "$PWD/readiness"
+          printf 'premature-usage\\n' > "$PWD/readiness"
           exit 1
         fi
         printf 'shift+tab to cycle modes\\n'
-        printf 'waiting-status\\n' > "$PWD/readiness"
-        IFS= read -r status
-        printf '%s\\n' "$status" >> "$PWD/readiness-input"
-        printf 'Claude Code Status\\n'
+        printf 'waiting-usage\\n' > "$PWD/readiness"
+        IFS= read -r usage
+        printf '%s\\n' "$usage" >> "$PWD/readiness-input"
+        printf 'Usage\\nLoading...\\n'
+        if IFS= read -r -t 1 early_exit; then
+          printf 'premature-completion\\n' > "$PWD/readiness"
+          exit 1
+        fi
+        printf 'Current session 1%% used\\nCurrent week 99%% left\\nEsc to go back\\n'
         printf 'waiting-exit\\n' > "$PWD/readiness"
         IFS= read -r exit_command
         printf '%s\\n' "$exit_command" >> "$PWD/readiness-input"
@@ -88,7 +95,7 @@ struct ClaudeCLIAuthRefresherTests {
 
         let input = try fixture.lines("readiness-input")
         #expect(input.first == "")
-        #expect(input.dropFirst().first == "/status")
+        #expect(input.dropFirst().first == "/usage")
         #expect(input.last?.contains("/exit") == true)
         #expect(try fixture.lines("readiness") == ["complete"])
     }
@@ -102,15 +109,15 @@ struct ClaudeCLIAuthRefresherTests {
         printf '%s\\n' "$$" > "$PWD/owner-pid"
         printf 'Welcome to Claude Code\\n'
         printf 'shift+tab to cycle modes\\n'
-        IFS= read -r status
-        printf 'Claude Code Status\\n'
+        IFS= read -r usage
+        printf 'Current session 0%% used\\nCurrent week 100%% left\\nEsc to go back\\n'
         while :; do sleep 1; done
         """)
         let start = ContinuousClock.now
 
         try await fixture.refresher(executable: executable).refresh()
 
-        #expect(start.duration(to: .now) < .seconds(3))
+        #expect(start.duration(to: .now) < .seconds(8))
         try await assertProcessExited(pidAt: fixture.workspace.appendingPathComponent("owner-pid"))
     }
 
@@ -125,9 +132,9 @@ struct ClaudeCLIAuthRefresherTests {
         printf '%s\n' "$trust" > "$PWD/trust-input"
         printf 'Welcome to Claude Code\n'
         printf 'shift+tab to cycle modes\\n'
-        IFS= read -r status
-        printf '%s\n' "$status" >> "$PWD/trust-input"
-        printf 'Claude Code Status\n'
+        IFS= read -r usage
+        printf '%s\n' "$usage" >> "$PWD/trust-input"
+        printf 'Current session 10%% used\nCurrent week 90%% left\nEsc to go back\n'
         IFS= read -r exit_command
         """)
 
@@ -135,11 +142,11 @@ struct ClaudeCLIAuthRefresherTests {
 
         let lines = try fixture.lines("trust-input")
         #expect(lines.first == "")
-        #expect(lines.dropFirst().contains("/status"))
+        #expect(lines.dropFirst().contains("/usage"))
     }
 
-    @Test("current Claude ANSI cursor layout preserves exact trust, ready, and status markers")
-    func ansiWorkspaceTrustAndStatus() async throws {
+    @Test("current Claude ANSI cursor layout preserves exact trust, ready, and usage markers")
+    func ansiWorkspaceTrustAndUsage() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
         let executable = try fixture.script("ansi-status", body: """
@@ -150,13 +157,14 @@ struct ClaudeCLIAuthRefresherTests {
         printf 'Directory name: temporary\\n'
         printf '\\033[38;2;200;200;200mClaude\\033[1CCode\\033[1Cv2.1.234\\033[0m\\n'
         printf 'shift+tab to cycle modes\\n'
-        IFS= read -r status
-        printf '%s\\n' "$status" >> "$PWD/ansi-input"
-        printf '\\033[1mLogin\\033[1Cmethod:\\033[0m\\n'
+        IFS= read -r usage
+        printf '%s\\n' "$usage" >> "$PWD/ansi-input"
+        printf '\\033[1mCurrent\\033[1Csession:\\033[1C10%%\\033[1Cused\\033[0m\\n'
+        printf 'Current week: 90%% left\\nEsc to go back\\n'
         IFS= read -r exit_command
         """)
         try await fixture.refresher(executable: executable).refresh()
-        #expect(try fixture.lines("ansi-input") == ["", "/status"])
+        #expect(try fixture.lines("ansi-input") == ["", "/usage"])
     }
 
     @Test("changed trust-question punctuation is never acknowledged")
@@ -177,6 +185,7 @@ struct ClaudeCLIAuthRefresherTests {
         }
 
         #expect(error?.diagnosticCode == "claude.auth-refresh.timeout")
+        #expect(error?.recoveryAction == .retry)
         #expect(try fixture.lines("marker") == ["untouched"])
     }
 
@@ -199,6 +208,7 @@ struct ClaudeCLIAuthRefresherTests {
         let error = await collectionError { try await refresher.refresh() }
 
         #expect(error?.diagnosticCode == "claude.auth-refresh.interaction-rejected.approve")
+        #expect(error?.recoveryAction == .retry)
         #expect(try fixture.lines("marker") == ["untouched"])
     }
 
@@ -247,6 +257,7 @@ struct ClaudeCLIAuthRefresherTests {
         let error = await collectionError { try await refresher.refresh() }
 
         #expect(error?.diagnosticCode == "claude.auth-refresh.timeout")
+        #expect(error?.recoveryAction == .retry)
         try await assertProcessExited(pidAt: fixture.workspace.appendingPathComponent("pid"))
     }
 
@@ -266,6 +277,7 @@ struct ClaudeCLIAuthRefresherTests {
         let error = await collectionError { try await refresher.refresh() }
 
         #expect(error?.diagnosticCode == "claude.auth-refresh.timeout")
+        #expect(error?.recoveryAction == .retry)
         try await assertProcessExited(pidAt: fixture.workspace.appendingPathComponent("child-pid"))
     }
 
@@ -283,23 +295,24 @@ struct ClaudeCLIAuthRefresherTests {
         let error = await collectionError { try await fixture.refresher(executable: executable).refresh() }
 
         #expect(error?.diagnosticCode == "claude.auth-refresh.process-exited")
+        #expect(error?.recoveryAction == .retry)
         try await assertProcessExited(pidAt: fixture.workspace.appendingPathComponent("pid"))
     }
 
-    @Test("repeated fast exits are classified as process exit whether they race the status write or not")
+    @Test("repeated fast exits are classified as process exit whether they race the usage write or not")
     func repeatedFastExitClassification() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
         // Exits right after the banner: the child may tear down its PTY between the refresher
-        // reading the banner and writing `/status`, which must still surface as a process exit.
+        // reading the banner and writing `/usage`, which must still surface as a process exit.
         let exitAfterBanner = try fixture.script("exit-after-banner", body: """
         printf '%s\\n' $$ > "$PWD/pid"
         printf 'Welcome to Claude Code\n'
         printf 'shift+tab to cycle modes\\n'
         exit 0
         """)
-        // Exits right after consuming `/status`: the write succeeds and the exit is seen by polling.
-        let exitAfterStatus = try fixture.script("exit-after-status", body: """
+        // Exits right after consuming `/usage`: the write succeeds and the exit is seen by polling.
+        let exitAfterStatus = try fixture.script("exit-after-usage", body: """
         printf '%s\\n' $$ > "$PWD/pid"
         printf 'Welcome to Claude Code\n'
         printf 'shift+tab to cycle modes\\n'
@@ -361,7 +374,225 @@ struct ClaudeCLIAuthRefresherTests {
         }
 
         #expect(error?.diagnosticCode == "claude.auth-refresh.output-size-limit")
+        #expect(error?.recoveryAction == .retry)
         #expect(!String(describing: error).contains("SECRET-RAW-TUI-OUTPUT"))
+    }
+
+    @Test("classifies a completed authentication failure without exposing terminal text")
+    func completedAuthenticationFailure() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let executable = try fixture.script("auth-failure", body: """
+        printf 'Welcome to Claude Code\nshift+tab to cycle modes\n'
+        IFS= read -r usage
+        printf '%s\n' "$usage" > "$PWD/failure-input"
+        printf 'Notloggedin.Run/login.SECRET-OWNER-TEXT\n'
+        IFS= read -r exit_command
+        printf '%s\n' "$exit_command" >> "$PWD/failure-input"
+        """)
+
+        let error = await collectionError {
+            try await fixture.refresher(executable: executable).refresh()
+        }
+
+        #expect(error?.diagnosticCode == "claude.auth-refresh.login-required")
+        #expect(error?.recoveryAction == .signInSourceApp)
+        #expect(!String(describing: error).contains("SECRET-OWNER-TEXT"))
+        #expect(try fixture.lines("failure-input").first == "/usage")
+    }
+    @Test("classifies a completed generic usage failure as retryable")
+    func completedTransientUsageFailure() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let executable = try fixture.script("usage-failure", body: """
+        printf 'Welcome to Claude Code\nshift+tab to cycle modes\n'
+        IFS= read -r usage
+        printf '%s\n' "$usage" > "$PWD/usage-failure-input"
+        printf 'Unabletoloadusage\n'
+        sleep 5
+        """)
+
+        let error = await collectionError {
+            try await fixture.refresher(executable: executable, timeout: .seconds(3)).refresh()
+        }
+
+        #expect(error?.diagnosticCode == "claude.auth-refresh.usage-failed")
+        #expect(error?.recoveryAction == .retry)
+        #expect(try fixture.lines("usage-failure-input") == ["/usage"])
+    }
+
+    @Test("accepts explicit plan notice only after its panel footer")
+    func completedPlanNotice() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let executable = try fixture.script("plan-notice", body: """
+        printf 'Welcome to Claude Code\nshift+tab to cycle modes\n'
+        IFS= read -r usage
+        printf 'Usage data is not available for your plan\nEsc to close\n'
+        IFS= read -r exit_command
+        printf '%s\n%s\n' "$usage" "$exit_command" > "$PWD/plan-input"
+        """)
+
+        try await fixture.refresher(executable: executable).refresh()
+
+        #expect(try fixture.lines("plan-input").first == "/usage")
+    }
+
+    @Test("accepts the completed credential-less local usage panel")
+    func completedLocalUsagePanel() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let executable = try fixture.script("local-usage", body: """
+        printf 'Welcome to Claude Code\nshift+tab to cycle modes\n'
+        IFS= read -r usage
+        printf 'SettingsStatusConfigUsageStats\nSession\nTotalcost:$0.0000\n'
+        printf 'Usage:0input,0output,0cacheread,0cachewrite\nEsctocancel\n'
+        IFS= read -r exit_command
+        printf '%s\n%s\n' "$usage" "$exit_command" > "$PWD/local-input"
+        """)
+
+        try await fixture.refresher(executable: executable).refresh()
+
+        #expect(try fixture.lines("local-input").first == "/usage")
+    }
+
+    @Test("rejects an interactive prompt after usage without answering it")
+    func postCommandPromptFailsClosed() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let executable = try fixture.script("post-command-prompt", body: """
+        printf 'Welcome to Claude Code\nshift+tab to cycle modes\n'
+        IFS= read -r usage
+        printf '%s\n' "$usage" > "$PWD/post-prompt-input"
+        printf 'Approve this action? SECRET-PROMPT\n'
+        if IFS= read -r answer; then
+          printf '%s\n' "$answer" >> "$PWD/post-prompt-input"
+        fi
+        sleep 5
+        """)
+
+        let error = await collectionError {
+            try await fixture.refresher(executable: executable, timeout: .seconds(2)).refresh()
+        }
+
+        #expect(error?.diagnosticCode == "claude.auth-refresh.interaction-rejected.approve")
+        #expect(error?.recoveryAction == .retry)
+        #expect(!String(describing: error).contains("SECRET-PROMPT"))
+        #expect(try fixture.lines("post-prompt-input") == ["/usage"])
+    }
+
+    @Test("ready or completed output never overrides a simultaneous approval prompt")
+    func promptOverridesReadyAndCompletedOutput() async throws {
+        for afterUsage in [false, true] {
+            let fixture = try Fixture()
+            defer { fixture.remove() }
+            let body = afterUsage
+                ? """
+                printf 'Welcome to Claude Code\\nshift+tab to cycle modes\\n'
+                IFS= read -r usage
+                printf '%s\\n' "$usage" > "$PWD/guard-input"
+                printf 'Current session: 10%% used\\nCurrent week: 20%% used\\nEsc to cancel\\n'
+                """
+                : """
+                printf '' > "$PWD/guard-input"
+                printf 'Welcome to Claude Code\\nshift+tab to cycle modes\\n'
+                """
+            let executable = try fixture.script("prompt-overrides-panel", body: body + """
+
+            printf 'Approve this action?\\n'
+            if IFS= read -r answer; then
+              printf '%s\\n' "$answer" >> "$PWD/guard-input"
+            fi
+            sleep 5
+            """)
+            let error = await collectionError {
+                try await fixture.refresher(executable: executable).refresh()
+            }
+            #expect(error?.diagnosticCode == "claude.auth-refresh.interaction-rejected.approve")
+            #expect(try fixture.lines("guard-input") == (afterUsage ? ["/usage"] : []))
+        }
+    }
+
+    @Test("trust approval is never sent after the usage command")
+    func postUsageTrustPromptIsDenied() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let executable = try fixture.script("post-usage-trust", body: """
+        printf 'Welcome to Claude Code\\nshift+tab to cycle modes\\n'
+        IFS= read -r usage
+        printf '%s\\n' "$usage" > "$PWD/guard-input"
+        printf 'Do you trust the files in this folder?\\nEnter to confirm\\n'
+        if IFS= read -r answer; then
+          printf '%s\\n' "$answer" >> "$PWD/guard-input"
+        fi
+        sleep 5
+        """)
+        let error = await collectionError {
+            try await fixture.refresher(executable: executable).refresh()
+        }
+        #expect(error?.diagnosticCode == "claude.auth-refresh.interaction-rejected")
+        #expect(try fixture.lines("guard-input") == ["/usage"])
+    }
+
+    @Test("an unknown post-usage prompt receives no input even at the hard deadline")
+    func unknownPromptAtDeadlineReceivesNoInput() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let executable = try fixture.script("unknown-post-usage-prompt", body: """
+        printf 'Welcome to Claude Code\\nshift+tab to cycle modes\\n'
+        IFS= read -r usage
+        printf '%s\\n' "$usage" > "$PWD/guard-input"
+        printf 'Choose a new workspace?\\n'
+        if IFS= read -r answer; then
+          printf '%s\\n' "$answer" >> "$PWD/guard-input"
+        fi
+        sleep 5
+        """)
+        let error = await collectionError {
+            try await fixture.refresher(executable: executable, timeout: .seconds(1)).refresh()
+        }
+        #expect(error?.diagnosticCode == "claude.auth-refresh.timeout")
+        #expect(try fixture.lines("guard-input") == ["/usage"])
+    }
+    @Test("login-required prompt directs the user to Claude")
+    func loginPromptUsesSignInRecovery() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let executable = try fixture.script("login-prompt", body: """
+        printf 'Log in to continue\n'
+        sleep 5
+        """)
+
+        let error = await collectionError {
+            try await fixture.refresher(executable: executable, timeout: .seconds(1)).refresh()
+        }
+
+        #expect(error?.diagnosticCode == "claude.auth-refresh.interaction-rejected.login")
+        #expect(error?.recoveryAction == .signInSourceApp)
+    }
+
+    @Test("locked console creates no workspace and launches no process")
+    func lockedConsoleHasNoSideEffects() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let executable = try fixture.script("locked-must-not-launch", body: """
+        touch "$HOME/launched"
+        """)
+        let absentWorkspace = fixture.root.appendingPathComponent("locked-probe", isDirectory: true)
+        let refresher = ClaudeCLIAuthRefresher(
+            executableCandidates: [executable],
+            workingDirectory: absentWorkspace,
+            timeout: .seconds(1),
+            homeDirectory: fixture.home,
+            screenIsUnlocked: { false }
+        )
+
+        let error = await collectionError { try await refresher.refresh() }
+
+        #expect(error?.diagnosticCode == "claude.auth-refresh.screen-locked")
+        #expect(error?.recoveryAction == .retry)
+        #expect(!FileManager.default.fileExists(atPath: absentWorkspace.path))
+        #expect(!FileManager.default.fileExists(atPath: fixture.home.appendingPathComponent("launched").path))
     }
 
     @Test("missing executable fails without searching PATH")

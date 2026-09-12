@@ -61,13 +61,15 @@ public actor MemoryGrokSessionProvider: GrokSessionProviding {
 public actor MemoryClaudeSessionProvider: ClaudeSessionProviding {
     private var results: [Result<ClaudeSession, CollectionError>]
     public private(set) var allowInteractionRequests: [Bool] = []
+    public private(set) var rejectedAccessTokens: [String?] = []
 
     public init(results: [Result<ClaudeSession, CollectionError>]) {
         self.results = results
     }
 
-    public func session(allowInteraction: Bool) throws -> ClaudeSession {
+    public func session(allowInteraction: Bool, rejectedAccessToken: String?) throws -> ClaudeSession {
         allowInteractionRequests.append(allowInteraction)
+        rejectedAccessTokens.append(rejectedAccessToken)
         guard !results.isEmpty else {
             throw CollectionError(
                 kind: .sourceUnavailable,

@@ -21,12 +21,17 @@ struct RuntimeTests {
         }
 
         let manual = context.scoped(to: .claude, isUserInitiated: true)
-        _ = try await manual.claudeSession.session(allowInteraction: true)
+        _ = try await manual.claudeSession.session(allowInteraction: true, rejectedAccessToken: "rejected")
         let nonClaude = context.scoped(to: .cursor, isUserInitiated: true)
         #expect(await collectionError {
-            _ = try await nonClaude.claudeSession.session(allowInteraction: true)
+            _ = try await nonClaude.claudeSession.session(allowInteraction: true, rejectedAccessToken: "rejected")
         }?.diagnosticCode == "capability.claude-session.denied")
         #expect(await sessions.interactions == [false, true, false, true])
+        #expect(await sessions.rejectedTokens == [nil, nil, nil, "rejected"])
+        let background = context.scoped(to: .claude)
+        _ = try await background.claudeSession.session(allowInteraction: false, rejectedAccessToken: "background-rejected")
+        #expect(await sessions.interactions.last == false)
+        #expect(await sessions.rejectedTokens.last == "background-rejected")
     }
 
     @Test("transient failure retains the process-lifetime last success as stale")
@@ -528,10 +533,10 @@ struct RuntimeTests {
             _ = try await scoped.doubaoPlan.readPlanUsage()
         }?.diagnosticCode == "capability.doubao-plan.denied")
         #expect(await collectionError {
-            _ = try await grokScoped.claudeSession.session(allowInteraction: false)
+            _ = try await grokScoped.claudeSession.session(allowInteraction: false, rejectedAccessToken: "rejected")
         }?.diagnosticCode == "capability.claude-session.denied")
         #expect(await collectionError {
-            _ = try await scoped.claudeSession.session(allowInteraction: true)
+            _ = try await scoped.claudeSession.session(allowInteraction: true, rejectedAccessToken: "rejected")
         }?.diagnosticCode == "capability.claude-session.denied")
         let nativeClaudeRequest = ExternalFileRequest(
             providerID: .claude, relativePath: ".claude/.credentials.json", maximumBytes: 64 * 1024
@@ -764,9 +769,11 @@ private actor AdvancingProviderAdapter: ProviderAdapter {
 
 private actor RecordingClaudeSessions: ClaudeSessionProviding {
     private(set) var interactions: [Bool] = []
+    private(set) var rejectedTokens: [String?] = []
 
-    func session(allowInteraction: Bool) -> ClaudeSession {
+    func session(allowInteraction: Bool, rejectedAccessToken: String?) -> ClaudeSession {
         interactions.append(allowInteraction)
+        rejectedTokens.append(rejectedAccessToken)
         return ClaudeSession(accessToken: "synthetic", expiresAt: Date(timeIntervalSince1970: 2_000_000_000))
     }
 }
@@ -784,7 +791,7 @@ private struct InteractionAwareClaudeAdapter: ProviderAdapter {
     }
 
     func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
-        _ = try await context.claudeSession.session(allowInteraction: context.isUserInitiated)
+        _ = try await context.claudeSession.session(allowInteraction: context.isUserInitiated, rejectedAccessToken: nil)
         return TestContextFactory.snapshot(providerID: .claude)
     }
 }

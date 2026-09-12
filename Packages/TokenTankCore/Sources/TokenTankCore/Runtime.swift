@@ -404,14 +404,14 @@ private struct ProviderScopedClaudeSessionProvider: ClaudeSessionProviding {
     let base: any ClaudeSessionProviding
     let isUserInitiated: Bool
 
-    func session(allowInteraction: Bool) async throws -> ClaudeSession {
+    func session(allowInteraction: Bool, rejectedAccessToken: String?) async throws -> ClaudeSession {
         guard providerID == .claude, !allowInteraction || isUserInitiated else {
             throw CollectionError(
                 kind: .sourceUnavailable,
                 diagnosticCode: "capability.claude-session.denied"
             )
         }
-        return try await base.session(allowInteraction: allowInteraction)
+        return try await base.session(allowInteraction: allowInteraction, rejectedAccessToken: rejectedAccessToken)
     }
 }
 

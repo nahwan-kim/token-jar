@@ -64,6 +64,13 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "다시 시도" } }
       }
     },
+    "action.sign_in_claude" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Run `claude auth login` in Terminal, then Refresh" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "터미널에서 `claude auth login`을 실행한 뒤 새로고침" } }
+      }
+    },
     "action.sign_in_source" : {
       "extractionState" : "manual",
       "localizations" : {
