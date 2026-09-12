@@ -417,9 +417,9 @@ struct ClaudeSessionTests {
         #expect(await refresher.count == 1)
     }
 
-    @Test("simultaneous first callers reserve one renewal after the cooldown clock suspension")
-    func simultaneousFirstCallersDeduplicate() async throws {
-        let clock = SixthCallGatedClock(now: now)
+    @Test("a renewal settled during another caller's preflight is not launched again")
+    func settledRenewalDuringPreflight() async throws {
+        let clock = PreRenewalGatedClock(now: now)
         let reader = ClaudeTestCredentialReader(
             file: .success(credentials(token: "old", expiry: now)),
             keychain: .success(nil)
@@ -434,12 +434,23 @@ struct ClaudeSessionTests {
             refresher: refresher
         )
 
-        async let first = provider.session(allowInteraction: false, rejectedAccessToken: nil)
-        async let second = provider.session(allowInteraction: false, rejectedAccessToken: nil)
-
-        #expect(try await first.accessToken == "new")
-        #expect(try await second.accessToken == "new")
-        #expect(await refresher.count == 1)
+        let delayed = Task {
+            try await provider.session(allowInteraction: false, rejectedAccessToken: nil)
+        }
+        await clock.waitUntilBlocked()
+        do {
+            let first = try await provider.session(allowInteraction: false, rejectedAccessToken: nil)
+            await clock.release()
+            let second = try await delayed.value
+            #expect(first.accessToken == "new")
+            #expect(second.accessToken == "new")
+            #expect(await refresher.count == 1)
+        } catch {
+            await clock.release()
+            delayed.cancel()
+            _ = try? await delayed.value
+            throw error
+        }
     }
 
     @Test("a rejected file token permits a fresh different Keychain token")
@@ -896,10 +907,12 @@ struct ClaudeSessionTests {
     }
 }
 
-private actor SixthCallGatedClock: TokenTankClock {
+private actor PreRenewalGatedClock: TokenTankClock {
     private let date: Date
     private var calls = 0
-    private var waiters: [CheckedContinuation<Date, Never>] = []
+    private var blocked = false
+    private var gate: CheckedContinuation<Date, Never>?
+    private var observers: [CheckedContinuation<Void, Never>] = []
 
     init(now: Date) {
         self.date = now
@@ -907,22 +920,27 @@ private actor SixthCallGatedClock: TokenTankClock {
 
     func now() async -> Date {
         calls += 1
-        guard calls == 5 else {
-            if calls >= 6, !waiters.isEmpty {
-                let current = waiters
-                waiters.removeAll()
-                current.forEach { $0.resume(returning: date) }
-            }
-            return date
-        }
-        return await withCheckedContinuation { continuation in
-            waiters.append(continuation)
-        }
+        // The first caller has read the file twice; pause its pre-renewal clock read.
+        // Release is explicit, never dependent on another caller making N clock reads.
+        guard calls == 3 else { return date }
+        blocked = true
+        let current = observers
+        observers.removeAll()
+        current.forEach { $0.resume() }
+        return await withCheckedContinuation { gate = $0 }
     }
 
-    func monotonicNow() async -> Duration {
-        .zero
+    func waitUntilBlocked() async {
+        if blocked { return }
+        await withCheckedContinuation { observers.append($0) }
     }
+
+    func release() {
+        gate?.resume(returning: date)
+        gate = nil
+    }
+
+    func monotonicNow() async -> Duration { .zero }
 
     func sleep(for duration: Duration) async throws {
         _ = duration

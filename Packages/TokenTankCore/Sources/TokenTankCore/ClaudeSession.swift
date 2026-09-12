@@ -338,7 +338,7 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
     private let credentials: any ClaudeCredentialReading
     private let refresher: any ClaudeAuthRefreshing
     private var renewalTask: Task<ClaudeSession, Error>?
-    private var renewalID: UUID?
+    private var lastRenewalID: UUID?
     private var failedRenewals: [String: Date] = [:]
     private var rejectedFileToken: String?
     private var rejectedKeychainToken: String?
@@ -367,6 +367,7 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
         rejectedAccessToken: String?
     ) async throws -> ClaudeSession {
         try Task.checkCancellation()
+        let observedRenewalID = lastRenewalID
         let initialState = try await credentialState(
             allowInteraction: allowInteraction,
             rejectedAccessToken: rejectedAccessToken
@@ -416,6 +417,14 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
 
         let previousTokens = initialState.unusableTokens.union(reloadedState.unusableTokens)
         let now = await clock.now()
+        // Another caller may have started AND settled a renewal while these reads suspended.
+        // Its task is already gone; discard our stale observations before touching cooldowns.
+        if lastRenewalID != observedRenewalID {
+            return try await session(
+                allowInteraction: allowInteraction,
+                rejectedAccessToken: rejectedAccessToken
+            )
+        }
         failedRenewals = failedRenewals.filter {
             previousTokens.contains($0.key)
                 && $0.value.addingTimeInterval(Self.failedRenewalCooldown) > now
@@ -442,7 +451,7 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
 
         try Task.checkCancellation()
         let id = UUID()
-        renewalID = id
+        lastRenewalID = id
         let task = Task {
             do {
                 let session = try await self.renew(
@@ -478,9 +487,8 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
         failedTokens: Set<String>,
         at date: Date?
     ) {
-        guard renewalID == id else { return }
+        guard lastRenewalID == id else { return }
         renewalTask = nil
-        renewalID = nil
         if let date {
             for token in failedTokens {
                 failedRenewals[token] = date
