@@ -155,6 +155,7 @@ struct ClaudeCLIAuthRefresherTests {
         IFS= read -r trust
         printf '%s\\n' "$trust" > "$PWD/ansi-input"
         printf 'Directory name: temporary\\n'
+        sleep 1
         printf '\\033[38;2;200;200;200mClaude\\033[1CCode\\033[1Cv2.1.234\\033[0m\\n'
         printf 'shift+tab to cycle modes\\n'
         IFS= read -r usage
@@ -162,9 +163,11 @@ struct ClaudeCLIAuthRefresherTests {
         printf '\\033[1mCurrent\\033[1Csession:\\033[1C10%%\\033[1Cused\\033[0m\\n'
         printf 'Current week: 90%% left\\nEsc to go back\\n'
         IFS= read -r exit_command
+        printf '%s\\n' "$exit_command" > "$PWD/ansi-exit"
         """)
         try await fixture.refresher(executable: executable).refresh()
         #expect(try fixture.lines("ansi-input") == ["", "/usage"])
+        #expect(try fixture.text("ansi-exit").contains("/exit"))
     }
 
     @Test("changed trust-question punctuation is never acknowledged")
@@ -628,7 +631,9 @@ private struct Fixture {
         return url
     }
 
-    func refresher(executable: URL, timeout: Duration = .seconds(2)) -> ClaudeCLIAuthRefresher {
+    // Successful PTY handshakes include subprocess scheduling and a mandatory one-second
+    // quiet panel. Timeout regressions inject their own short deadlines explicitly.
+    func refresher(executable: URL, timeout: Duration = .seconds(6)) -> ClaudeCLIAuthRefresher {
         ClaudeCLIAuthRefresher(
             executableCandidates: [executable],
             workingDirectory: workspace,
