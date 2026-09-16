@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "asOf": "2026-09-12",
+  "asOf": "2026-09-16",
   "contract": {
     "singleSourcePerProvider": true,
     "externalCredentialsReadOnly": true,
@@ -50,37 +50,38 @@
       "selectedSource": "Preferred OAuth GET https://api.anthropic.com/api/oauth/usage using the current native Claude Code session; optional same-token GET /api/oauth/profile",
       "sourceStatus": "watch",
       "productionComposition": true,
-      "sourceStatusReason": "Unofficial WATCH source: Token Jar uses the CodexBar-style preferred OAuth GET path plus bounded automatic Claude Code owner renewal, not CodexBar's fallback chain. Only claudeAiOauth is eligible; MCP is never accepted or renewed. Only a successful live response is fresh. Token Jar never POSTs, writes, copies, directly refreshes, or caches a Claude token; Claude Code owns rotation and its official .oauth_refresh.lock.",
+      "sourceStatusReason": "Unofficial WATCH source: scheduled, startup, restart, and ordinary user refresh are strictly noninteractive read-only collections and never launch Claude CLI. Near expiry at 60 seconds or less, or usage HTTP 401, rereads both exact native stores and adopts a changed valid external token; only the dedicated explicit repair action may grant one scoped owner attempt. Only claudeAiOauth is eligible, MCP is forbidden, and only a successful live response is fresh.",
       "documentation": [
-        "https://github.com/steipete/CodexBar/blob/main/Sources/CodexBarCore/Providers/Claude/ClaudeOAuth/ClaudeOAuthUsageFetcher.swift"
+        "https://github.com/steipete/CodexBar/commit/5e119a9ad76e3453058dab323f98e480f478d049 (delegated-coordinator policy reference)",
+        "https://github.com/robinebers/openusage/commit/56378e5765f85d38ff413036fd984afe3d4664e4 (read-only comparison)"
       ],
       "credentialOwner": "Claude Code",
-      "credentialPersistence": "Claude-owned ~/.claude/.credentials.json and native Keychain generic-password service Claude Code-credentials with account NSUserName(); Token Jar performs exact read-only access and keeps no Claude credential cache, while Claude Code alone may rotate its stores under .oauth_refresh.lock",
+      "credentialPersistence": "Claude-owned ~/.claude/.credentials.json and native Keychain generic-password service Claude Code-credentials with account NSUserName(); Token Jar performs exact read-only access and keeps no Claude credential or usage cache, while Claude Code alone may rotate its stores under .oauth_refresh.lock during deliberate repair",
       "tokenTankIO": [
-        "Read claudeAiOauth only from ~/.claude/.credentials.json and the native generic-password service Claude Code-credentials with account NSUserName(); never match another same-service account. Require user:profile, finite positive expiry more than 60 seconds away, and a token not known to have received usage HTTP 401. MCP tokens are never accepted or renewed",
-        "On near expiry or usage HTTP 401, reread both exact slots. Retain rejected-token identity independently per file/Keychain slot (at most two), even after adopting the other store's fresh token, preventing A/B oscillation. If both slots are rejected, the next eligible 401 forces single-flight owner renewal",
-        "GET only https://api.anthropic.com/api/oauth/usage and optionally same-token /api/oauth/profile. Retry usage at most once and only with a changed token. HTTP 403 never renews; 429 observes backoff. Network, timeout, schema, authentication, and recovery failures retain prior in-memory data only as stale, never fresh",
-        "allowInteraction controls native Keychain UI only and is preserved for initial, pre-renewal, and post-renewal reads. Background reads and reloads are noninteractive; user-initiated reads may allow native UI. Calls remain serialized and bounded at 5 seconds background/120 seconds interactive, skip locked/off-console native access, reject unresolved overlap, and discard late results",
-        "SecKeychainGet/SetUserInteractionAllowed changes only Token Jar's process-local policy and is restored on every exit. It does not modify ACLs or user settings and cannot guarantee that an independent Claude Code or security child never displays macOS authorization UI",
-        "Automatic owner renewal launches only unlocked/on-console using fixed absolute Claude candidates, an empty mode-0700 workspace, minimal fixed environment, and fixed safe-mode/no-tools arguments. Prompt veto precedes readiness and success; confirm only the exact trust question in the verified-empty workspace and never after /usage",
-        "Require readiness banner plus shift+tab before exactly /usage, then a completed panel plus one second quiet; loading/tab headers do not complete. Completed flow sends Esc then /exit with five-second grace. Hard deadline after /usage waits passively five seconds without input before termination; pre-readiness deadline cleans up immediately without input",
-        "A failed token enters a token-keyed 300-second background cooldown; still reread credentials first, adopt a fresh external token immediately, and allow explicit manual refresh to bypass the cooldown",
-        "Do not import browser cookies, scrape PTY usage, automate login/browser approval, call Admin or inference APIs, use ~/.claude.json cached usage, or directly POST/write/copy/cache a Claude token. Missing or revoked login requires claude auth login; web or Claude Desktop login is not a substitute"
+        "Read claudeAiOauth only from ~/.claude/.credentials.json and the native generic-password service Claude Code-credentials with account NSUserName(); never match another same-service account. Require user:profile, finite positive expiry more than 60 seconds away, and reject MCP",
+        "On expiry at 60 seconds or less or usage HTTP 401, reread both exact slots noninteractively. Retain rejected-token identity independently per file/Keychain slot, adopt a changed valid external token, and retry usage at most once only with that token. HTTP 403 never repairs",
+        "Scheduled refresh, ordinary user refresh, startup, and restart use collection context allowsClaudeRecovery=false, never permit native prompts, and never launch Claude CLI. isUserInitiated is separate from repair authority; general manual refresh is not repair",
+        "When reread cannot supply a changed valid token, retain the prior in-memory snapshot only as stale and expose typed repairClaudeConnection; keychainUnavailable uses the same action",
+        "Only the dedicated localized Repair Claude Connection / Claude 연결 복구 action invokes RefreshCoordinator.repairClaudeConnection() with a one-shot capability scoped to that collection. Concurrent repair callers coalesce; ordinary refreshes and restarts grant no implicit retry permission",
+        "Repair pre-owner and post-owner reloads remain noninteractive and preserve the exact account. Each deliberate repair attempts native authorization at most once and launches at most one bounded owner process; authorization failure aborts without another CLI launch, and the next attempt requires another deliberate repair",
+        "Claude Code may show its own permission UI only during deliberate repair. The owner uses fixed absolute executable candidates, an empty mode-0700 workspace, minimal fixed environment, fixed safe-mode/no-tools arguments, fixed bounded timeout, and the official owner refresh lock",
+        "Prompt veto precedes readiness and success. Require readiness plus shift+tab before exactly /usage and a completed panel plus one second quiet; trust is accepted only in the verified-empty workspace and never after /usage. Completed flow sends Esc then /exit with five-second grace; the post-usage hard deadline is passive and pre-readiness cleanup supplies no input",
+        "GET only https://api.anthropic.com/api/oauth/usage and optionally same-token /api/oauth/profile. Do not import browser cookies, automate login/browser approval, scrape PTY usage, call Admin or inference APIs, use ~/.claude.json cached usage, or directly POST/write/copy/cache a Claude token"
       ],
       "externalPaths": [
         "~/.claude/.credentials.json",
         "native Keychain generic-password service Claude Code-credentials; account NSUserName() only",
-        "~/.local/bin/claude",
-        "/opt/homebrew/bin/claude",
-        "/usr/local/bin/claude",
+        "~/.local/bin/claude (deliberate repair only)",
+        "/opt/homebrew/bin/claude (deliberate repair only)",
+        "/usr/local/bin/claude (deliberate repair only)",
         "https://api.anthropic.com/api/oauth/usage",
         "https://api.anthropic.com/api/oauth/profile"
       ],
-      "tccClass": "none; allowInteraction permits only user-initiated native Keychain UI. Background native reads and reloads are noninteractive, but the process-local setting cannot guarantee suppression in an independent Claude Code or security child",
+      "tccClass": "none; native Keychain authorization is available at most once only during deliberate repair. All ordinary and repair pre/post-owner reads are noninteractive; Claude Code may display its own permission UI only during that repair",
       "fdaRequired": false,
-      "liveValidation": "2026-09-12 local verification: package 194 tests/12 suites passed three consecutive runs; app 35 and bilingual Claude recovery UI 1 passed against final source; unsigned universal arm64+x86_64 Release rebuilt. An earlier unrelated Codex one-second test timeout passed isolated reproduction and the next three whole suites without Codex changes. Provider I/O audit and manifest/localization validation passed. Independent Grok implementation review approved the session, owner runner, adapter and native/PTY tests with no findings. The final production runner rejected the login-required marker without further input; natural-expiry and real-401 authenticated rotation remain unverified. No installation/deployment occurred; intentional legacy Keychain deprecation warnings remain.",
-      "mutationRisk": "Token Jar performs no Claude token POST/write/copy/cache. Rejected memory is per source slot (at most two), preventing A/B oscillation. Prompt veto precedes readiness/success and trust never follows /usage. Completed flow gets Esc and /exit grace; post-usage hard deadline is passive and pre-readiness deadline supplies no input. Claude Code alone owns rotation and .oauth_refresh.lock.",
-      "releaseBlocker": "WATCH: verify the new automatic recovery implementation, including natural near-expiry and real HTTP 401 changed-token recovery, exact-account Keychain adoption behind a rejected file token, 403 no-renewal, cooldown/single-flight behavior, and final candidate security and release gates. Historical v1-v4 and clean 489ba51 artifacts are not publishable."
+      "liveValidation": "2026-09-16 explicit-repair source verification: package 206 tests/12 suites passed three consecutive runs; app 35 and two bilingual repair/login UI tests passed; Provider I/O audit, 87-key bilingual catalog/source-manifest validation, 13 release-tool tests, and unsigned universal arm64+x86_64 Release build passed. These are synthetic/local build results, not real Keychain authorization or authenticated token-rotation evidence. No installation or deployment occurred. Historical 2026-09-12 automatic-recovery counts do not establish current live behavior.",
+      "mutationRisk": "Token Jar performs no Claude token POST/write/copy/cache and accepts no MCP token. All ordinary collection is read-only. Only one deliberate repair may let Claude Code rotate its own store under .oauth_refresh.lock; authorization failure aborts and launches no replacement CLI. Exact-account reads and noninteractive pre/post reloads remain mandatory.",
+      "releaseBlocker": "WATCH: real Keychain authorization, natural-expiry and real-401 authenticated changed-token recovery, supported-OS native UI behavior, and final signed-candidate security gates remain unverified. Synthetic tests cover silent scheduled/manual collection, one-shot scoped authority, coalescing, denial/cancellation, noninteractive reloads, changed-token-only retry, and 403 no-repair; publication CI must still run on the committed revision."
     },
     {
       "provider": "grok",

@@ -78,6 +78,7 @@ struct DetailPopoverView: View {
                                 state: model.states[providerID] ?? .neverLoaded,
                                 now: context.date,
                                 retry: { model.refresh(providerID) },
+                                repairClaudeConnection: { model.repairClaudeConnection() },
                                 configure: { showSettings() }
                             )
                         }
@@ -265,6 +266,7 @@ struct ProviderDetailView: View {
     let state: CollectionState
     let now: Date
     let retry: () -> Void
+    let repairClaudeConnection: () -> Void
     let configure: () -> Void
 
     var body: some View {
@@ -338,6 +340,7 @@ struct ProviderDetailView: View {
                     fallbackRefreshedAt: snapshot.refreshedAt,
                     now: now,
                     retry: retry,
+                    repairClaudeConnection: repairClaudeConnection,
                     configure: configure
                 )
             }
@@ -406,9 +409,11 @@ struct ProviderDetailView: View {
         case .neverLoaded, .refreshing, .fresh:
             EmptyView()
         case let .stale(_, failure, _):
-            FailureView(providerID: providerID, failure: failure, retry: retry, configure: configure)
+            FailureView(providerID: providerID, failure: failure, retry: retry,
+                        repairClaudeConnection: repairClaudeConnection, configure: configure)
         case let .authenticationActionRequired(_, failure):
-            FailureView(providerID: providerID, failure: failure, retry: retry, configure: configure)
+            FailureView(providerID: providerID, failure: failure, retry: retry,
+                        repairClaudeConnection: repairClaudeConnection, configure: configure)
         }
     }
 
@@ -471,6 +476,7 @@ private struct CodexAccountDetailView: View {
     let fallbackRefreshedAt: Date
     let now: Date
     let retry: () -> Void
+    let repairClaudeConnection: () -> Void
     let configure: () -> Void
 
     private var accessibilityID: String { "provider.codex.account.\(account.sourceID)" }
@@ -491,7 +497,8 @@ private struct CodexAccountDetailView: View {
                     .accessibilityIdentifier("\(accessibilityID).status")
             }
             if let failure = account.failure {
-                FailureView(providerID: .codex, failure: failure, retry: retry, configure: configure,
+                FailureView(providerID: .codex, failure: failure, retry: retry,
+                            repairClaudeConnection: repairClaudeConnection, configure: configure,
                             identifierPrefix: accessibilityID)
             }
             CodexQuotaColumns(quotas: account.quotas,
@@ -576,6 +583,7 @@ private struct FailureView: View {
     let providerID: ProviderID
     let failure: CollectionError
     let retry: () -> Void
+    let repairClaudeConnection: () -> Void
     let configure: () -> Void
     var identifierPrefix: String? = nil
     var body: some View {
@@ -612,6 +620,13 @@ private struct FailureView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.trailing)
                 .accessibilityIdentifier(identifier("action.\(failure.recoveryAction.rawValue)"))
+        } else if failure.recoveryAction == .repairClaudeConnection {
+            if providerID == .claude {
+                Button(actionKey, action: repairClaudeConnection)
+                    .controlSize(.small)
+                    .help(Text("action.repair_claude_connection.help"))
+                    .accessibilityIdentifier(identifier("action.\(failure.recoveryAction.rawValue)"))
+            }
         } else if failure.recoveryAction != .none {
             Button(actionKey) {
                 switch failure.recoveryAction {
@@ -619,7 +634,8 @@ private struct FailureView: View {
                     retry()
                 case .signInTokenTank:
                     configure()
-                case .signInSourceApp, .allowAccessInSystemSettings, .waitForNextRefresh, .none:
+                case .repairClaudeConnection, .signInSourceApp, .allowAccessInSystemSettings,
+                     .waitForNextRefresh, .none:
                     break
                 }
             }
@@ -648,6 +664,7 @@ private struct FailureView: View {
     private var actionKey: LocalizedStringKey {
         switch failure.recoveryAction {
         case .retry: "action.retry"
+        case .repairClaudeConnection: "action.repair_claude_connection"
         case .waitForNextRefresh: "action.wait"
         case .signInSourceApp:
             providerID == .claude ? "action.sign_in_claude" : "action.sign_in_source"

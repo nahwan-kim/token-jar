@@ -118,7 +118,7 @@ struct ClaudeAdapterTests {
         #expect(requests[1].url.absoluteString == "https://api.anthropic.com/api/oauth/profile")
         #expect(requests[1].headers == usage.headers)
         #expect(requests[1].timeout == 15)
-        #expect(await sessions.allowInteractionRequests == [true])
+        #expect(await sessions.allowInteractionRequests == [false])
         #expect(snapshot.refreshedAt == now)
         #expect(snapshot.accountEmail == "owner@example.com")
         #expect(snapshot.accounts.first?.sourceID == "claude.oauth")
@@ -223,8 +223,8 @@ struct ClaudeAdapterTests {
         }
     }
 
-    @Test("401 reloads credentials and retries once using the renewed token for usage and profile")
-    func automaticAuthenticationRecovery() async throws {
+    @Test("401 adopts externally rotated credentials without authorizing repair, including manual refresh")
+    func externalAuthenticationRecovery() async throws {
         for userInitiated in [false, true] {
             let renewed = ClaudeSession(accessToken: "renewed-token", expiresAt: now.addingTimeInterval(3600))
             let sessions = MemoryClaudeSessionProvider(results: [.success(session), .success(renewed)])
@@ -238,7 +238,7 @@ struct ClaudeAdapterTests {
             ))
             #expect(snapshot.quotas.first?.percentage.value == 24)
             #expect(snapshot.accountEmail == "renewed@example.com")
-            #expect(await sessions.allowInteractionRequests == [userInitiated, userInitiated])
+            #expect(await sessions.allowInteractionRequests == [false, false])
             #expect(await sessions.rejectedAccessTokens == [nil, session.accessToken])
             #expect(await network.requests.map { $0.headers["Authorization"] } == [
                 "Bearer synthetic-claude-token", "Bearer renewed-token", "Bearer renewed-token",
@@ -296,6 +296,130 @@ struct ClaudeAdapterTests {
             #expect(await network.requests.count == 1)
             #expect(await sessions.allowInteractionRequests == [false, false])
         }
+    }
+
+    @Test("ordinary refresh never authorizes repair for expired or inaccessible credentials")
+    func ordinaryRefreshCannotRepair() async {
+        for userInitiated in [false, true] {
+            for kind in [CollectionErrorKind.authenticationRejected, .keychainUnavailable] {
+                let failure = CollectionError(kind: kind, diagnosticCode: "test.repair-required",
+                                              recoveryAction: .repairClaudeConnection)
+                let sessions = MemoryClaudeSessionProvider(results: [.failure(failure)])
+                let network = QueueNetworkClient(results: [])
+                do {
+                    _ = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
+                        network: network, claudeSession: sessions, isUserInitiated: userInitiated
+                    ))
+                    Issue.record("Expected explicit repair requirement")
+                } catch let error as CollectionError {
+                    #expect(error == failure)
+                } catch {
+                    Issue.record("Unexpected error: \(error)")
+                }
+                #expect(await sessions.allowInteractionRequests == [false])
+                #expect(await network.requests.isEmpty)
+            }
+        }
+    }
+
+    @Test("explicit repair grants one attempt only when a read-only lookup needs it")
+    func explicitRepairAfterReadOnlyFailure() async throws {
+        for rejectedByUsage in [false, true] {
+            let failure = CollectionError(kind: .authenticationRejected, diagnosticCode: "test.repair-required",
+                                          recoveryAction: .repairClaudeConnection)
+            let renewed = ClaudeSession(accessToken: "repaired-token", expiresAt: now.addingTimeInterval(3600))
+            var sessionResults: [Result<ClaudeSession, CollectionError>] = [.failure(failure), .success(renewed)]
+            var responses: [Result<NetworkResponse, CollectionError>] = [
+                .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+                .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+            ]
+            if rejectedByUsage {
+                sessionResults.insert(.success(session), at: 0)
+                responses.insert(.success(NetworkResponse(statusCode: 401, headers: [:], body: Data())), at: 0)
+            }
+            let sessions = MemoryClaudeSessionProvider(results: sessionResults)
+            let network = QueueNetworkClient(results: responses)
+            let snapshot = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
+                network: network, claudeSession: sessions, isUserInitiated: true, allowsClaudeRecovery: true
+            ))
+            #expect(snapshot.quotas.first?.percentage.value == 24)
+            #expect(await sessions.allowInteractionRequests == (rejectedByUsage ? [false, false, true] : [false, true]))
+            #expect(await sessions.rejectedAccessTokens == (rejectedByUsage
+                ? [nil, session.accessToken, session.accessToken] : [nil, nil]))
+        }
+    }
+
+    @Test("a repair click cannot authorize another repair after the renewed token receives 401")
+    func repairBudgetSurvivesHTTPRetry() async {
+        let failure = CollectionError(kind: .authenticationRejected, diagnosticCode: "test.repair-required",
+                                      recoveryAction: .repairClaudeConnection)
+        let sessions = MemoryClaudeSessionProvider(results: [.failure(failure), .success(session), .failure(failure)])
+        let network = QueueNetworkClient(results: [
+            .success(NetworkResponse(statusCode: 401, headers: [:], body: Data())),
+        ])
+        do {
+            _ = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
+                network: network, claudeSession: sessions, isUserInitiated: true, allowsClaudeRecovery: true
+            ))
+            Issue.record("Expected exhausted repair budget")
+        } catch let error as CollectionError {
+            #expect(error == failure)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+        #expect(await sessions.allowInteractionRequests == [false, true, false])
+        #expect(await network.requests.count == 1)
+    }
+
+    @Test("explicit repair does not turn missing credentials or transport errors into prompts")
+    func repairRequiresTypedRecoveryAction() async {
+        for kind in [CollectionErrorKind.externalSessionMissing, .offline, .cancelled] {
+            let failure = CollectionError(kind: kind, diagnosticCode: "test.not-repairable")
+            let sessions = MemoryClaudeSessionProvider(results: [.failure(failure)])
+            let network = QueueNetworkClient(results: [])
+            do {
+                _ = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
+                    network: network, claudeSession: sessions, isUserInitiated: true, allowsClaudeRecovery: true
+                ))
+                Issue.record("Expected original failure")
+            } catch let error as CollectionError {
+                #expect(error == failure)
+            } catch {
+                Issue.record("Unexpected error: \(error)")
+            }
+            #expect(await sessions.allowInteractionRequests == [false])
+            #expect(await network.requests.isEmpty)
+        }
+    }
+
+    @Test("denied explicit repair keeps the captured snapshot stale and later refresh stays silent")
+    func deniedRepairRetainsLastGoodUsage() async {
+        let failure = CollectionError(kind: .keychainUnavailable, diagnosticCode: "test.keychain.denied",
+                                      recoveryAction: .repairClaudeConnection)
+        let sessions = MemoryClaudeSessionProvider(results: [
+            .success(session), .failure(failure), .failure(failure), .failure(failure),
+        ])
+        let network = QueueNetworkClient(results: [
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+        ])
+        let coordinator = RefreshCoordinator(
+            adapters: [ClaudeAdapter()],
+            context: TestContextFactory.make(network: network, claudeSession: sessions, clock: ManualClock(now: now))
+        )
+        await coordinator.refresh(.claude)
+        let captured = await coordinator.state(for: .claude).snapshot
+        await coordinator.repairClaudeConnection()
+        guard case let .stale(previous, error, _) = await coordinator.state(for: .claude) else {
+            Issue.record("Expected retained stale snapshot after denied repair")
+            return
+        }
+        #expect(previous == captured)
+        #expect(error == failure)
+        await coordinator.refresh(.claude, userInitiated: true)
+        #expect(await sessions.allowInteractionRequests == [false, false, true, false])
+        #expect(await network.requests.count == 2)
+        #expect(await coordinator.state(for: .claude).snapshot?.refreshedAt == now)
     }
 
     @Test("the single retry preserves scope, rate-limit, network, and malformed-response failures")

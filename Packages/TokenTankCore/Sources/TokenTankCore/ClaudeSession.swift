@@ -26,6 +26,8 @@ public struct ClaudeSession: Sendable, Equatable {
 }
 
 public protocol ClaudeSessionProviding: Sendable {
+    /// `false` performs read-only collection. `true` grants one explicit connection-repair
+    /// attempt; ordinary manual refresh must never grant this authority.
     func session(allowInteraction: Bool, rejectedAccessToken: String?) async throws -> ClaudeSession
 }
 
@@ -330,16 +332,52 @@ enum ClaudeNativeKeychainAccess {
     }
 }
 
+private final class ClaudeRepairWaiters: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ids: Set<UUID> = []
+    private var task: Task<ClaudeSession, Error>?
+
+    func insert(_ id: UUID) {
+        _ = lock.withLock { ids.insert(id) }
+    }
+
+    func setTask(_ task: Task<ClaudeSession, Error>) {
+        let shouldCancel = lock.withLock {
+            self.task = task
+            return ids.isEmpty
+        }
+        if shouldCancel { task.cancel() }
+    }
+
+    func remove(_ id: UUID) {
+        _ = lock.withLock { ids.remove(id) }
+    }
+
+    func cancel(_ id: UUID) {
+        let taskToCancel = lock.withLock {
+            ids.remove(id)
+            return ids.isEmpty ? task : nil
+        }
+        taskToCancel?.cancel()
+    }
+
+    func finish() {
+        lock.withLock {
+            ids.removeAll()
+            task = nil
+        }
+    }
+}
+
 public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
     private static let minimumValidity: TimeInterval = 60
-    private static let failedRenewalCooldown: TimeInterval = 300
 
     private let clock: any TokenTankClock
     private let credentials: any ClaudeCredentialReading
     private let refresher: any ClaudeAuthRefreshing
-    private var renewalTask: Task<ClaudeSession, Error>?
-    private var lastRenewalID: UUID?
-    private var failedRenewals: [String: Date] = [:]
+    private var repairTask: Task<ClaudeSession, Error>?
+    private var repairID: UUID?
+    private var repairWaiters: ClaudeRepairWaiters?
     private var rejectedFileToken: String?
     private var rejectedKeychainToken: String?
 
@@ -367,162 +405,115 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
         rejectedAccessToken: String?
     ) async throws -> ClaudeSession {
         try Task.checkCancellation()
-        let observedRenewalID = lastRenewalID
-        let initialState = try await credentialState(
-            allowInteraction: allowInteraction,
-            rejectedAccessToken: rejectedAccessToken
-        )
-        if let fresh = initialState.fresh {
-            failedRenewals.removeAll()
-            return fresh
-        }
-        guard !initialState.unusableTokens.isEmpty else {
-            throw CollectionError(
-                kind: .externalSessionMissing,
-                diagnosticCode: "claude.session.credentials-missing",
-                recoveryAction: .signInSourceApp
-            )
-        }
-
-        if let renewalTask {
-            return try await waitForRenewal(
-                renewalTask,
+        guard allowInteraction else {
+            let state = try await credentialState(
+                allowInteraction: false,
                 rejectedAccessToken: rejectedAccessToken
             )
-        }
-
-        try Task.checkCancellation()
-        let reloadedState = try await credentialState(
-            allowInteraction: allowInteraction,
-            rejectedAccessToken: rejectedAccessToken
-        )
-        if let fresh = reloadedState.fresh {
-            failedRenewals.removeAll()
-            return fresh
-        }
-        guard !reloadedState.unusableTokens.isEmpty else {
-            throw CollectionError(
-                kind: .externalSessionMissing,
-                diagnosticCode: "claude.session.credentials-missing",
-                recoveryAction: .signInSourceApp
-            )
-        }
-
-        if let renewalTask {
-            return try await waitForRenewal(
-                renewalTask,
-                rejectedAccessToken: rejectedAccessToken
-            )
-        }
-
-        let previousTokens = initialState.unusableTokens.union(reloadedState.unusableTokens)
-        let now = await clock.now()
-        // Another caller may have started AND settled a renewal while these reads suspended.
-        // Its task is already gone; discard our stale observations before touching cooldowns.
-        if lastRenewalID != observedRenewalID {
-            return try await session(
-                allowInteraction: allowInteraction,
-                rejectedAccessToken: rejectedAccessToken
-            )
-        }
-        failedRenewals = failedRenewals.filter {
-            previousTokens.contains($0.key)
-                && $0.value.addingTimeInterval(Self.failedRenewalCooldown) > now
-        }
-        if !allowInteraction {
-            let coolingDown = previousTokens.contains {
-                failedRenewals[$0] != nil
+            if let fresh = state.fresh {
+                return fresh
             }
-            if coolingDown {
-                throw CollectionError(
-                    kind: .authenticationRejected,
-                    diagnosticCode: "claude.session.refresh.cooldown",
-                    recoveryAction: .waitForNextRefresh
-                )
+            guard !state.unusableTokens.isEmpty else {
+                throw missingCredentials()
             }
+            throw repairRequired()
         }
 
-        if let renewalTask {
-            return try await waitForRenewal(
-                renewalTask,
+        if let repairTask, let repairWaiters {
+            return try await waitForRepair(
+                repairTask,
+                waiters: repairWaiters,
                 rejectedAccessToken: rejectedAccessToken
             )
         }
 
-        try Task.checkCancellation()
         let id = UUID()
-        lastRenewalID = id
+        let waiterID = UUID()
+        let waiters = ClaudeRepairWaiters()
+        waiters.insert(waiterID)
+        repairID = id
+        repairWaiters = waiters
         let task = Task {
             do {
-                let session = try await self.renew(
-                    previousTokens: previousTokens,
-                    allowInteraction: allowInteraction,
-                    rejectedAccessToken: rejectedAccessToken
-                )
-                self.settleRenewal(
-                    id: id,
-                    failedTokens: previousTokens,
-                    at: nil
-                )
+                let session = try await self.repair(rejectedAccessToken: rejectedAccessToken)
+                self.settleRepair(id: id)
                 return session
             } catch {
-                let failedAt = await self.clock.now()
-                self.settleRenewal(
-                    id: id,
-                    failedTokens: previousTokens,
-                    at: failedAt
-                )
+                self.settleRepair(id: id)
                 throw error
             }
         }
-        renewalTask = task
-        return try await waitForRenewal(
+        repairTask = task
+        waiters.setTask(task)
+        return try await waitForRepair(
             task,
+            waiters: waiters,
+            waiterID: waiterID,
             rejectedAccessToken: rejectedAccessToken
         )
     }
 
-    private func settleRenewal(
-        id: UUID,
-        failedTokens: Set<String>,
-        at date: Date?
-    ) {
-        guard lastRenewalID == id else { return }
-        renewalTask = nil
-        if let date {
-            for token in failedTokens {
-                failedRenewals[token] = date
-            }
-        } else {
-            for token in failedTokens {
-                failedRenewals[token] = nil
-            }
-        }
+    private func settleRepair(id: UUID) {
+        guard repairID == id else { return }
+        repairTask = nil
+        repairID = nil
+        repairWaiters?.finish()
+        repairWaiters = nil
     }
 
-    private func waitForRenewal(
+    private func waitForRepair(
         _ task: Task<ClaudeSession, Error>,
+        waiters: ClaudeRepairWaiters,
+        waiterID: UUID = UUID(),
         rejectedAccessToken: String?
     ) async throws -> ClaudeSession {
-        let session = try await task.value
-        try Task.checkCancellation()
-        guard !tokenIsRejected(session.accessToken, explicit: rejectedAccessToken) else {
-            throw retryAuthenticationRequired("claude.session.refresh.token-rejected")
+        waiters.insert(waiterID)
+        return try await withTaskCancellationHandler {
+            defer { waiters.remove(waiterID) }
+            let session = try await task.value
+            try Task.checkCancellation()
+            guard !tokenIsRejected(session.accessToken, explicit: rejectedAccessToken) else {
+                throw repairRequired()
+            }
+            return session
+        } onCancel: {
+            waiters.cancel(waiterID)
         }
-        return session
     }
 
-    private func renew(
-        previousTokens: Set<String>,
-        allowInteraction: Bool,
-        rejectedAccessToken: String?
-    ) async throws -> ClaudeSession {
+    private func repair(rejectedAccessToken: String?) async throws -> ClaudeSession {
+        let initialState = try await credentialState(
+            allowInteraction: true,
+            rejectedAccessToken: rejectedAccessToken
+        )
+        try Task.checkCancellation()
+        if let fresh = initialState.fresh {
+            return fresh
+        }
+        guard !initialState.unusableTokens.isEmpty else {
+            throw missingCredentials()
+        }
+
+        let reloadedState = try await credentialState(
+            allowInteraction: false,
+            rejectedAccessToken: rejectedAccessToken
+        )
+        try Task.checkCancellation()
+        if let fresh = reloadedState.fresh {
+            return fresh
+        }
+        guard !reloadedState.unusableTokens.isEmpty else {
+            throw missingCredentials()
+        }
+        let previousTokens = initialState.unusableTokens.union(reloadedState.unusableTokens)
+        try Task.checkCancellation()
+
         do {
             try await refresher.refresh()
         } catch let refreshError {
             do {
                 let state = try await credentialState(
-                    allowInteraction: allowInteraction,
+                    allowInteraction: false,
                     rejectedAccessToken: rejectedAccessToken
                 )
                 if let session = state.fresh,
@@ -534,7 +525,7 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
         }
 
         let state = try await credentialState(
-            allowInteraction: allowInteraction,
+            allowInteraction: false,
             rejectedAccessToken: rejectedAccessToken
         )
         guard let session = state.fresh else {
@@ -545,10 +536,10 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
                     recoveryAction: .signInSourceApp
                 )
             }
-            throw authenticationRequired("claude.session.refresh.credentials-expired")
+            throw repairRequired()
         }
         guard !previousTokens.contains(session.accessToken) else {
-            throw authenticationRequired("claude.session.refresh.token-unchanged")
+            throw repairRequired()
         }
         return session
     }
@@ -609,7 +600,7 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
             throw CollectionError(
                 kind: .keychainUnavailable,
                 diagnosticCode: error.diagnosticCode,
-                recoveryAction: .retry,
+                recoveryAction: .repairClaudeConnection,
                 retryAfter: error.retryAfter
             )
         }
@@ -620,6 +611,22 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
 private struct CredentialState {
     let fresh: ClaudeSession?
     let unusableTokens: Set<String>
+}
+
+private func missingCredentials() -> CollectionError {
+    CollectionError(
+        kind: .externalSessionMissing,
+        diagnosticCode: "claude.session.credentials-missing",
+        recoveryAction: .signInSourceApp
+    )
+}
+
+private func repairRequired() -> CollectionError {
+    CollectionError(
+        kind: .authenticationRejected,
+        diagnosticCode: "claude.session.repair-required",
+        recoveryAction: .repairClaudeConnection
+    )
 }
 
 private func decodeClaudeSession(_ data: Data) throws -> ClaudeSession? {
@@ -688,9 +695,6 @@ private func authenticationRequired(_ code: String) -> CollectionError {
     CollectionError(kind: .authenticationRejected, diagnosticCode: code, recoveryAction: .signInSourceApp)
 }
 
-private func retryAuthenticationRequired(_ code: String) -> CollectionError {
-    CollectionError(kind: .authenticationRejected, diagnosticCode: code, recoveryAction: .retry)
-}
 
 private func malformed(_ code: String) -> CollectionError {
     CollectionError(kind: .malformedResponse, diagnosticCode: code)

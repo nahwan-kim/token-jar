@@ -7,12 +7,13 @@ import TokenTankDomain
 
 @MainActor
 final class AppModelTests: XCTestCase {
-    func testClaudeRefreshButtonsPermitInteractionButStartupDoesNot() async {
+    func testClaudeRepairAuthorityIsSeparateFromOrdinaryRefresh() async {
         let snapshot = makeSnapshot(providerID: .claude, percentage: 24)
         let adapter = TestAppAdapter(id: .claude, results: [
             .success(snapshot),
             .success(makeSnapshot(providerID: .claude, percentage: 25)),
             .success(makeSnapshot(providerID: .claude, percentage: 26)),
+            .success(makeSnapshot(providerID: .claude, percentage: 27)),
         ])
         let credentials = InMemoryCredentialStore()
         let model = AppModel(
@@ -27,8 +28,10 @@ final class AppModelTests: XCTestCase {
             return false
         }
         XCTAssertTrue(loaded)
-        let startupInteractions = await adapter.interactions
-        XCTAssertEqual(startupInteractions, [false])
+        let startupUserInitiated = await adapter.userInitiatedValues
+        let startupRecovery = await adapter.claudeRecoveryValues
+        XCTAssertEqual(startupUserInitiated, [false])
+        XCTAssertEqual(startupRecovery, [false])
 
         model.refresh(.claude)
         let singleRefreshed = await eventually {
@@ -40,8 +43,20 @@ final class AppModelTests: XCTestCase {
             model.states[.claude]?.snapshot?.quotas.first?.percentage.value == 26
         }
         XCTAssertTrue(allRefreshed)
-        let interactions = await adapter.interactions
-        XCTAssertEqual(interactions, [false, true, true])
+        let ordinaryUserInitiated = await adapter.userInitiatedValues
+        let ordinaryRecovery = await adapter.claudeRecoveryValues
+        XCTAssertEqual(ordinaryUserInitiated, [false, true, true])
+        XCTAssertEqual(ordinaryRecovery, [false, false, false])
+
+        model.repairClaudeConnection()
+        let repaired = await eventually {
+            model.states[.claude]?.snapshot?.quotas.first?.percentage.value == 27
+        }
+        XCTAssertTrue(repaired)
+        let repairedUserInitiated = await adapter.userInitiatedValues
+        let repairedRecovery = await adapter.claudeRecoveryValues
+        XCTAssertEqual(repairedUserInitiated, [false, true, true, true])
+        XCTAssertEqual(repairedRecovery, [false, false, false, true])
         await model.stop()
     }
 
@@ -643,6 +658,7 @@ final class AppModelTests: XCTestCase {
         await model.stop()
         model.refresh(.codex)
         model.refreshAll()
+        model.repairClaudeConnection()
         var postStopPreference = model.preference(for: .codex)
         postStopPreference.isVisible = false
         model.updatePreference(postStopPreference)
@@ -736,6 +752,8 @@ final class AppModelTests: XCTestCase {
             "error.permission": ("Permission required", "권한 필요"),
             "error.keychain": ("Keychain unavailable", "키체인을 사용할 수 없음"),
             "action.retry": ("Retry", "다시 시도"),
+            "action.repair_claude_connection": ("Repair Claude Connection", "Claude 연결 복구"),
+            "action.repair_claude_connection.help": ("Deliberately repair the Claude connection. This may ask for Keychain permission or run Claude Code.", "Claude 연결을 명시적으로 복구합니다. 키체인 권한을 요청하거나 Claude Code를 실행할 수 있습니다."),
             "action.wait": ("Wait for next refresh", "다음 갱신까지 대기"),
             "action.sign_in_source": ("Sign in again in the source app, then Refresh", "원본 앱에서 다시 로그인한 뒤 새로고침"),
             "action.sign_in_token_tank": ("Sign in to Token Jar", "토큰 항아리에서 로그인"),
@@ -1437,7 +1455,8 @@ private actor TestAppAdapter: ProviderAdapter {
     nonisolated let sourceDescriptor: ProviderSourceDescriptor
     private var results: [Result<ProviderSnapshot, CollectionError>]
     private(set) var fetchCount = 0
-    private(set) var interactions: [Bool] = []
+    private(set) var userInitiatedValues: [Bool] = []
+    private(set) var claudeRecoveryValues: [Bool] = []
 
     init(id: ProviderID, results: [Result<ProviderSnapshot, CollectionError>]) {
         let descriptor = ProviderSourceDescriptor(
@@ -1461,7 +1480,8 @@ private actor TestAppAdapter: ProviderAdapter {
 
     func fetchSnapshot(context: CollectionContext) throws -> ProviderSnapshot {
         fetchCount += 1
-        interactions.append(context.isUserInitiated)
+        userInitiatedValues.append(context.isUserInitiated)
+        claudeRecoveryValues.append(context.allowsClaudeRecovery)
         guard !results.isEmpty else {
             throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "test.no-result")
         }

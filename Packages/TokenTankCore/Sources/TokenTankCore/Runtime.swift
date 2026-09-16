@@ -61,11 +61,17 @@ public actor RefreshCoordinator {
     private var states: [ProviderID: CollectionState]
     private var nextAllowedRefresh: [ProviderID: Date] = [:]
     private var inFlight: [ProviderID: Task<ProviderSnapshot, Error>] = [:]
-    private var refreshReservations = Set<ProviderID>()
+    private var activeOperations: [ProviderID: CollectionOperation] = [:]
+    private var operationWaiters: [ProviderID: [CheckedContinuation<Void, Never>]] = [:]
     private var generation: UInt = 0
     private var acceptingRefreshes = true
     private var scheduleTask: Task<Void, Never>?
     private var continuations: [UUID: AsyncStream<[ProviderID: CollectionState]>.Continuation] = [:]
+
+    private enum CollectionOperation: Equatable {
+        case ordinary
+        case claudeRepair
+    }
 
     public init(
         adapters: [any ProviderAdapter],
@@ -169,21 +175,54 @@ public actor RefreshCoordinator {
         }
     }
 
-    public func refresh(_ providerID: ProviderID, userInitiated: Bool = false) async {
-        guard acceptingRefreshes else { return }
-        guard let adapter = adapters[providerID] else { return }
+    public func repairClaudeConnection() async {
+        guard acceptingRefreshes, adapters[.claude] != nil else { return }
+        let requestGeneration = generation
+        var waitedForOrdinaryCollection = false
 
-        if refreshReservations.contains(providerID) {
-            if let existing = inFlight[providerID] {
-                _ = try? await existing.value
-            }
+        while let activeOperation = activeOperations[.claude] {
+            await waitForOperation(.claude)
+            guard
+                !Task.isCancelled,
+                acceptingRefreshes,
+                requestGeneration == generation
+            else { return }
+            if activeOperation == .claudeRepair { return }
+            waitedForOrdinaryCollection = true
+        }
+
+        guard
+            !Task.isCancelled,
+            acceptingRefreshes,
+            requestGeneration == generation,
+            !waitedForOrdinaryCollection || stateRequiresClaudeRepair
+        else { return }
+
+        activeOperations[.claude] = .claudeRepair
+        await collectReserved(.claude, operation: .claudeRepair, isUserInitiated: true)
+    }
+
+    public func refresh(_ providerID: ProviderID, userInitiated: Bool = false) async {
+        guard acceptingRefreshes, adapters[providerID] != nil else { return }
+        if activeOperations[providerID] != nil {
+            await waitForOperation(providerID)
             return
         }
-        refreshReservations.insert(providerID)
-        defer { refreshReservations.remove(providerID) }
+        activeOperations[providerID] = .ordinary
+        await collectReserved(providerID, operation: .ordinary, isUserInitiated: userInitiated)
+    }
+
+    private func collectReserved(
+        _ providerID: ProviderID,
+        operation: CollectionOperation,
+        isUserInitiated: Bool
+    ) async {
+        defer { finishOperation(providerID) }
+        guard !Task.isCancelled, acceptingRefreshes, let adapter = adapters[providerID] else { return }
         let operationGeneration = generation
 
         let now = await context.clock.now()
+        guard !Task.isCancelled, acceptingRefreshes, operationGeneration == generation else { return }
         if let allowedAt = nextAllowedRefresh[providerID], now < allowedAt {
             return
         }
@@ -196,11 +235,16 @@ public actor RefreshCoordinator {
         } else {
             previous = await snapshotStore.snapshot(for: providerID)
         }
+        guard !Task.isCancelled, acceptingRefreshes, operationGeneration == generation else { return }
         states[providerID] = .refreshing(previous: previous)
         emitStates()
 
+        let allowsClaudeRecovery = operation == .claudeRepair && providerID == .claude
         let providerContext = self.context.scoped(
-            to: providerID, correlationID: correlationID, isUserInitiated: userInitiated
+            to: providerID,
+            correlationID: correlationID,
+            isUserInitiated: allowsClaudeRecovery ? true : isUserInitiated,
+            allowsClaudeRecovery: allowsClaudeRecovery
         )
         let task = Task<ProviderSnapshot, Error> {
             switch await adapter.probeAvailability(context: providerContext) {
@@ -219,18 +263,25 @@ public actor RefreshCoordinator {
             }
         }
         inFlight[providerID] = task
-        await context.diagnostics.record(
-            DiagnosticEvent(
-                level: .info,
-                category: "collection",
-                code: "collection.started",
-                providerID: providerID,
-                correlationID: correlationID
-            )
-        )
-
         do {
-            let snapshot = try await task.value
+            let snapshot = try await withTaskCancellationHandler {
+                await context.diagnostics.record(
+                    DiagnosticEvent(
+                        level: .info,
+                        category: "collection",
+                        code: "collection.started",
+                        providerID: providerID,
+                        correlationID: correlationID
+                    )
+                )
+                let result = try await task.value
+                if allowsClaudeRecovery { try Task.checkCancellation() }
+                return result
+            } onCancel: {
+                // A cancelled repair must revoke its permission to start interactive work.
+                // Ordinary shared collection keeps its existing coalescing semantics.
+                if allowsClaudeRecovery { task.cancel() }
+            }
             guard
                 snapshot.providerID == providerID,
                 snapshot.source == adapter.sourceDescriptor
@@ -288,6 +339,30 @@ public actor RefreshCoordinator {
         guard operationGeneration == generation else { return }
         inFlight.removeValue(forKey: providerID)
         emitStates()
+    }
+
+    private var stateRequiresClaudeRepair: Bool {
+        let failure: CollectionError?
+        switch states[.claude] {
+        case let .stale(_, currentFailure, _), let .authenticationActionRequired(_, currentFailure):
+            failure = currentFailure
+        default:
+            failure = nil
+        }
+        return failure?.recoveryAction == .repairClaudeConnection
+    }
+
+    private func waitForOperation(_ providerID: ProviderID) async {
+        guard activeOperations[providerID] != nil else { return }
+        await withCheckedContinuation { continuation in
+            operationWaiters[providerID, default: []].append(continuation)
+        }
+    }
+
+    private func finishOperation(_ providerID: ProviderID) {
+        activeOperations.removeValue(forKey: providerID)
+        let waiters = operationWaiters.removeValue(forKey: providerID) ?? []
+        for waiter in waiters { waiter.resume() }
     }
 
     private func transitionToFailure(
@@ -348,7 +423,8 @@ extension CollectionContext {
     func scoped(
         to providerID: ProviderID,
         correlationID: UUID = UUID(),
-        isUserInitiated: Bool = false
+        isUserInitiated: Bool = false,
+        allowsClaudeRecovery: Bool = false
     ) -> CollectionContext {
         CollectionContext(
             network: ProviderScopedNetworkClient(providerID: providerID, base: network),
@@ -359,12 +435,16 @@ extension CollectionContext {
             doubaoPlan: ProviderScopedDoubaoPlanReader(providerID: providerID, base: doubaoPlan),
             grokSession: ProviderScopedGrokSessionProvider(providerID: providerID, base: grokSession),
             claudeSession: ProviderScopedClaudeSessionProvider(
-                providerID: providerID, base: claudeSession, isUserInitiated: isUserInitiated
+                providerID: providerID,
+                base: claudeSession,
+                isUserInitiated: isUserInitiated,
+                allowsClaudeRecovery: allowsClaudeRecovery
             ),
             clock: clock,
             diagnostics: NoDiagnostics(),
             correlationID: correlationID,
-            isUserInitiated: isUserInitiated
+            isUserInitiated: isUserInitiated,
+            allowsClaudeRecovery: allowsClaudeRecovery
         )
     }
 }
@@ -399,19 +479,40 @@ private struct ProviderScopedGrokSessionProvider: GrokSessionProviding {
     }
 }
 
-private struct ProviderScopedClaudeSessionProvider: ClaudeSessionProviding {
+private actor ProviderScopedClaudeSessionProvider: ClaudeSessionProviding {
     let providerID: ProviderID
     let base: any ClaudeSessionProviding
     let isUserInitiated: Bool
+    let allowsClaudeRecovery: Bool
+    private var interactionBudget: Int
+
+    init(
+        providerID: ProviderID,
+        base: any ClaudeSessionProviding,
+        isUserInitiated: Bool,
+        allowsClaudeRecovery: Bool
+    ) {
+        self.providerID = providerID
+        self.base = base
+        self.isUserInitiated = isUserInitiated
+        self.allowsClaudeRecovery = allowsClaudeRecovery
+        self.interactionBudget = allowsClaudeRecovery && isUserInitiated && providerID == .claude ? 1 : 0
+    }
 
     func session(allowInteraction: Bool, rejectedAccessToken: String?) async throws -> ClaudeSession {
-        guard providerID == .claude, !allowInteraction || isUserInitiated else {
-            throw CollectionError(
-                kind: .sourceUnavailable,
-                diagnosticCode: "capability.claude-session.denied"
-            )
+        guard providerID == .claude else { throw deniedError }
+        if allowInteraction {
+            guard allowsClaudeRecovery, isUserInitiated, interactionBudget > 0 else { throw deniedError }
+            interactionBudget -= 1
         }
         return try await base.session(allowInteraction: allowInteraction, rejectedAccessToken: rejectedAccessToken)
+    }
+
+    private var deniedError: CollectionError {
+        CollectionError(
+            kind: .sourceUnavailable,
+            diagnosticCode: "capability.claude-session.denied"
+        )
     }
 }
 

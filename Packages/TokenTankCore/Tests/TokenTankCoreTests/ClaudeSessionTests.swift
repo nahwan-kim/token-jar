@@ -99,7 +99,7 @@ struct ClaudeSessionTests {
         let provider = ClaudeCodeSessionProvider(
             clock: clock, credentials: reader, refresher: RecordingClaudeRefresher()
         )
-        await expectError(.authenticationRejected, code: "claude.session.refresh.credentials-expired") {
+        await expectError(.authenticationRejected, code: "claude.session.repair-required") {
             try await provider.session(allowInteraction: false, rejectedAccessToken: nil)
         }
     }
@@ -119,7 +119,7 @@ struct ClaudeSessionTests {
             await expectError(
                 .keychainUnavailable,
                 code: "claude.session.keychain.screen-locked",
-                recoveryAction: .retry
+                recoveryAction: .repairClaudeConnection
             ) {
                 try await provider(reader: reader).session(allowInteraction: allowInteraction, rejectedAccessToken: nil)
             }
@@ -307,8 +307,8 @@ struct ClaudeSessionTests {
 
         await expectError(
             .authenticationRejected,
-            code: "claude.session.refresh.credentials-expired",
-            recoveryAction: .signInSourceApp
+            code: "claude.session.repair-required",
+            recoveryAction: .repairClaudeConnection
         ) {
             try await provider(reader: reader).session(allowInteraction: false, rejectedAccessToken: nil)
         }
@@ -327,65 +327,79 @@ struct ClaudeSessionTests {
         #expect(await refresher.count == 0)
     }
 
-    @Test("expired credentials renew automatically in the background without interactive Keychain reads")
-    func expiredBackgroundRenews() async throws {
+    @Test("expired credentials remain read-only and require explicit repair")
+    func expiredReadOnlyRequiresRepair() async {
         let reader = ClaudeTestCredentialReader(
             file: .success(credentials(token: "old", expiry: now)),
             keychain: .success(nil)
         )
-        let replacement = credentials(token: "new", expiry: now.addingTimeInterval(300))
-        let refresher = RecordingClaudeRefresher {
-            await reader.setFile(replacement)
+        let refresher = RecordingClaudeRefresher()
+
+        await expectError(
+            .authenticationRejected,
+            code: "claude.session.repair-required",
+            recoveryAction: .repairClaudeConnection
+        ) {
+            try await provider(reader: reader, refresher: refresher)
+                .session(allowInteraction: false, rejectedAccessToken: nil)
         }
-
-        let session = try await provider(reader: reader, refresher: refresher)
-            .session(allowInteraction: false, rejectedAccessToken: nil)
-
-        #expect(session.accessToken == "new")
-        #expect(await refresher.count == 1)
-        #expect(await reader.interactionFlags == [false, false])
+        #expect(await refresher.count == 0)
+        #expect(await reader.interactionFlags == [false])
     }
 
-    @Test("credentials within sixty seconds renew automatically in the background")
-    func nearExpiryBackgroundRenews() async throws {
+    @Test("near-expiry credentials remain read-only and require explicit repair")
+    func nearExpiryReadOnlyRequiresRepair() async {
         let reader = ClaudeTestCredentialReader(
             file: .success(credentials(token: "near", expiry: now.addingTimeInterval(60))),
             keychain: .success(nil)
         )
-        let replacement = credentials(token: "renewed", expiry: now.addingTimeInterval(300))
-        let refresher = RecordingClaudeRefresher {
-            await reader.setFile(replacement)
+        let refresher = RecordingClaudeRefresher()
+
+        await expectError(.authenticationRejected, code: "claude.session.repair-required") {
+            try await provider(reader: reader, refresher: refresher)
+                .session(allowInteraction: false, rejectedAccessToken: nil)
         }
-
-        let session = try await provider(reader: reader, refresher: refresher)
-            .session(allowInteraction: false, rejectedAccessToken: nil)
-
-        #expect(session.accessToken == "renewed")
-        #expect(await refresher.count == 1)
-        #expect(await reader.interactionFlags.allSatisfy { !$0 })
+        #expect(await refresher.count == 0)
+        #expect(await reader.interactionFlags == [false])
     }
 
-    @Test("an explicitly rejected unexpired token renews automatically")
-    func rejectedTokenRenews() async throws {
+    @Test("an explicitly rejected token remains read-only and requires explicit repair")
+    func rejectedTokenReadOnlyRequiresRepair() async {
         let reader = ClaudeTestCredentialReader(
             file: .success(credentials(token: "rejected", expiry: now.addingTimeInterval(300))),
             keychain: .success(nil)
         )
-        let replacement = credentials(token: "replacement", expiry: now.addingTimeInterval(300))
+        let refresher = RecordingClaudeRefresher()
+
+        await expectError(.authenticationRejected, code: "claude.session.repair-required") {
+            try await provider(reader: reader, refresher: refresher)
+                .session(allowInteraction: false, rejectedAccessToken: "rejected")
+        }
+        #expect(await refresher.count == 0)
+        #expect(await reader.interactionFlags == [false])
+    }
+
+    @Test("explicit repair rotates through the owner with one interactive lookup")
+    func explicitRepairSuccess() async throws {
+        let reader = ClaudeTestCredentialReader(
+            file: .success(nil),
+            keychain: .success(credentials(token: "old", expiry: now))
+        )
+        let replacement = credentials(token: "new", expiry: now.addingTimeInterval(300))
         let refresher = RecordingClaudeRefresher {
-            await reader.setFile(replacement)
+            await reader.setKeychain(replacement)
         }
 
         let session = try await provider(reader: reader, refresher: refresher)
-            .session(allowInteraction: false, rejectedAccessToken: "rejected")
+            .session(allowInteraction: true, rejectedAccessToken: nil)
 
-        #expect(session.accessToken == "replacement")
+        #expect(session.accessToken == "new")
         #expect(await refresher.count == 1)
-        #expect(await reader.interactionFlags.allSatisfy { !$0 })
+        #expect(await reader.interactionFlags == [true, false, false])
     }
 
-    @Test("owner rotation found by the pre-renewal reread avoids launching the CLI")
-    func ownerRotationBeforeRenewal() async throws {
+    @Test("external rotation found before owner refresh is adopted")
+    func ownerRotationBeforeRepair() async throws {
         let reader = SequencedClaudeCredentialReader(files: [
             credentials(token: "old", expiry: now),
             credentials(token: "rotated", expiry: now.addingTimeInterval(300)),
@@ -393,13 +407,15 @@ struct ClaudeSessionTests {
         let refresher = RecordingClaudeRefresher()
 
         let session = try await provider(reader: reader, refresher: refresher)
-            .session(allowInteraction: false, rejectedAccessToken: nil)
+            .session(allowInteraction: true, rejectedAccessToken: nil)
 
         #expect(session.accessToken == "rotated")
         #expect(await refresher.count == 0)
+        #expect(await reader.interactionFlags == [true])
     }
-    @Test("a refresh failure still adopts an owner rotation found by the recovery reread")
-    func ownerRotationDuringFailedRefresh() async throws {
+
+    @Test("a failed owner refresh adopts an external rotation without another prompt")
+    func ownerRotationDuringFailedRepair() async throws {
         let old = credentials(token: "old", expiry: now)
         let reader = SequencedClaudeCredentialReader(files: [
             old,
@@ -411,46 +427,11 @@ struct ClaudeSessionTests {
         }
 
         let session = try await provider(reader: reader, refresher: refresher)
-            .session(allowInteraction: false, rejectedAccessToken: nil)
+            .session(allowInteraction: true, rejectedAccessToken: nil)
 
         #expect(session.accessToken == "rotated")
         #expect(await refresher.count == 1)
-    }
-
-    @Test("a renewal settled during another caller's preflight is not launched again")
-    func settledRenewalDuringPreflight() async throws {
-        let clock = PreRenewalGatedClock(now: now)
-        let reader = ClaudeTestCredentialReader(
-            file: .success(credentials(token: "old", expiry: now)),
-            keychain: .success(nil)
-        )
-        let replacement = credentials(token: "new", expiry: now.addingTimeInterval(300))
-        let refresher = RecordingClaudeRefresher {
-            await reader.setFile(replacement)
-        }
-        let provider = ClaudeCodeSessionProvider(
-            clock: clock,
-            credentials: reader,
-            refresher: refresher
-        )
-
-        let delayed = Task {
-            try await provider.session(allowInteraction: false, rejectedAccessToken: nil)
-        }
-        await clock.waitUntilBlocked()
-        do {
-            let first = try await provider.session(allowInteraction: false, rejectedAccessToken: nil)
-            await clock.release()
-            let second = try await delayed.value
-            #expect(first.accessToken == "new")
-            #expect(second.accessToken == "new")
-            #expect(await refresher.count == 1)
-        } catch {
-            await clock.release()
-            delayed.cancel()
-            _ = try? await delayed.value
-            throw error
-        }
+        #expect(await reader.interactionFlags == [true, false])
     }
 
     @Test("a rejected file token permits a fresh different Keychain token")
@@ -494,7 +475,7 @@ struct ClaudeSessionTests {
         #expect(await refresher.count == 0)
 
         #expect(try await provider.session(
-            allowInteraction: false,
+            allowInteraction: true,
             rejectedAccessToken: "keychain-b"
         ).accessToken == "file-c")
         #expect(await refresher.count == 1)
@@ -540,42 +521,27 @@ struct ClaudeSessionTests {
         #expect(await refresher.count == 0)
     }
 
-    @Test("renewal must produce a fresh changed access token")
-    func refreshUnchangedFailsClosed() async {
+    @Test("explicit repair rejects an unchanged token after one owner refresh")
+    func repairUnchangedFailsClosed() async {
         let reader = ClaudeTestCredentialReader(
-            file: .success(credentials(token: "same", expiry: now)),
-            keychain: .success(nil)
+            file: .success(nil),
+            keychain: .success(credentials(token: "same", expiry: now))
         )
         let replacement = credentials(token: "same", expiry: now.addingTimeInterval(300))
         let refresher = RecordingClaudeRefresher {
-            await reader.setFile(replacement)
+            await reader.setKeychain(replacement)
         }
 
-        await expectError(.authenticationRejected, code: "claude.session.refresh.token-unchanged") {
+        await expectError(
+            .authenticationRejected,
+            code: "claude.session.repair-required",
+            recoveryAction: .repairClaudeConnection
+        ) {
             try await provider(reader: reader, refresher: refresher)
-                .session(allowInteraction: false, rejectedAccessToken: nil)
+                .session(allowInteraction: true, rejectedAccessToken: nil)
         }
         #expect(await refresher.count == 1)
-        #expect(await reader.interactionFlags.allSatisfy { !$0 })
-    }
-
-    @Test("manual renewal may use Keychain UI on every reload")
-    func manualRefreshSuccess() async throws {
-        let reader = ClaudeTestCredentialReader(
-            file: .success(credentials(token: "old", expiry: now)),
-            keychain: .success(nil)
-        )
-        let replacement = credentials(token: "new", expiry: now.addingTimeInterval(300))
-        let refresher = RecordingClaudeRefresher {
-            await reader.setFile(replacement)
-        }
-
-        let session = try await provider(reader: reader, refresher: refresher)
-            .session(allowInteraction: true, rejectedAccessToken: nil)
-
-        #expect(session.accessToken == "new")
-        #expect(await refresher.count == 1)
-        #expect(await reader.interactionFlags == [true, true])
+        #expect(await reader.interactionFlags == [true, false, false])
     }
 
     @Test("malformed replacement credentials remain fail-closed")
@@ -590,12 +556,35 @@ struct ClaudeSessionTests {
 
         await expectError(.malformedResponse, code: "claude.session.credentials.invalid-json") {
             try await provider(reader: reader, refresher: refresher)
-                .session(allowInteraction: false, rejectedAccessToken: nil)
+                .session(allowInteraction: true, rejectedAccessToken: nil)
         }
+        #expect(await refresher.count == 1)
+        #expect(await reader.interactionFlags == [true, false])
     }
 
-    @Test("failed owner attempts are cooled down after credentials are reread")
-    func failedRefreshCooldown() async {
+    @Test("authorization denial never launches the owner refresher")
+    func authorizationDenialDoesNotRefresh() async {
+        let denial = CollectionError(kind: .keychainUnavailable, diagnosticCode: "test.denied")
+        let reader = ClaudeTestCredentialReader(
+            file: .success(credentials(token: "old", expiry: now)),
+            keychain: .failure(denial)
+        )
+        let refresher = RecordingClaudeRefresher()
+
+        await expectError(
+            .keychainUnavailable,
+            code: "test.denied",
+            recoveryAction: .repairClaudeConnection
+        ) {
+            try await provider(reader: reader, refresher: refresher)
+                .session(allowInteraction: true, rejectedAccessToken: nil)
+        }
+        #expect(await refresher.count == 0)
+        #expect(await reader.interactionFlags == [true])
+    }
+
+    @Test("failed explicit repair is retried only by another explicit repair")
+    func failedRepairRequiresAnotherExplicitAction() async {
         let reader = ClaudeTestCredentialReader(
             file: .success(credentials(token: "old", expiry: now.addingTimeInterval(300))),
             keychain: .success(nil)
@@ -606,20 +595,18 @@ struct ClaudeSessionTests {
         let provider = provider(reader: reader, refresher: refresher)
 
         await expectError(.authenticationRejected, code: "test.refresh-failed") {
-            try await provider.session(allowInteraction: false, rejectedAccessToken: "old")
+            try await provider.session(allowInteraction: true, rejectedAccessToken: "old")
         }
-        let readsAfterFailure = await reader.fileReads
         await expectError(
             .authenticationRejected,
-            code: "claude.session.refresh.cooldown",
-            recoveryAction: .waitForNextRefresh
+            code: "claude.session.repair-required",
+            recoveryAction: .repairClaudeConnection
         ) {
             try await provider.session(allowInteraction: false, rejectedAccessToken: nil)
         }
 
         #expect(await refresher.count == 1)
-        #expect(await reader.fileReads > readsAfterFailure)
-        #expect(await reader.interactionFlags.allSatisfy { !$0 })
+        #expect(await reader.interactionFlags == [true, false, false, false])
     }
 
     @Test("missing credentials never launches the owner refresher")
@@ -708,7 +695,7 @@ struct ClaudeSessionTests {
     func keychainUnavailableMapping() async {
         let failure = CollectionError(kind: .keychainUnavailable, diagnosticCode: "test.locked")
         let reader = ClaudeTestCredentialReader(file: .success(nil), keychain: .failure(failure))
-        await expectError(.keychainUnavailable, code: "test.locked", recoveryAction: .retry) {
+        await expectError(.keychainUnavailable, code: "test.locked", recoveryAction: .repairClaudeConnection) {
             try await provider(reader: reader).session(allowInteraction: false, rejectedAccessToken: nil)
         }
     }
@@ -781,11 +768,7 @@ struct ClaudeSessionTests {
         let observers = (0..<8).map { _ in
             Task { try await provider.session(allowInteraction: true, rejectedAccessToken: nil) }
         }
-        for _ in 0..<1_000 {
-            if await reader.fileReads >= 9 { break }
-            await Task.yield()
-        }
-        #expect(await reader.fileReads >= 9)
+        await Task.yield()
         owner.cancel()
         observers[0].cancel()
         await refresher.release()
@@ -806,7 +789,84 @@ struct ClaudeSessionTests {
             }
         }
         #expect(await refresher.count == 1)
+        #expect(await reader.interactionFlags == [true, false])
         #expect(try await provider.session(allowInteraction: false, rejectedAccessToken: nil).accessToken == "new")
+    }
+
+    @Test("concurrent explicit repairs coalesce before the initial authorization prompt finishes")
+    func concurrentRepairsCoalesceInitialPrompt() async throws {
+        let old = credentials(token: "old", expiry: now)
+        let replacement = credentials(token: "new", expiry: now.addingTimeInterval(120))
+        let reader = InitialPromptGatedReader(file: old)
+        let refresher = RecordingClaudeRefresher {
+            await reader.setFile(replacement)
+        }
+        let provider = provider(reader: reader, refresher: refresher)
+
+        let callers = (0..<8).map { _ in
+            Task { try await provider.session(allowInteraction: true, rejectedAccessToken: nil) }
+        }
+        await reader.waitUntilPrompted()
+        await Task.yield()
+        #expect(await reader.interactionFlags == [true])
+        await reader.releasePrompt()
+
+        for caller in callers {
+            #expect(try await caller.value.accessToken == "new")
+        }
+        #expect(await refresher.count == 1)
+        #expect(await reader.interactionFlags == [true, false])
+    }
+
+    @Test("cancelling the last repair waiter before authorization completes prevents owner launch")
+    func cancellationBeforeOwnerLaunch() async {
+        let reader = InitialPromptGatedReader(file: credentials(token: "old", expiry: now))
+        let refresher = RecordingClaudeRefresher()
+        let provider = provider(reader: reader, refresher: refresher)
+        let callers = (0..<4).map { _ in
+            Task { try await provider.session(allowInteraction: true, rejectedAccessToken: nil) }
+        }
+
+        await reader.waitUntilPrompted()
+        for caller in callers { caller.cancel() }
+        await reader.releasePrompt()
+        for caller in callers {
+            await expectCancellation { try await caller.value }
+        }
+
+        #expect(await refresher.count == 0)
+        #expect(await reader.interactionFlags == [true])
+    }
+
+    @Test("a coalesced repair result is still checked against each caller's rejected token")
+    func concurrentRepairPreservesCallerRejection() async throws {
+        let old = credentials(token: "old", expiry: now)
+        let replacement = credentials(token: "new", expiry: now.addingTimeInterval(120))
+        let reader = InitialPromptGatedReader(file: old)
+        let refresher = RecordingClaudeRefresher {
+            await reader.setFile(replacement)
+        }
+        let provider = provider(reader: reader, refresher: refresher)
+        let owner = Task {
+            try await provider.session(allowInteraction: true, rejectedAccessToken: nil)
+        }
+
+        await reader.waitUntilPrompted()
+        let rejectingObserver = Task {
+            try await provider.session(allowInteraction: true, rejectedAccessToken: "new")
+        }
+        await Task.yield()
+        await reader.releasePrompt()
+
+        #expect(try await owner.value.accessToken == "new")
+        await expectError(
+            .authenticationRejected,
+            code: "claude.session.repair-required",
+            recoveryAction: .repairClaudeConnection
+        ) {
+            try await rejectingObserver.value
+        }
+        #expect(await refresher.count == 1)
     }
 
     @Test("credential file rejects symlinks, non-regular files, and oversized data")
@@ -907,45 +967,6 @@ struct ClaudeSessionTests {
     }
 }
 
-private actor PreRenewalGatedClock: TokenTankClock {
-    private let date: Date
-    private var calls = 0
-    private var blocked = false
-    private var gate: CheckedContinuation<Date, Never>?
-    private var observers: [CheckedContinuation<Void, Never>] = []
-
-    init(now: Date) {
-        self.date = now
-    }
-
-    func now() async -> Date {
-        calls += 1
-        // The first caller has read the file twice; pause its pre-renewal clock read.
-        // Release is explicit, never dependent on another caller making N clock reads.
-        guard calls == 3 else { return date }
-        blocked = true
-        let current = observers
-        observers.removeAll()
-        current.forEach { $0.resume() }
-        return await withCheckedContinuation { gate = $0 }
-    }
-
-    func waitUntilBlocked() async {
-        if blocked { return }
-        await withCheckedContinuation { observers.append($0) }
-    }
-
-    func release() {
-        gate?.resume(returning: date)
-        gate = nil
-    }
-
-    func monotonicNow() async -> Duration { .zero }
-
-    func sleep(for duration: Duration) async throws {
-        _ = duration
-    }
-}
 private final class GatedNativeKeychainLookup: @unchecked Sendable {
     private let lock = NSLock()
     private let firstRelease = DispatchSemaphore(value: 0)
@@ -1011,6 +1032,7 @@ private final class GatedNativeKeychainLookup: @unchecked Sendable {
 private actor SequencedClaudeCredentialReader: ClaudeCredentialReading {
     private let files: [Data]
     private var index = 0
+    private(set) var interactionFlags: [Bool] = []
 
     init(files: [Data]) {
         self.files = files
@@ -1027,8 +1049,48 @@ private actor SequencedClaudeCredentialReader: ClaudeCredentialReading {
     }
 
     func readKeychain(allowInteraction: Bool) async throws -> Data? {
-        _ = allowInteraction
+        interactionFlags.append(allowInteraction)
         return nil
+    }
+}
+
+private actor InitialPromptGatedReader: ClaudeCredentialReading {
+    private var file: Data
+    private var promptReleased = false
+    private var promptWaiters: [CheckedContinuation<Void, Never>] = []
+    private var observers: [CheckedContinuation<Void, Never>] = []
+    private(set) var interactionFlags: [Bool] = []
+
+    init(file: Data) {
+        self.file = file
+    }
+
+    func readFile() async throws -> Data? { file }
+
+    func readKeychain(allowInteraction: Bool) async throws -> Data? {
+        interactionFlags.append(allowInteraction)
+        guard allowInteraction, !promptReleased else { return nil }
+        let current = observers
+        observers.removeAll()
+        current.forEach { $0.resume() }
+        await withCheckedContinuation { promptWaiters.append($0) }
+        return nil
+    }
+
+    func setFile(_ data: Data) {
+        file = data
+    }
+
+    func waitUntilPrompted() async {
+        if !interactionFlags.isEmpty { return }
+        await withCheckedContinuation { observers.append($0) }
+    }
+
+    func releasePrompt() {
+        promptReleased = true
+        let current = promptWaiters
+        promptWaiters.removeAll()
+        current.forEach { $0.resume() }
     }
 }
 private actor ClaudeTestCredentialReader: ClaudeCredentialReading {

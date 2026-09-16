@@ -518,6 +518,41 @@ final class TokenTankUITests: XCTestCase {
         }
     }
 
+    func testClaudeConnectionRepairIsExplicitInEnglishAndKorean() {
+        continueAfterFailure = false
+        defer { app.terminate() }
+
+        let locales = [
+            (language: "en", locale: "en_US", action: "Repair Claude Connection"),
+            (language: "ko", locale: "ko_KR", action: "Claude 연결 복구"),
+        ]
+
+        for locale in locales {
+            app.launchArguments = [
+                "-AppleLanguages", "(\(locale.language))",
+                "-AppleLocale", locale.locale,
+                "-appLanguage", locale.language,
+            ]
+            app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+            app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+            app.launchEnvironment["TOKENTANK_UI_CLAUDE_AUTH_FAILURE"] = "0"
+            app.launchEnvironment["TOKENTANK_UI_CLAUDE_REPAIR_FAILURE"] = "1"
+            app.launch()
+
+            let window = app.windows["Token Jar UI Test Detail"]
+            XCTAssertTrue(window.waitForExistence(timeout: timeout))
+            let claude = window.descendants(matching: .any)["provider.claude"]
+            let repair = claude.descendants(matching: .any)["action.repairClaudeConnection"]
+            XCTAssertTrue(repair.waitForExistence(timeout: timeout))
+            XCTAssertTrue(accessibilityText(repair).contains(locale.action), accessibilityText(repair))
+            XCTAssertFalse(claude.descendants(matching: .any)["action.retry"].exists)
+            XCTAssertFalse(claude.descendants(matching: .any)["action.signInSourceApp"].exists)
+
+            app.terminate()
+            XCTAssertTrue(app.wait(for: .notRunning, timeout: timeout))
+        }
+    }
+
     func testCodexWeeklyAndTicketsUseTwoCompactColumns() {
         continueAfterFailure = false
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appLanguage", "en"]

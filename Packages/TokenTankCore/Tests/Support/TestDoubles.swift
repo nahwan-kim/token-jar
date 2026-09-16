@@ -195,6 +195,21 @@ public actor RecordingDiagnostics: DiagnosticsSink {
     }
 }
 
+public struct CollectionContextFlags: Equatable, Sendable {
+    public let isUserInitiated: Bool
+    public let allowsClaudeRecovery: Bool
+
+    public init(isUserInitiated: Bool, allowsClaudeRecovery: Bool) {
+        self.isUserInitiated = isUserInitiated
+        self.allowsClaudeRecovery = allowsClaudeRecovery
+    }
+
+    public init(context: CollectionContext) {
+        self.isUserInitiated = context.isUserInitiated
+        self.allowsClaudeRecovery = context.allowsClaudeRecovery
+    }
+}
+
 public actor QueueProviderAdapter: ProviderAdapter {
     public nonisolated let id: ProviderID
     public nonisolated let displayName: String
@@ -204,6 +219,7 @@ public actor QueueProviderAdapter: ProviderAdapter {
     private var availability: ProviderAvailability
     private var results: [Result<ProviderSnapshot, CollectionError>]
     public private(set) var fetchCount = 0
+    public private(set) var contexts: [CollectionContextFlags] = []
 
     public init(
         id: ProviderID,
@@ -232,10 +248,62 @@ public actor QueueProviderAdapter: ProviderAdapter {
 
     public func fetchSnapshot(context: CollectionContext) throws -> ProviderSnapshot {
         fetchCount += 1
+        contexts.append(CollectionContextFlags(context: context))
         guard !results.isEmpty else {
             throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "test.adapter.empty-queue")
         }
         return try results.removeFirst().get()
+    }
+}
+
+public actor GatedProviderAdapter: ProviderAdapter {
+    public nonisolated let id: ProviderID
+    public nonisolated let displayName: String
+    public nonisolated let defaultAbbreviation: String
+    public nonisolated let sourceDescriptor: ProviderSourceDescriptor
+
+    private var continuations: [CheckedContinuation<ProviderSnapshot, Error>] = []
+    public private(set) var contexts: [CollectionContextFlags] = []
+    public private(set) var maximumConcurrentFetches = 0
+    public private(set) var cancellationCount = 0
+    private var activeFetches = 0
+
+    public init(id: ProviderID) {
+        self.id = id
+        self.displayName = id.displayName
+        self.defaultAbbreviation = id.defaultAbbreviation
+        self.sourceDescriptor = TestContextFactory.snapshot(providerID: id).source
+    }
+
+    public func probeAvailability(context: CollectionContext) -> ProviderAvailability {
+        .available(sourceDescriptor)
+    }
+
+    public func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
+        contexts.append(CollectionContextFlags(context: context))
+        activeFetches += 1
+        maximumConcurrentFetches = max(maximumConcurrentFetches, activeFetches)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                continuations.append(continuation)
+            }
+        } onCancel: {
+            Task { await self.recordCancellation() }
+        }
+    }
+
+    private func recordCancellation() {
+        cancellationCount += 1
+    }
+
+    public func completeNext(with result: Result<ProviderSnapshot, CollectionError>) {
+        guard !continuations.isEmpty else { return }
+        let continuation = continuations.removeFirst()
+        activeFetches -= 1
+        switch result {
+        case let .success(snapshot): continuation.resume(returning: snapshot)
+        case let .failure(error): continuation.resume(throwing: error)
+        }
     }
 }
 
@@ -251,7 +319,8 @@ public enum TestContextFactory {
         doubaoPlan: any DoubaoPlanUsageReader = MemoryDoubaoPlanUsageReader(results: []),
         clock: any TokenTankClock = ManualClock(),
         diagnostics: any DiagnosticsSink = RecordingDiagnostics(),
-        isUserInitiated: Bool = false
+        isUserInitiated: Bool = false,
+        allowsClaudeRecovery: Bool = false
     ) -> CollectionContext {
         CollectionContext(
             network: network,
@@ -264,7 +333,8 @@ public enum TestContextFactory {
             claudeSession: claudeSession,
             clock: clock,
             diagnostics: diagnostics,
-            isUserInitiated: isUserInitiated
+            isUserInitiated: isUserInitiated,
+            allowsClaudeRecovery: allowsClaudeRecovery
         )
     }
 

@@ -395,6 +395,7 @@ public enum RecoveryAction: String, Codable, Equatable, Sendable {
     case retry
     case waitForNextRefresh
     case signInSourceApp
+    case repairClaudeConnection
     case signInTokenTank
     case allowAccessInSystemSettings
     case none

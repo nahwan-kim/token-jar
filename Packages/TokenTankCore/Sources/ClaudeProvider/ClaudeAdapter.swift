@@ -25,7 +25,10 @@ public struct ClaudeAdapter: ProviderAdapter {
     }
 
     public func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
-        var session = try await claudeSourceSession(in: context, rejectedAccessToken: nil)
+        var repairAvailable = context.allowsClaudeRecovery
+        var session = try await claudeSourceSession(
+            in: context, rejectedAccessToken: nil, repairAvailable: &repairAvailable
+        )
         var response = try await claudeResponse(
             path: "/api/oauth/usage",
             token: session.accessToken,
@@ -34,7 +37,9 @@ public struct ClaudeAdapter: ProviderAdapter {
         )
         if response.statusCode == 401 {
             let rejectedToken = session.accessToken
-            session = try await claudeSourceSession(in: context, rejectedAccessToken: rejectedToken)
+            session = try await claudeSourceSession(
+                in: context, rejectedAccessToken: rejectedToken, repairAvailable: &repairAvailable
+            )
             guard session.accessToken != rejectedToken else {
                 throw CollectionError(
                     kind: .authenticationRejected,
@@ -125,16 +130,27 @@ private struct ClaudeDecimalValue {
     let raw: String
 }
 
-private func claudeSourceSession(in context: CollectionContext, rejectedAccessToken: String?) async throws -> ClaudeSession {
+private func claudeSourceSession(
+    in context: CollectionContext,
+    rejectedAccessToken: String?,
+    repairAvailable: inout Bool
+) async throws -> ClaudeSession {
     do {
         return try await context.claudeSession.session(
-            allowInteraction: context.isUserInitiated,
+            allowInteraction: false,
             rejectedAccessToken: rejectedAccessToken
         )
     } catch is CancellationError {
         throw CancellationError()
     } catch let error as CollectionError {
-        throw error
+        guard error.recoveryAction == .repairClaudeConnection, repairAvailable else { throw error }
+        // A repair click grants one attempt, not permission for every reread or HTTP retry.
+        repairAvailable = false
+        try Task.checkCancellation()
+        return try await context.claudeSession.session(
+            allowInteraction: true,
+            rejectedAccessToken: rejectedAccessToken
+        )
     } catch {
         throw CollectionError(
             kind: .sourceUnavailable,

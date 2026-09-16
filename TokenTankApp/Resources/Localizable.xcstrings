@@ -57,6 +57,20 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "모든 Provider 새로고침" } }
       }
     },
+    "action.repair_claude_connection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Repair Claude Connection" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Claude 연결 복구" } }
+      }
+    },
+    "action.repair_claude_connection.help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Deliberately repair the Claude connection. This may ask for Keychain permission or run Claude Code." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Claude 연결을 명시적으로 복구합니다. 키체인 권한을 요청하거나 Claude Code를 실행할 수 있습니다." } }
+      }
+    },
     "action.retry" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -508,8 +522,8 @@
     "source.detail.claude" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Live Claude usage through the native Claude Code OAuth session. Automatic refresh never prompts for Keychain access; manual Refresh can let Claude Code renew an expired session." } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "네이티브 Claude Code OAuth 세션으로 라이브 사용량을 조회합니다. 자동 갱신은 키체인 접근을 요청하지 않으며, 수동 새로고침에서는 만료된 세션을 Claude Code가 갱신할 수 있습니다." } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Live Claude usage through the native Claude Code OAuth session. Ordinary refresh stays silent and never prompts for Keychain access; use Repair Claude Connection when explicit recovery is needed." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "네이티브 Claude Code OAuth 세션으로 라이브 사용량을 조회합니다. 일반 새로고침은 조용히 동작하며 키체인 접근을 요청하지 않습니다. 명시적 복구가 필요하면 Claude 연결 복구를 사용하세요." } }
       }
     },
     "source.detail.codex" : {

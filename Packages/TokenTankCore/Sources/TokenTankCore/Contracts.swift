@@ -214,6 +214,7 @@ public struct CollectionContext: Sendable {
     public let diagnostics: any DiagnosticsSink
     public let correlationID: UUID
     public let isUserInitiated: Bool
+    public let allowsClaudeRecovery: Bool
 
     public init(
         network: any NetworkClient,
@@ -227,7 +228,8 @@ public struct CollectionContext: Sendable {
         clock: any TokenTankClock,
         diagnostics: any DiagnosticsSink,
         correlationID: UUID = UUID(),
-        isUserInitiated: Bool = false
+        isUserInitiated: Bool = false,
+        allowsClaudeRecovery: Bool = false
     ) {
         self.network = network
         self.credentials = credentials
@@ -241,6 +243,7 @@ public struct CollectionContext: Sendable {
         self.diagnostics = diagnostics
         self.correlationID = correlationID
         self.isUserInitiated = isUserInitiated
+        self.allowsClaudeRecovery = allowsClaudeRecovery
     }
 }
 

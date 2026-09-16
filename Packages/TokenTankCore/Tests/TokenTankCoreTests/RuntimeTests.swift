@@ -6,32 +6,66 @@ import TokenTankTestSupport
 
 @Suite("Refresh and persistence behavior", .serialized)
 struct RuntimeTests {
-    @Test("only explicit user refresh permits Claude interaction and consent never leaks to background")
-    func claudeManualInteractionBoundary() async throws {
+    @Test("only dedicated Claude repair carries one-shot interaction authority")
+    func claudeRepairAuthorityBoundary() async throws {
         let sessions = RecordingClaudeSessions()
-        let context = TestContextFactory.make(claudeSession: sessions)
+        let context = TestContextFactory.make(
+            claudeSession: sessions,
+            isUserInitiated: true,
+            allowsClaudeRecovery: true
+        )
         let coordinator = RefreshCoordinator(adapters: [InteractionAwareClaudeAdapter()], context: context)
+
         await coordinator.refresh(.claude)
+        await coordinator.refresh(.claude, userInitiated: true)
         await coordinator.refreshAll(userInitiated: true)
-        await coordinator.refresh(.claude)
-        #expect(await sessions.interactions == [false, true, false])
+        await coordinator.repairClaudeConnection()
+        await coordinator.refresh(.claude, userInitiated: true)
+
+        #expect(await sessions.interactions == [false, false, false, false, true, false])
         guard case .fresh = await coordinator.state(for: .claude) else {
             Issue.record("Expected successful scoped session reads")
             return
         }
 
-        let manual = context.scoped(to: .claude, isUserInitiated: true)
-        _ = try await manual.claudeSession.session(allowInteraction: true, rejectedAccessToken: "rejected")
-        let nonClaude = context.scoped(to: .cursor, isUserInitiated: true)
+        let manual = context.scoped(
+            to: .claude,
+            isUserInitiated: true,
+            allowsClaudeRecovery: false
+        )
         #expect(await collectionError {
-            _ = try await nonClaude.claudeSession.session(allowInteraction: true, rejectedAccessToken: "rejected")
+            _ = try await manual.claudeSession.session(allowInteraction: true, rejectedAccessToken: nil)
         }?.diagnosticCode == "capability.claude-session.denied")
-        #expect(await sessions.interactions == [false, true, false, true])
-        #expect(await sessions.rejectedTokens == [nil, nil, nil, "rejected"])
-        let background = context.scoped(to: .claude)
-        _ = try await background.claudeSession.session(allowInteraction: false, rejectedAccessToken: "background-rejected")
-        #expect(await sessions.interactions.last == false)
-        #expect(await sessions.rejectedTokens.last == "background-rejected")
+
+        let recovery = context.scoped(
+            to: .claude,
+            isUserInitiated: true,
+            allowsClaudeRecovery: true
+        )
+        _ = try await recovery.claudeSession.session(allowInteraction: true, rejectedAccessToken: "first")
+        #expect(await collectionError {
+            _ = try await recovery.claudeSession.session(allowInteraction: true, rejectedAccessToken: "second")
+        }?.diagnosticCode == "capability.claude-session.denied")
+        _ = try await recovery.claudeSession.session(allowInteraction: false, rejectedAccessToken: "readonly")
+
+        let background = context.scoped(
+            to: .claude,
+            isUserInitiated: false,
+            allowsClaudeRecovery: true
+        )
+        #expect(await collectionError {
+            _ = try await background.claudeSession.session(allowInteraction: true, rejectedAccessToken: nil)
+        }?.diagnosticCode == "capability.claude-session.denied")
+
+        let nonClaude = context.scoped(
+            to: .cursor,
+            isUserInitiated: true,
+            allowsClaudeRecovery: true
+        )
+        #expect(await collectionError {
+            _ = try await nonClaude.claudeSession.session(allowInteraction: false, rejectedAccessToken: nil)
+        }?.diagnosticCode == "capability.claude-session.denied")
+        #expect(await sessions.interactions == [false, false, false, false, true, false, true, false])
     }
 
     @Test("transient failure retains the process-lifetime last success as stale")
@@ -245,6 +279,117 @@ struct RuntimeTests {
             return
         }
         #expect(actual == snapshot)
+    }
+
+    @Test("concurrent explicit repairs wait for ordinary collection and coalesce")
+    func concurrentClaudeRepairsCoalesceAfterOrdinaryFailure() async {
+        let adapter = GatedProviderAdapter(id: .claude)
+        let coordinator = RefreshCoordinator(adapters: [adapter], context: TestContextFactory.make())
+        let repairRequired = CollectionError(
+            kind: .authenticationRejected,
+            diagnosticCode: "test.claude.repair-required",
+            recoveryAction: .repairClaudeConnection
+        )
+        let snapshot = TestContextFactory.snapshot(providerID: .claude)
+
+        let ordinary = Task { await coordinator.refresh(.claude, userInitiated: true) }
+        #expect(await eventually { await adapter.contexts.count == 1 })
+        let firstRepair = Task { await coordinator.repairClaudeConnection() }
+        let secondRepair = Task { await coordinator.repairClaudeConnection() }
+        await adapter.completeNext(with: .failure(repairRequired))
+        await ordinary.value
+
+        #expect(await eventually { await adapter.contexts.count == 2 })
+        await adapter.completeNext(with: .success(snapshot))
+        await firstRepair.value
+        await secondRepair.value
+
+        #expect(await adapter.contexts == [
+            CollectionContextFlags(isUserInitiated: true, allowsClaudeRecovery: false),
+            CollectionContextFlags(isUserInitiated: true, allowsClaudeRecovery: true),
+        ])
+        #expect(await adapter.maximumConcurrentFetches == 1)
+    }
+
+    @Test("stop invalidates a repair queued behind an ordinary collection")
+    func stopInvalidatesQueuedClaudeRepair() async {
+        let adapter = GatedProviderAdapter(id: .claude)
+        let coordinator = RefreshCoordinator(adapters: [adapter], context: TestContextFactory.make())
+        let repairRequired = CollectionError(
+            kind: .authenticationRejected,
+            diagnosticCode: "test.claude.repair-required",
+            recoveryAction: .repairClaudeConnection
+        )
+
+        let ordinary = Task { await coordinator.refresh(.claude) }
+        #expect(await eventually { await adapter.contexts.count == 1 })
+        let repair = Task { await coordinator.repairClaudeConnection() }
+        let stop = Task { await coordinator.stop() }
+        #expect(await eventually { await adapter.cancellationCount == 1 })
+        await adapter.completeNext(with: .failure(repairRequired))
+        await stop.value
+        await ordinary.value
+        await repair.value
+        #expect(await adapter.contexts.map(\.allowsClaudeRecovery) == [false])
+        // Restart creates a new ordinary collection, not a continuation of the old repair.
+        await coordinator.start()
+        #expect(await eventually { await adapter.contexts.count == 2 })
+        await adapter.completeNext(with: .success(TestContextFactory.snapshot(providerID: .claude)))
+        #expect(await eventually {
+            if case .fresh = await coordinator.state(for: .claude) { return true }
+            return false
+        })
+        #expect(await adapter.contexts.map(\.allowsClaudeRecovery) == [false, false])
+        await coordinator.stop()
+    }
+
+    @Test("failed explicit repair retains the previous Claude snapshot")
+    func failedClaudeRepairRetainsSnapshot() async {
+        let snapshot = TestContextFactory.snapshot(providerID: .claude)
+        let repairFailure = CollectionError(
+            kind: .authenticationRejected,
+            diagnosticCode: "test.claude.repair-failed",
+            recoveryAction: .repairClaudeConnection
+        )
+        let adapter = QueueProviderAdapter(
+            id: .claude,
+            results: [.success(snapshot), .failure(repairFailure)]
+        )
+        let coordinator = RefreshCoordinator(adapters: [adapter], context: TestContextFactory.make())
+
+        await coordinator.refresh(.claude)
+        await coordinator.repairClaudeConnection()
+
+        guard case let .authenticationActionRequired(retained, failure) = await coordinator.state(for: .claude) else {
+            Issue.record("Expected failed repair to retain the previous snapshot")
+            return
+        }
+        #expect(retained == snapshot)
+        #expect(failure.diagnosticCode == repairFailure.diagnosticCode)
+        #expect(await adapter.contexts.map(\.allowsClaudeRecovery) == [false, true])
+    }
+
+    @Test("cancelling an explicit repair cancels its collection and never publishes late success")
+    func cancelledRepairRevokesCollectionAuthority() async {
+        let adapter = GatedProviderAdapter(id: .claude)
+        let coordinator = RefreshCoordinator(adapters: [adapter], context: TestContextFactory.make())
+        let repair = Task { await coordinator.repairClaudeConnection() }
+        #expect(await eventually { await adapter.contexts.count == 1 })
+        repair.cancel()
+        #expect(await eventually { await adapter.cancellationCount == 1 })
+        await adapter.completeNext(with: .success(TestContextFactory.snapshot(providerID: .claude)))
+        await repair.value
+        guard case let .stale(snapshot, failure, _) = await coordinator.state(for: .claude) else {
+            Issue.record("Expected cancelled repair, not a late fresh result")
+            return
+        }
+        #expect(snapshot == nil)
+        #expect(failure.kind == .cancelled)
+        let ordinary = Task { await coordinator.refresh(.claude, userInitiated: true) }
+        #expect(await eventually { await adapter.contexts.count == 2 })
+        await adapter.completeNext(with: .success(TestContextFactory.snapshot(providerID: .claude)))
+        await ordinary.value
+        #expect(await adapter.contexts.map(\.allowsClaudeRecovery) == [true, false])
     }
 
     @Test("a suspended adapter does not lose completion delivered before fetch")
@@ -791,7 +936,10 @@ private struct InteractionAwareClaudeAdapter: ProviderAdapter {
     }
 
     func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
-        _ = try await context.claudeSession.session(allowInteraction: context.isUserInitiated, rejectedAccessToken: nil)
+        _ = try await context.claudeSession.session(allowInteraction: false, rejectedAccessToken: nil)
+        if context.allowsClaudeRecovery {
+            _ = try await context.claudeSession.session(allowInteraction: true, rejectedAccessToken: "synthetic")
+        }
         return TestContextFactory.snapshot(providerID: .claude)
     }
 }

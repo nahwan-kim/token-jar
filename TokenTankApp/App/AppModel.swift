@@ -455,6 +455,13 @@ final class AppModel: ObservableObject {
         guard started else { return }
         startRefresh(providerID: providerID)
     }
+
+    func repairClaudeConnection() {
+        guard !isStopping else { return }
+        ensureStarted()
+        guard started else { return }
+        startClaudeConnectionRepair()
+    }
     func checkForUpdates() {
         guard
             started,
@@ -893,6 +900,15 @@ final class AppModel: ObservableObject {
                     recoveryAction: .signInSourceApp
                 )
             )
+        } else if ProcessInfo.processInfo.environment["TOKENTANK_UI_CLAUDE_REPAIR_FAILURE"] == "1" {
+            claudeState = .authenticationActionRequired(
+                snapshot: claude,
+                failure: CollectionError(
+                    kind: .authenticationRejected,
+                    diagnosticCode: "ui-test.claude.repair-required",
+                    recoveryAction: .repairClaudeConnection
+                )
+            )
         } else {
             claudeState = .stale(
                 snapshot: claude,
@@ -1042,6 +1058,17 @@ final class AppModel: ObservableObject {
             } else {
                 await coordinator.refreshAll(userInitiated: true)
             }
+            self?.finishRefreshOperation(operationID)
+        }
+        refreshOperations[operationID] = task
+    }
+
+    private func startClaudeConnectionRepair() {
+        guard !isStopping else { return }
+        let operationID = UUID()
+        let coordinator = coordinator
+        let task = Task { [weak self, coordinator] in
+            await coordinator.repairClaudeConnection()
             self?.finishRefreshOperation(operationID)
         }
         refreshOperations[operationID] = task

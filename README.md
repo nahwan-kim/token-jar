@@ -30,7 +30,7 @@
 - **메뉴 막대에 필요한 숫자만** — 서비스 표시 여부, 순서, 대표 한도를 설정합니다. ‘% 기호 표시’를 끄면 `63%` 대신 `63`으로 보이며, 상세 화면과 접근성 읽기의 퍼센트 정보는 유지합니다.
 - **서비스가 제공한 값 그대로** — 사용량·잔여량의 방향을 구분하고, 제공되지 않은 값은 추정하지 않습니다.
 - **Codex 계정별 확인** — 기본 계정과 선택적인 두 번째 `CODEX_HOME`의 한도를 따로 표시합니다.
-- **자동 갱신과 수동 새로고침** — 5분 간격으로 각 출처를 다시 확인하며, 실패하면 앱 실행 중 마지막 성공 값과 오류 상태를 구분합니다. Claude 세션이 만료 직전이거나 사용량 요청에서 거부되면 Token Jar가 읽기 전용 저장소를 다시 확인하고, 필요할 때 Claude Code의 제한된 소유자 갱신을 자동으로 한 번 시도합니다.
+- **자동 확인과 수동 새로고침** — 5분 간격 확인과 일반 새로고침은 Claude를 포함한 각 출처를 조용히 다시 읽기만 합니다. Claude CLI나 키체인 승인창을 자동으로 열지 않으며, 실패하면 앱 실행 중 마지막 성공 값과 오류 상태를 구분합니다.
 - **한국어와 English** — 설정에서 바로 전환합니다.
 - **로그인 시 자동 실행 선택** — 설정에서 ‘로그인 시 실행’을 직접 켜거나 끌 수 있습니다. macOS 승인이 필요하면 시스템 설정에서 허용하며, 기본값은 꺼짐입니다.
 - **네이티브 macOS 앱** — SwiftUI 기반. Dock 아이콘과 내장 브라우저 없이 동작하며, Sparkle 업데이트 창에서 새 버전을 내려받아 설치·재시작할 수 있습니다.
@@ -54,7 +54,7 @@ Gatekeeper 전체 비활성화나 quarantine 속성 제거는 필요하지 않�
 3. 설정에서 표시할 서비스와 대표 한도를 선택합니다.
 4. 필요하면 설정의 ‘로그인 시 실행’을 켜고 macOS 시스템 설정에서 승인을 완료합니다. 이 옵션은 기본으로 꺼져 있습니다.
 
-Token Jar 자체 계정은 필요하지 않습니다. Claude는 만료 직전 또는 HTTP 401인 Claude Code 세션을 자동 복구할 수 있습니다. 복구할 수 없거나 로그인이 없거나 폐기된 경우에는 `claude auth login`으로 Claude Code CLI에 다시 로그인해야 하며, 웹이나 Claude Desktop 로그인으로 대체되지 않습니다. Grok은 승인된 범위에서 만료 직전 OAuth 세션을 자동 갱신합니다.
+Token Jar 자체 계정은 필요하지 않습니다. Claude 세션이 만료 직전이거나 HTTP 401이면 원본 저장소를 승인창 없이 다시 읽고, 바뀐 유효 토큰이 없으면 마지막 값을 오래된 상태로 유지하며 **Claude 연결 복구**를 안내합니다. 이 전용 버튼을 직접 누른 경우에만 Claude Code CLI를 한 번 제한적으로 실행할 수 있습니다. 로그인이 없거나 폐기된 경우에는 `claude auth login`으로 Claude Code CLI에 다시 로그인해야 하며, 웹이나 Claude Desktop 로그인으로 대체되지 않습니다. Grok은 승인된 범위에서 만료 직전 OAuth 세션을 자동 갱신합니다.
 
 ## 지원하는 서비스
 
@@ -66,11 +66,13 @@ Token Jar 자체 계정은 필요하지 않습니다. Claude는 만료 직전 �
 | **Cursor** | Cursor 로컬 세션으로 조회한 계정 사용량 요약 | Cursor 앱 로그인 |
 | **Doubao** | 공식 `arkcli usage plan --format json`의 플랜 한도 | `arkcli` 설치 및 유효한 SSO 로그인 |
 
-Claude는 웹·데스크톱 앱과 별개인 **Claude Code 로그인**을 사용합니다. 토큰 만료가 60초 이내이거나 사용량 API가 HTTP 401을 반환하면 원본 저장소를 다시 읽고, 필요할 때 Claude Code의 제한된 `/usage` 실행으로 자동 갱신을 시도합니다. 새 토큰으로 사용량 요청을 한 번만 재시도하며, HTTP 403은 갱신하지 않습니다. 갱신 실패 뒤에는 5분 동안 백그라운드 재실행을 제한하지만, 새 로그인 정보는 다시 읽어 즉시 채택할 수 있습니다. 자동 복구가 불가능하면 터미널에서 `claude auth login`을 실행한 뒤 새로고침하세요.
+Claude는 웹·데스크톱 앱과 별개인 **Claude Code 로그인**을 사용합니다. 토큰 만료가 60초 이내이거나 사용량 API가 HTTP 401을 반환하면 정확한 원본 파일·키체인 계정을 비대화형으로 다시 읽고, 바뀐 유효 토큰이 있으면 채택해 사용량 요청을 한 번만 재시도합니다. HTTP 403은 복구를 시작하지 않습니다. 바뀐 토큰이 없거나 키체인을 읽을 수 없으면 마지막 성공 값을 오래된 상태로 유지하고 **Claude 연결 복구** 동작을 표시합니다.
 
-Token Jar는 정확한 Claude Code 파일·키체인 계정의 AI OAuth만 읽고 MCP 토큰은 사용하지 않습니다. 거부된 토큰은 파일·키체인별로 기억해 번갈아 재사용하지 않습니다. 토큰 갱신·저장·잠금은 Claude Code가 담당하며 Token Jar가 토큰을 직접 수정하거나 다른 저장소에 복사하지 않습니다. 소유자 실행은 화면 잠금 해제 상태에서만 가능하고 시간·출력·입력이 제한됩니다. 백그라운드의 Token Jar 키체인 읽기는 승인창을 띄우지 않지만, 독립된 Claude Code 하위 프로세스의 macOS 승인창까지 억제한다고 보장하지는 않습니다. 브라우저 로그인이나 승인 절차는 자동화하지 않습니다.
+5분 주기 확인과 일반 수동 새로고침은 모두 읽기 전용이며 Claude CLI 또는 네이티브 승인창을 열지 않습니다. 오직 현지화된 **Claude 연결 복구** 버튼만 해당 수집에 한 번 쓰는 명시적 복구 권한을 부여합니다. 동시에 누른 복구 요청은 하나로 합쳐지고, 복구 전후 저장소 재읽기는 비대화형입니다. 한 복구에서 네이티브 승인 시도와 제한된 Claude Code `/usage` 소유자 실행은 각각 최대 한 번이며, Claude Code가 자체 권한 UI를 표시할 수 있는 때도 이 의도적인 복구 중뿐입니다. 승인 실패는 즉시 중단하고 추가 CLI를 실행하지 않으며, 일반 새로고침이나 앱 재시작은 재시도 권한을 만들지 않습니다. 다음 시도에는 버튼을 다시 눌러야 합니다.
 
-자동 복구 회귀 테스트와 한·영 안내 UI, universal Release 빌드를 검증했습니다. 다만 검증 호스트의 Claude Code가 로그인되지 않은 상태여서 **실제 자연 만료·HTTP 401 이후 인증된 토큰 회전은 아직 검증하지 못했습니다.** 상세 보안 경계와 검증 기록은 [Distribution.md](TokenTankApp/Distribution/Distribution.md)와 [SecurityReview.md](TokenTankApp/Distribution/SecurityReview.md)를 참고하세요.
+Token Jar는 정확한 Claude Code 파일·현재 macOS 사용자 키체인 계정의 `claudeAiOauth`만 읽고 MCP 토큰은 사용하지 않습니다. 토큰 갱신·저장·잠금은 Claude Code가 담당하며 Token Jar는 토큰을 POST·수정·복사·저장·캐시하지 않습니다. 브라우저 로그인이나 승인 절차도 자동화하지 않습니다. 복구 실행은 고정된 실행 파일·빈 작업공간·제한 시간·안전 인자로 제한되고 Claude Code의 공식 소유자 잠금만 사용합니다.
+
+2026-09-16 기준 이 명시적 복구 정책은 패키지 테스트 206개/12개 스위트 3회 연속, 앱 테스트 35개, 한국어·영어 복구/로그인 안내 UI 테스트 2개를 통과했습니다. unsigned Universal Release 빌드와 Provider I/O 감사도 통과했습니다. **실제 키체인 승인과 인증된 토큰 회전은 검증하지 않았으며, 설치·배포하지 않았습니다.** 상세 보안 경계와 검증 기록은 [Distribution.md](TokenTankApp/Distribution/Distribution.md)와 [SecurityReview.md](TokenTankApp/Distribution/SecurityReview.md)를 참고하세요.
 
 > **연동 범위에 주의하세요.** 모든 서비스가 안정적인 공개 사용량 API를 제공하지는 않습니다. Claude OAuth와 Grok·Cursor의 연동은 제공자 변경에 영향을 받을 수 있습니다. 세션·응답 형식이 달라지거나 승인된 경계를 벗어나면 데이터를 만들거나 다른 출처로 대체하지 않고 오류를 표시합니다. API 과금 전체를 합산하는 비용 관리 도구는 아닙니다.
 
@@ -78,7 +80,7 @@ Token Jar는 정확한 Claude Code 파일·키체인 계정의 AI OAuth만 읽�
 
 ## 내 계정은 원래 있던 곳에
 
-- 공식 도구가 소유한 인증 저장소는 원칙적으로 읽기 전용입니다. Claude 저장소는 정확히 읽기만 하며 Token Jar가 토큰을 직접 POST·수정·복사·저장·캐시하지 않습니다. 필요하면 제한된 Claude Code 소유자 `/usage`가 공식 잠금 아래 자신의 세션을 회전합니다.
+- 공식 도구가 소유한 인증 저장소는 원칙적으로 읽기 전용입니다. Claude 저장소는 정확히 읽기만 하며 Token Jar가 토큰을 직접 POST·수정·복사·저장·캐시하지 않습니다. 전용 **Claude 연결 복구**를 명시적으로 누른 경우에만 제한된 Claude Code 소유자 `/usage`가 공식 잠금 아래 자신의 세션을 회전할 수 있습니다.
 - 유일한 직접 저장소 변경 예외인 Grok은 액세스 토큰 만료가 60초 이내이거나 첫 크레딧 프록시 요청이 401/403이면 `~/.grok/auth.json`의 기존 OIDC `refresh_token`을 공식 `https://auth.x.ai/oauth2/token`에 보내 갱신하고, 같은 파일에 새 액세스 토큰·만료 시각과 선택적으로 회전된 refresh token을 원자적으로 보존한 뒤 크레딧 요청을 한 번만 다시 시도합니다. 고정 issuer·선택된 client/scope 일치 검사를 거치며 브라우저 쿠키·CLI subprocess·수동 토큰 UI·Management API·Keychain 토큰 캐시를 사용하지 않습니다.
 - 사용량 스냅샷은 메모리에만 유지합니다. 표시 설정은 로컬에 저장합니다.
 - Codex와 Doubao는 허용된 공식 CLI를 실행합니다. 공식 CLI 자체의 세션 관리는 해당 도구가 담당합니다.
@@ -143,7 +145,7 @@ Scripts/               접근 경계 검사와 유휴 성능 측정
 Token Jar is a native macOS menu bar app for checking AI usage limits across Codex, Claude, Grok, Cursor, and Doubao. It keeps provider-specific quotas separate, supports English and Korean, and uses existing official app or CLI sessions rather than introducing another account.
 In Settings, “Launch at Login” is off by default; enable it explicitly and approve it in macOS System Settings when prompted.
 
-Provider names and logos belong to their respective owners. Token Jar is an independent project and is not endorsed by those providers. [CodexBar](https://github.com/steipete/CodexBar) is referenced for provider integration behavior; it is not a runtime dependency. The README banner was generated with GPT Image 2 through ima2 using the app icon as a visual reference.
+Provider names and logos belong to their respective owners. Token Jar is an independent project and is not endorsed by those providers. [CodexBar at `5e119a9ad76e3453058dab323f98e480f478d049`](https://github.com/steipete/CodexBar/commit/5e119a9ad76e3453058dab323f98e480f478d049) is pinned as the delegated-coordinator policy reference, and [OpenUsage at `56378e5765f85d38ff413036fd984afe3d4664e4`](https://github.com/robinebers/openusage/commit/56378e5765f85d38ff413036fd984afe3d4664e4) as the read-only comparison; neither is a runtime dependency. The README banner was generated with GPT Image 2 through ima2 using the app icon as a visual reference.
 
 ## 라이선스
 
