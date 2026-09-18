@@ -72,7 +72,7 @@ Claude는 웹·데스크톱 앱과 별개인 **Claude Code 로그인**을 사용
 
 Token Jar는 정확한 Claude Code 파일·현재 macOS 사용자 키체인 계정의 `claudeAiOauth`만 읽고 MCP 토큰은 사용하지 않습니다. 토큰 갱신·저장·잠금은 Claude Code가 담당하며 Token Jar는 토큰을 POST·수정·복사·저장·캐시하지 않습니다. macOS 인증을 우회하거나 브라우저 로그인·승인 절차를 자동화하지 않습니다. 복구 실행은 고정된 실행 파일·빈 작업공간·제한 시간·안전 인자로 제한되고 Claude Code의 공식 소유자 잠금만 사용합니다.
 
-2026-09-18 자동 복구 변경은 패키지 테스트 **212개/12개 스위트 3회 연속**, 릴리즈 도구 테스트 13개, Provider I/O 감사, 91개 한영 현지화 키·manifest·plist·Swift 구문 검사를 통과했습니다. QA에서 확인한 프로세스 전역 승인 정책 강제 활성화 위험은 해당 변경을 제거해 해결했습니다. 승인 정책이 꺼져 있으면 이를 덮어쓰지 않고 명시적 오류를 반환합니다. 시간 초과·취소는 호출자의 대기만 끝내며 macOS 키체인 호출 자체를 강제 종료하지 않습니다. 이전 네이티브 조회가 끝날 때까지 새 조회를 막고 늦은 결과를 폐기합니다. 앱·UI 자동화 테스트는 사용자 요청으로 제외했고, **실제 키체인 승인·토큰 회전, 앱 빌드와 설치·배포는 미검증**입니다. 상세 내용은 [Distribution.md](TokenTankApp/Distribution/Distribution.md)와 [SecurityReview.md](TokenTankApp/Distribution/SecurityReview.md)를 참고하세요.
+2026-09-18 자동 복구 변경은 패키지 테스트 **212개/12개 스위트 3회 연속**, 릴리즈 도구 테스트 13개, Provider I/O 감사, 91개 한영 현지화 키·manifest·plist·Swift 구문 검사를 통과했습니다. 소스 CI, Universal 빌드, 서명 ZIP 감사와 시작 smoke, 공개 ZIP·체크섬·서명 피드 재다운로드 검증을 마치고 [v0.1.13](https://github.com/nahwan-kim/token-jar/releases/tag/v0.1.13)을 게시했습니다. 앱·UI 자동화 테스트는 사용자 요청으로 제외했으며 **실제 Claude 키체인 승인·토큰 회전과 Sparkle 설치·재실행은 미검증**입니다. 시간 초과·취소는 macOS 키체인 호출 자체를 강제 종료하지 않으므로, 이전 조회가 끝날 때까지 새 조회를 막고 늦은 결과를 폐기합니다. 상세 검증과 lab 서명 절차는 [Distribution.md](TokenTankApp/Distribution/Distribution.md)와 [SecurityReview.md](TokenTankApp/Distribution/SecurityReview.md)를 참고하세요.
 
 > **연동 범위에 주의하세요.** 모든 서비스가 안정적인 공개 사용량 API를 제공하지는 않습니다. Claude OAuth와 Grok·Cursor의 연동은 제공자 변경에 영향을 받을 수 있습니다. 세션·응답 형식이 달라지거나 승인된 경계를 벗어나면 데이터를 만들거나 다른 출처로 대체하지 않고 오류를 표시합니다. API 과금 전체를 합산하는 비용 관리 도구는 아닙니다.
 
