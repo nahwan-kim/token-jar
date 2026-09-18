@@ -177,22 +177,8 @@ jobs:
             /usr/bin/plutil -lint "$plist"
           done
 
-      - name: Build and run application unit and UI tests with local ad hoc signing
-        shell: bash
-        run: |
-          set -euo pipefail
-          /usr/bin/xcodebuild \
-            -project TokenTank.xcodeproj \
-            -scheme TokenTank \
-            -configuration UITest \
-            -derivedDataPath "$DERIVED_DATA_PATH" \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGNING_REQUIRED=YES \
-            CODE_SIGNING_ALLOWED=YES \
-            DEVELOPMENT_TEAM="" \
-            -destination 'platform=macOS' \
-            test
+      # Owner-approved QA scope (2026-09-18): do not run Xcode app/UI automated
+      # tests. Package regressions, universal build, and payload audits remain gates.
 
       - name: Build unsigned universal Release candidate
         shell: bash

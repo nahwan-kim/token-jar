@@ -239,11 +239,11 @@ public actor RefreshCoordinator {
         states[providerID] = .refreshing(previous: previous)
         emitStates()
 
-        let allowsClaudeRecovery = operation == .claudeRepair && providerID == .claude
+        let allowsClaudeRecovery = providerID == .claude
         let providerContext = self.context.scoped(
             to: providerID,
             correlationID: correlationID,
-            isUserInitiated: allowsClaudeRecovery ? true : isUserInitiated,
+            isUserInitiated: isUserInitiated,
             allowsClaudeRecovery: allowsClaudeRecovery
         )
         let task = Task<ProviderSnapshot, Error> {
@@ -275,12 +275,12 @@ public actor RefreshCoordinator {
                     )
                 )
                 let result = try await task.value
-                if allowsClaudeRecovery { try Task.checkCancellation() }
+                if operation == .claudeRepair { try Task.checkCancellation() }
                 return result
             } onCancel: {
-                // A cancelled repair must revoke its permission to start interactive work.
-                // Ordinary shared collection keeps its existing coalescing semantics.
-                if allowsClaudeRecovery { task.cancel() }
+                // Explicit repair owns its operation, so cancelling it cancels the collection.
+                // Ordinary callers retain shared-operation cancellation behavior.
+                if operation == .claudeRepair { task.cancel() }
             }
             guard
                 snapshot.providerID == providerID,
@@ -437,7 +437,6 @@ extension CollectionContext {
             claudeSession: ProviderScopedClaudeSessionProvider(
                 providerID: providerID,
                 base: claudeSession,
-                isUserInitiated: isUserInitiated,
                 allowsClaudeRecovery: allowsClaudeRecovery
             ),
             clock: clock,
@@ -482,27 +481,24 @@ private struct ProviderScopedGrokSessionProvider: GrokSessionProviding {
 private actor ProviderScopedClaudeSessionProvider: ClaudeSessionProviding {
     let providerID: ProviderID
     let base: any ClaudeSessionProviding
-    let isUserInitiated: Bool
     let allowsClaudeRecovery: Bool
     private var interactionBudget: Int
 
     init(
         providerID: ProviderID,
         base: any ClaudeSessionProviding,
-        isUserInitiated: Bool,
         allowsClaudeRecovery: Bool
     ) {
         self.providerID = providerID
         self.base = base
-        self.isUserInitiated = isUserInitiated
         self.allowsClaudeRecovery = allowsClaudeRecovery
-        self.interactionBudget = allowsClaudeRecovery && isUserInitiated && providerID == .claude ? 1 : 0
+        self.interactionBudget = allowsClaudeRecovery && providerID == .claude ? 1 : 0
     }
 
     func session(allowInteraction: Bool, rejectedAccessToken: String?) async throws -> ClaudeSession {
         guard providerID == .claude else { throw deniedError }
         if allowInteraction {
-            guard allowsClaudeRecovery, isUserInitiated, interactionBudget > 0 else { throw deniedError }
+            guard allowsClaudeRecovery, interactionBudget > 0 else { throw deniedError }
             interactionBudget -= 1
         }
         return try await base.session(allowInteraction: allowInteraction, rejectedAccessToken: rejectedAccessToken)

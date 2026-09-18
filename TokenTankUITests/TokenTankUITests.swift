@@ -553,6 +553,46 @@ final class TokenTankUITests: XCTestCase {
         }
     }
 
+    func testClaudeRefreshAndQueuedRepairShowProgressInEnglishAndKorean() {
+        continueAfterFailure = false
+        defer { app.terminate() }
+
+        let locales = [
+            (language: "en", locale: "en_US", manual: false, progress: "Refreshing Claude usage", instruction: "approve native Keychain access"),
+            (language: "ko", locale: "ko_KR", manual: false, progress: "Claude 사용량 갱신 중", instruction: "네이티브 키체인 접근을 승인"),
+            (language: "en", locale: "en_US", manual: true, progress: "Repairing Claude connection", instruction: "approve native Keychain access"),
+            (language: "ko", locale: "ko_KR", manual: true, progress: "Claude 연결 복구 중", instruction: "네이티브 키체인 접근을 승인"),
+        ]
+
+        for locale in locales {
+            app.launchArguments = [
+                "-AppleLanguages", "(\(locale.language))",
+                "-AppleLocale", locale.locale,
+                "-appLanguage", locale.language,
+            ]
+            app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+            app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+            app.launchEnvironment["TOKENTANK_UI_CLAUDE_REFRESHING"] = locale.manual ? "0" : "1"
+            app.launchEnvironment["TOKENTANK_UI_CLAUDE_REPAIR_FAILURE"] = locale.manual ? "1" : "0"
+            app.launchEnvironment["TOKENTANK_UI_CLAUDE_REPAIR_PENDING"] = locale.manual ? "1" : "0"
+            app.launch()
+
+            let window = app.windows["Token Jar UI Test Detail"]
+            XCTAssertTrue(window.waitForExistence(timeout: timeout))
+            let claude = window.descendants(matching: .any)["provider.claude"]
+            let progress = claude.descendants(matching: .any)["provider.claude.refresh-progress"]
+            XCTAssertTrue(progress.waitForExistence(timeout: timeout))
+            let progressText = accessibilityText(progress)
+            XCTAssertTrue(progressText.contains(locale.progress), progressText)
+            XCTAssertTrue(progressText.contains(locale.instruction), progressText)
+            XCTAssertTrue(claude.descendants(matching: .any)["quota.ui-test.claude"].exists)
+            XCTAssertFalse(claude.descendants(matching: .any)["action.repairClaudeConnection"].exists)
+
+            app.terminate()
+            XCTAssertTrue(app.wait(for: .notRunning, timeout: timeout))
+        }
+    }
+
     func testCodexWeeklyAndTicketsUseTwoCompactColumns() {
         continueAfterFailure = false
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appLanguage", "en"]

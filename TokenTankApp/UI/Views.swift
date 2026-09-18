@@ -79,6 +79,7 @@ struct DetailPopoverView: View {
                                 now: context.date,
                                 retry: { model.refresh(providerID) },
                                 repairClaudeConnection: { model.repairClaudeConnection() },
+                                isClaudeRepairPending: providerID == .claude && model.isClaudeRepairPending,
                                 configure: { showSettings() }
                             )
                         }
@@ -267,6 +268,7 @@ struct ProviderDetailView: View {
     let now: Date
     let retry: () -> Void
     let repairClaudeConnection: () -> Void
+    let isClaudeRepairPending: Bool
     let configure: () -> Void
 
     var body: some View {
@@ -405,16 +407,25 @@ struct ProviderDetailView: View {
 
     @ViewBuilder
     private var statusView: some View {
-        switch state {
-        case .neverLoaded, .refreshing, .fresh:
-            EmptyView()
-        case let .stale(_, failure, _):
-            FailureView(providerID: providerID, failure: failure, retry: retry,
-                        repairClaudeConnection: repairClaudeConnection, configure: configure)
-        case let .authenticationActionRequired(_, failure):
-            FailureView(providerID: providerID, failure: failure, retry: retry,
-                        repairClaudeConnection: repairClaudeConnection, configure: configure)
+        if providerID == .claude && (isClaudeRepairPending || isRefreshing) {
+            ClaudeRefreshProgressView(isManualRepair: isClaudeRepairPending)
+        } else {
+            switch state {
+            case .neverLoaded, .refreshing, .fresh:
+                EmptyView()
+            case let .stale(_, failure, _):
+                FailureView(providerID: providerID, failure: failure, retry: retry,
+                            repairClaudeConnection: repairClaudeConnection, configure: configure)
+            case let .authenticationActionRequired(_, failure):
+                FailureView(providerID: providerID, failure: failure, retry: retry,
+                            repairClaudeConnection: repairClaudeConnection, configure: configure)
+            }
         }
+    }
+
+    private var isRefreshing: Bool {
+        if case .refreshing = state { return true }
+        return false
     }
 
     private var presentation: ProviderStatusPresentation {
@@ -579,6 +590,35 @@ private struct ProviderStatusPresentation {
     let identifier: String
 }
 
+private struct ClaudeRefreshProgressView: View {
+    let isManualRepair: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                if isManualRepair {
+                    Text("state.claude_repairing")
+                        .font(.callout.weight(.semibold))
+                } else {
+                    Text("state.claude_refreshing")
+                        .font(.callout.weight(.semibold))
+                }
+                Text("state.claude_refreshing.instruction")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("provider.claude.refresh-progress")
+    }
+}
+
 private struct FailureView: View {
     let providerID: ProviderID
     let failure: CollectionError
@@ -600,6 +640,13 @@ private struct FailureView: View {
                     .font(.caption2.monospaced())
                     .foregroundStyle(.secondary)
                     .privacySensitive()
+                if providerID == .claude && needsNativeKeychainGuidance {
+                    Text("error.claude_keychain_guidance")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier(identifier("error.claude-keychain-guidance"))
+                }
             }
 
             Spacer(minLength: 8)
@@ -642,6 +689,10 @@ private struct FailureView: View {
             .controlSize(.small)
             .accessibilityIdentifier(identifier("action.\(failure.recoveryAction.rawValue)"))
         }
+    }
+
+    private var needsNativeKeychainGuidance: Bool {
+        failure.kind == .keychainUnavailable || failure.kind == .permissionDenied
     }
 
     private var errorKey: LocalizedStringKey {

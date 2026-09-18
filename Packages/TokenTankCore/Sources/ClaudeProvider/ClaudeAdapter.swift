@@ -144,7 +144,7 @@ private func claudeSourceSession(
         throw CancellationError()
     } catch let error as CollectionError {
         guard error.recoveryAction == .repairClaudeConnection, repairAvailable else { throw error }
-        // A repair click grants one attempt, not permission for every reread or HTTP retry.
+        // Each collection grants one attempt, not permission for every reread or HTTP retry.
         repairAvailable = false
         try Task.checkCancellation()
         return try await context.claudeSession.session(

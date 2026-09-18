@@ -6,8 +6,8 @@ import TokenTankTestSupport
 
 @Suite("Refresh and persistence behavior", .serialized)
 struct RuntimeTests {
-    @Test("only dedicated Claude repair carries one-shot interaction authority")
-    func claudeRepairAuthorityBoundary() async throws {
+    @Test("every Claude collection carries bounded recovery without forging initiation")
+    func claudeRecoveryAuthorityBoundary() async throws {
         let sessions = RecordingClaudeSessions()
         let context = TestContextFactory.make(
             claudeSession: sessions,
@@ -22,7 +22,7 @@ struct RuntimeTests {
         await coordinator.repairClaudeConnection()
         await coordinator.refresh(.claude, userInitiated: true)
 
-        #expect(await sessions.interactions == [false, false, false, false, true, false])
+        #expect(await sessions.interactions == [false, true, false, true, false, true, false, true, false, true])
         guard case .fresh = await coordinator.state(for: .claude) else {
             Issue.record("Expected successful scoped session reads")
             return
@@ -53,6 +53,7 @@ struct RuntimeTests {
             isUserInitiated: false,
             allowsClaudeRecovery: true
         )
+        _ = try await background.claudeSession.session(allowInteraction: true, rejectedAccessToken: nil)
         #expect(await collectionError {
             _ = try await background.claudeSession.session(allowInteraction: true, rejectedAccessToken: nil)
         }?.diagnosticCode == "capability.claude-session.denied")
@@ -65,7 +66,7 @@ struct RuntimeTests {
         #expect(await collectionError {
             _ = try await nonClaude.claudeSession.session(allowInteraction: false, rejectedAccessToken: nil)
         }?.diagnosticCode == "capability.claude-session.denied")
-        #expect(await sessions.interactions == [false, false, false, false, true, false, true, false])
+        #expect(await sessions.interactions == [false, true, false, true, false, true, false, true, false, true, true, false, true])
     }
 
     @Test("transient failure retains the process-lifetime last success as stale")
@@ -305,7 +306,7 @@ struct RuntimeTests {
         await secondRepair.value
 
         #expect(await adapter.contexts == [
-            CollectionContextFlags(isUserInitiated: true, allowsClaudeRecovery: false),
+            CollectionContextFlags(isUserInitiated: true, allowsClaudeRecovery: true),
             CollectionContextFlags(isUserInitiated: true, allowsClaudeRecovery: true),
         ])
         #expect(await adapter.maximumConcurrentFetches == 1)
@@ -330,7 +331,7 @@ struct RuntimeTests {
         await stop.value
         await ordinary.value
         await repair.value
-        #expect(await adapter.contexts.map(\.allowsClaudeRecovery) == [false])
+        #expect(await adapter.contexts.map(\.allowsClaudeRecovery) == [true])
         // Restart creates a new ordinary collection, not a continuation of the old repair.
         await coordinator.start()
         #expect(await eventually { await adapter.contexts.count == 2 })
@@ -339,7 +340,7 @@ struct RuntimeTests {
             if case .fresh = await coordinator.state(for: .claude) { return true }
             return false
         })
-        #expect(await adapter.contexts.map(\.allowsClaudeRecovery) == [false, false])
+        #expect(await adapter.contexts.map(\.allowsClaudeRecovery) == [true, true])
         await coordinator.stop()
     }
 
@@ -366,7 +367,7 @@ struct RuntimeTests {
         }
         #expect(retained == snapshot)
         #expect(failure.diagnosticCode == repairFailure.diagnosticCode)
-        #expect(await adapter.contexts.map(\.allowsClaudeRecovery) == [false, true])
+        #expect(await adapter.contexts.map(\.allowsClaudeRecovery) == [true, true])
     }
 
     @Test("cancelling an explicit repair cancels its collection and never publishes late success")
@@ -389,7 +390,7 @@ struct RuntimeTests {
         #expect(await eventually { await adapter.contexts.count == 2 })
         await adapter.completeNext(with: .success(TestContextFactory.snapshot(providerID: .claude)))
         await ordinary.value
-        #expect(await adapter.contexts.map(\.allowsClaudeRecovery) == [true, false])
+        #expect(await adapter.contexts.map(\.allowsClaudeRecovery) == [true, true])
     }
 
     @Test("a suspended adapter does not lose completion delivered before fetch")
@@ -476,6 +477,55 @@ struct RuntimeTests {
             "schedule.cycle",
             "schedule.stopped",
         ])
+    }
+
+    @Test("scheduled Claude recovery renews once per five-minute collection after failure")
+    func scheduledClaudeRecoveryRenewsAfterFailure() async {
+        let clock = ManualClock()
+        let snapshot = TestContextFactory.snapshot(providerID: .claude)
+        let adapter = QueueProviderAdapter(
+            id: .claude,
+            results: [
+                .failure(CollectionError(
+                    kind: .authenticationRejected,
+                    diagnosticCode: "test.claude.recovery-failed",
+                    recoveryAction: .repairClaudeConnection
+                )),
+                .success(snapshot),
+            ]
+        )
+        let coordinator = RefreshCoordinator(
+            adapters: [adapter],
+            context: TestContextFactory.make(clock: clock)
+        )
+
+        await coordinator.start()
+        #expect(await eventually { await adapter.fetchCount == 1 })
+        #expect(await eventually { await clock.waitingCount == 1 })
+        #expect(await adapter.contexts == [
+            CollectionContextFlags(isUserInitiated: false, allowsClaudeRecovery: true),
+        ])
+
+        await clock.advance(by: .seconds(299))
+        await Task.yield()
+        #expect(await adapter.fetchCount == 1)
+
+        await clock.advance(by: .seconds(1))
+        #expect(await eventually { await adapter.fetchCount == 2 })
+        #expect(await eventually {
+            if case .fresh = await coordinator.state(for: .claude) { return true }
+            return false
+        })
+        await coordinator.stop()
+        #expect(await adapter.contexts == [
+            CollectionContextFlags(isUserInitiated: false, allowsClaudeRecovery: true),
+            CollectionContextFlags(isUserInitiated: false, allowsClaudeRecovery: true),
+        ])
+        guard case let .fresh(actual) = await coordinator.state(for: .claude) else {
+            Issue.record("Expected the next scheduled collection to recover")
+            return
+        }
+        #expect(actual == snapshot)
     }
 
     @Test("a slow collection skips missed intervals instead of catch-up bursting")

@@ -26,8 +26,8 @@ public struct ClaudeSession: Sendable, Equatable {
 }
 
 public protocol ClaudeSessionProviding: Sendable {
-    /// `false` performs read-only collection. `true` grants one explicit connection-repair
-    /// attempt; ordinary manual refresh must never grant this authority.
+    /// `false` performs a read-only lookup. `true` grants one bounded recovery attempt,
+    /// used when a scheduled collection or manual retry needs to repair the session.
     func session(allowInteraction: Bool, rejectedAccessToken: String?) async throws -> ClaudeSession
 }
 
@@ -280,12 +280,6 @@ actor NativeClaudeCredentialReader: ClaudeCredentialReading {
             return data
         case errSecItemNotFound:
             return nil
-        case errSecInteractionNotAllowed, errSecNotAvailable, errSecAuthFailed, errSecUserCanceled:
-            throw CollectionError(
-                kind: .keychainUnavailable,
-                diagnosticCode: "claude.session.keychain.unavailable",
-                recoveryAction: .retry
-            )
         default:
             throw CollectionError(
                 kind: .keychainUnavailable,
@@ -309,16 +303,24 @@ enum ClaudeNativeKeychainAccess {
         guard SecKeychainGetUserInteractionAllowed(&previous) == errSecSuccess else {
             throw policyError()
         }
-        if !allowInteraction {
-            guard SecKeychainSetUserInteractionAllowed(false) == errSecSuccess else {
-                throw policyError()
+        if allowInteraction {
+            // A native call may outlive its async waiter. Never leave the host's
+            // process-wide policy enabled after timeout/cancellation by overriding it.
+            guard previous.boolValue else {
+                throw CollectionError(
+                    kind: .keychainUnavailable,
+                    diagnosticCode: "claude.session.keychain.interaction-policy-disabled",
+                    recoveryAction: .repairClaudeConnection
+                )
             }
+            return try operation()
+        }
+        guard SecKeychainSetUserInteractionAllowed(false) == errSecSuccess else {
+            throw policyError()
         }
         let result = Result { try operation() }
-        if !allowInteraction {
-            guard SecKeychainSetUserInteractionAllowed(previous.boolValue) == errSecSuccess else {
-                throw policyError()
-            }
+        guard SecKeychainSetUserInteractionAllowed(previous.boolValue) == errSecSuccess else {
+            throw policyError()
         }
         return try result.get()
     }

@@ -7,7 +7,7 @@ import TokenTankDomain
 
 @MainActor
 final class AppModelTests: XCTestCase {
-    func testClaudeRepairAuthorityIsSeparateFromOrdinaryRefresh() async {
+    func testClaudeCollectionsAlwaysAllowRecoveryWithoutChangingUserInitiation() async {
         let snapshot = makeSnapshot(providerID: .claude, percentage: 24)
         let adapter = TestAppAdapter(id: .claude, results: [
             .success(snapshot),
@@ -31,7 +31,7 @@ final class AppModelTests: XCTestCase {
         let startupUserInitiated = await adapter.userInitiatedValues
         let startupRecovery = await adapter.claudeRecoveryValues
         XCTAssertEqual(startupUserInitiated, [false])
-        XCTAssertEqual(startupRecovery, [false])
+        XCTAssertEqual(startupRecovery, [true])
 
         model.refresh(.claude)
         let singleRefreshed = await eventually {
@@ -46,7 +46,7 @@ final class AppModelTests: XCTestCase {
         let ordinaryUserInitiated = await adapter.userInitiatedValues
         let ordinaryRecovery = await adapter.claudeRecoveryValues
         XCTAssertEqual(ordinaryUserInitiated, [false, true, true])
-        XCTAssertEqual(ordinaryRecovery, [false, false, false])
+        XCTAssertEqual(ordinaryRecovery, [true, true, true])
 
         model.repairClaudeConnection()
         let repaired = await eventually {
@@ -56,8 +56,62 @@ final class AppModelTests: XCTestCase {
         let repairedUserInitiated = await adapter.userInitiatedValues
         let repairedRecovery = await adapter.claudeRecoveryValues
         XCTAssertEqual(repairedUserInitiated, [false, true, true, true])
-        XCTAssertEqual(repairedRecovery, [false, false, false, true])
+        XCTAssertEqual(repairedRecovery, [true, true, true, true])
         await model.stop()
+    }
+
+    func testClaudeRepairPublishesBusyStateDeduplicatesAndClearsWhenSettledOrStopped() async {
+        let initial = makeSnapshot(providerID: .claude, percentage: 20)
+        let repaired = makeSnapshot(providerID: .claude, percentage: 21)
+        let adapter = ManualRepairGatedAdapter(initial: initial)
+        let credentials = InMemoryCredentialStore()
+        let model = AppModel(
+            adapters: [adapter],
+            credentialStore: credentials,
+            preferencesStore: MemoryPreferencesStore(),
+            context: makeContext(credentials: credentials)
+        )
+
+        model.ensureStarted()
+        let initialFetchStarted = await eventually { await adapter.fetchCount == 1 }
+        XCTAssertTrue(initialFetchStarted)
+        let initialLoaded = await eventually {
+            if case .fresh = model.states[.claude] { return true }
+            return false
+        }
+        XCTAssertTrue(initialLoaded)
+
+        model.repairClaudeConnection()
+        XCTAssertTrue(model.isClaudeRepairPending)
+        model.repairClaudeConnection()
+        let firstRepairStarted = await eventually { await adapter.fetchCount == 2 }
+        XCTAssertTrue(firstRepairStarted)
+        for _ in 0..<20 { await Task.yield() }
+        let duplicateFetchCount = await adapter.fetchCount
+        XCTAssertEqual(duplicateFetchCount, 2)
+
+        await adapter.completeNext(with: .failure(CollectionError(
+            kind: .permissionDenied,
+            diagnosticCode: "test.claude.keychain-denied",
+            recoveryAction: .repairClaudeConnection
+        )))
+        let failureSettled = await eventually { !model.isClaudeRepairPending }
+        XCTAssertTrue(failureSettled)
+
+        model.repairClaudeConnection()
+        XCTAssertTrue(model.isClaudeRepairPending)
+        let secondRepairStarted = await eventually { await adapter.fetchCount == 3 }
+        XCTAssertTrue(secondRepairStarted)
+        await adapter.completeNext(with: .success(repaired))
+        let successSettled = await eventually { !model.isClaudeRepairPending }
+        XCTAssertTrue(successSettled)
+
+        model.repairClaudeConnection()
+        XCTAssertTrue(model.isClaudeRepairPending)
+        let finalRepairStarted = await eventually { await adapter.fetchCount == 4 }
+        XCTAssertTrue(finalRepairStarted)
+        await model.stop()
+        XCTAssertFalse(model.isClaudeRepairPending)
     }
 
     func testWholeProviderFailuresMarkEveryRetainedAccountStale() {
@@ -751,6 +805,7 @@ final class AppModelTests: XCTestCase {
             "error.schema": ("Data format changed", "데이터 형식 변경됨"),
             "error.permission": ("Permission required", "권한 필요"),
             "error.keychain": ("Keychain unavailable", "키체인을 사용할 수 없음"),
+            "error.claude_keychain_guidance": ("Approve Token Jar’s native Keychain access prompt when macOS shows it. If access is not approved, automatic recovery will try again on the next refresh cycle.", "macOS가 표시하는 토큰 항아리의 네이티브 키체인 접근 요청을 승인하세요. 접근이 승인되지 않으면 다음 갱신 주기에 자동 복구를 다시 시도합니다."),
             "action.retry": ("Retry", "다시 시도"),
             "action.repair_claude_connection": ("Repair Claude Connection", "Claude 연결 복구"),
             "action.repair_claude_connection.help": ("Deliberately repair the Claude connection. This may ask for Keychain permission or run Claude Code.", "Claude 연결을 명시적으로 복구합니다. 키체인 권한을 요청하거나 Claude Code를 실행할 수 있습니다."),
@@ -759,6 +814,9 @@ final class AppModelTests: XCTestCase {
             "action.sign_in_token_tank": ("Sign in to Token Jar", "토큰 항아리에서 로그인"),
             "action.allow_system_settings": ("Allow access in System Settings", "시스템 설정에서 접근 허용"),
             "state.selected_unavailable": ("Selected quota unavailable", "선택한 할당량을 사용할 수 없음"),
+            "state.claude_refreshing": ("Refreshing Claude usage…", "Claude 사용량 갱신 중…"),
+            "state.claude_refreshing.instruction": ("Keep Claude Code signed in. If macOS asks, approve native Keychain access.", "Claude Code 로그인 상태를 유지하세요. macOS가 요청하면 네이티브 키체인 접근을 승인하세요."),
+            "state.claude_repairing": ("Repairing Claude connection…", "Claude 연결 복구 중…"),
             "settings.representative.none": ("Choose another", "다시 선택"),
         ]
         for (key, expected) in frozen {
@@ -1486,6 +1544,51 @@ private actor TestAppAdapter: ProviderAdapter {
             throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "test.no-result")
         }
         return try results.removeFirst().get()
+    }
+}
+
+private actor ManualRepairGatedAdapter: ProviderAdapter {
+    nonisolated let id: ProviderID = .claude
+    nonisolated let displayName = ProviderID.claude.displayName
+    nonisolated let defaultAbbreviation = ProviderID.claude.defaultAbbreviation
+    nonisolated let sourceDescriptor: ProviderSourceDescriptor
+    private let initial: ProviderSnapshot
+    private var continuations: [CheckedContinuation<ProviderSnapshot, Error>] = []
+    private(set) var fetchCount = 0
+
+    init(initial: ProviderSnapshot) {
+        self.initial = initial
+        self.sourceDescriptor = initial.source
+    }
+
+    func probeAvailability(context: CollectionContext) -> ProviderAvailability {
+        .available(sourceDescriptor)
+    }
+
+    func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
+        fetchCount += 1
+        if fetchCount == 1 { return initial }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                continuations.append(continuation)
+            }
+        } onCancel: {
+            Task { await self.cancelNext() }
+        }
+    }
+
+    func completeNext(with result: Result<ProviderSnapshot, CollectionError>) {
+        guard !continuations.isEmpty else { return }
+        let continuation = continuations.removeFirst()
+        switch result {
+        case let .success(snapshot): continuation.resume(returning: snapshot)
+        case let .failure(error): continuation.resume(throwing: error)
+        }
+    }
+
+    private func cancelNext() {
+        guard !continuations.isEmpty else { return }
+        continuations.removeFirst().resume(throwing: CancellationError())
     }
 }
 @MainActor

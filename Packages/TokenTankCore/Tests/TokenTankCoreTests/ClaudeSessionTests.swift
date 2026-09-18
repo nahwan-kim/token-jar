@@ -53,6 +53,8 @@ struct ClaudeSessionTests {
     func legacyKeychainInteractionPolicy() throws {
         var previous: DarwinBoolean = false
         #expect(SecKeychainGetUserInteractionAllowed(&previous) == errSecSuccess)
+        defer { _ = SecKeychainSetUserInteractionAllowed(previous.boolValue) }
+        #expect(SecKeychainSetUserInteractionAllowed(true) == errSecSuccess)
         let value = try ClaudeNativeKeychainAccess.perform(allowInteraction: false) {
             var current: DarwinBoolean = true
             #expect(SecKeychainGetUserInteractionAllowed(&current) == errSecSuccess)
@@ -62,7 +64,7 @@ struct ClaudeSessionTests {
         #expect(value == "read-only")
         var restored: DarwinBoolean = false
         #expect(SecKeychainGetUserInteractionAllowed(&restored) == errSecSuccess)
-        #expect(restored.boolValue == previous.boolValue)
+        #expect(restored.boolValue)
         enum Failure: Error { case expected }
         #expect(throws: Failure.self) {
             try ClaudeNativeKeychainAccess.perform(allowInteraction: false) {
@@ -70,11 +72,111 @@ struct ClaudeSessionTests {
             }
         }
         #expect(SecKeychainGetUserInteractionAllowed(&restored) == errSecSuccess)
-        #expect(restored.boolValue == previous.boolValue)
+        #expect(restored.boolValue)
         try ClaudeNativeKeychainAccess.perform(allowInteraction: true) {
             var manual: DarwinBoolean = false
             #expect(SecKeychainGetUserInteractionAllowed(&manual) == errSecSuccess)
-            #expect(manual.boolValue == previous.boolValue)
+            #expect(manual.boolValue)
+        }
+    }
+
+    @Test("recovery refuses a disabled process policy before starting native work")
+    func repairPreservesDisabledNativeInteraction() async throws {
+        var previous: DarwinBoolean = false
+        #expect(SecKeychainGetUserInteractionAllowed(&previous) == errSecSuccess)
+        defer { _ = SecKeychainSetUserInteractionAllowed(previous.boolValue) }
+        #expect(SecKeychainSetUserInteractionAllowed(false) == errSecSuccess)
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lookup = GatedNativeKeychainLookup(late: nil, recovered: nil)
+        // If the policy gate regresses, the fixture remains bounded and never
+        // touches actual credentials or presents a system authorization dialog.
+        lookup.releaseFirst()
+        let reader = NativeClaudeCredentialReader(
+            homeDirectory: root,
+            manualTimeout: 0.1,
+            keychainLookup: { allowed in
+                try ClaudeNativeKeychainAccess.perform(allowInteraction: allowed) {
+                    lookup.read(allowInteraction: allowed)
+                }
+            }
+        )
+        for _ in 0..<2 {
+            await expectError(.keychainUnavailable,
+                              code: "claude.session.keychain.interaction-policy-disabled",
+                              recoveryAction: .repairClaudeConnection) {
+                try await reader.readKeychain(allowInteraction: true)
+            }
+            var current: DarwinBoolean = true
+            #expect(SecKeychainGetUserInteractionAllowed(&current) == errSecSuccess)
+            #expect(!current.boolValue)
+        }
+        #expect(lookup.callCount == 0)
+    }
+
+    @Test("timed-out or cancelled interactive lookup preserves policy and suppresses replacement work")
+    func interactiveLookupLifetimeDoesNotEscalatePolicy() async throws {
+        var previous: DarwinBoolean = false
+        #expect(SecKeychainGetUserInteractionAllowed(&previous) == errSecSuccess)
+        defer { _ = SecKeychainSetUserInteractionAllowed(previous.boolValue) }
+        #expect(SecKeychainSetUserInteractionAllowed(true) == errSecSuccess)
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for cancel in [false, true] {
+            let lookup = GatedNativeKeychainLookup(late: Data("discard-late-value".utf8), recovered: nil)
+            let workerFinished = DispatchSemaphore(value: 0)
+            let reader = NativeClaudeCredentialReader(
+                homeDirectory: root,
+                manualTimeout: cancel ? 2 : 0.1,
+                keychainLookup: { allowed in
+                    defer { workerFinished.signal() }
+                    return try ClaudeNativeKeychainAccess.perform(allowInteraction: allowed) {
+                        lookup.read(allowInteraction: allowed)
+                    }
+                }
+            )
+            let task = Task { try await reader.readKeychain(allowInteraction: true) }
+            await lookup.waitForCalls(1)
+            if cancel {
+                task.cancel()
+                await expectCancellation { try await task.value }
+            } else {
+                await expectError(.keychainUnavailable, code: "claude.session.keychain.timeout", recoveryAction: .retry) {
+                    try await task.value
+                }
+            }
+            var current: DarwinBoolean = false
+            #expect(SecKeychainGetUserInteractionAllowed(&current) == errSecSuccess)
+            #expect(current.boolValue)
+            await expectError(.keychainUnavailable, code: "claude.session.keychain.query-in-flight", recoveryAction: .retry) {
+                try await reader.readKeychain(allowInteraction: true)
+            }
+            #expect(lookup.callCount == 1)
+            lookup.releaseFirst()
+            let finished = await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    continuation.resume(returning: workerFinished.wait(timeout: .now() + 2) == .success)
+                }
+            }
+            #expect(finished)
+            #expect(SecKeychainGetUserInteractionAllowed(&current) == errSecSuccess)
+            #expect(current.boolValue)
+        }
+    }
+
+    @Test("native Keychain failures retain the OS status rather than collapsing distinct causes")
+    func nativeKeychainFailureDiagnostics() {
+        for status in [errSecInteractionNotAllowed, errSecNotAvailable, errSecAuthFailed, errSecUserCanceled] {
+            do {
+                _ = try NativeClaudeCredentialReader.readNativeKeychain(allowInteraction: false) { _, _ in status }
+                Issue.record("Expected native Keychain failure")
+            } catch let error as CollectionError {
+                #expect(error.kind == .keychainUnavailable)
+                #expect(error.diagnosticCode == "claude.session.keychain.status-\(status)")
+                #expect(error.recoveryAction == .retry)
+            } catch {
+                Issue.record("Unexpected error: \(error)")
+            }
         }
     }
     @Test("MCP-only file permits the separate native Claude AI Keychain session")
@@ -327,7 +429,7 @@ struct ClaudeSessionTests {
         #expect(await refresher.count == 0)
     }
 
-    @Test("expired credentials remain read-only and require explicit repair")
+    @Test("read-only lookup of expired credentials reports recovery required")
     func expiredReadOnlyRequiresRepair() async {
         let reader = ClaudeTestCredentialReader(
             file: .success(credentials(token: "old", expiry: now)),
@@ -347,7 +449,7 @@ struct ClaudeSessionTests {
         #expect(await reader.interactionFlags == [false])
     }
 
-    @Test("near-expiry credentials remain read-only and require explicit repair")
+    @Test("read-only lookup of near-expiry credentials reports recovery required")
     func nearExpiryReadOnlyRequiresRepair() async {
         let reader = ClaudeTestCredentialReader(
             file: .success(credentials(token: "near", expiry: now.addingTimeInterval(60))),
@@ -363,7 +465,7 @@ struct ClaudeSessionTests {
         #expect(await reader.interactionFlags == [false])
     }
 
-    @Test("an explicitly rejected token remains read-only and requires explicit repair")
+    @Test("read-only lookup of a rejected token reports recovery required")
     func rejectedTokenReadOnlyRequiresRepair() async {
         let reader = ClaudeTestCredentialReader(
             file: .success(credentials(token: "rejected", expiry: now.addingTimeInterval(300))),
@@ -379,7 +481,7 @@ struct ClaudeSessionTests {
         #expect(await reader.interactionFlags == [false])
     }
 
-    @Test("explicit repair rotates through the owner with one interactive lookup")
+    @Test("authorized recovery rotates through the owner with one interactive lookup")
     func explicitRepairSuccess() async throws {
         let reader = ClaudeTestCredentialReader(
             file: .success(nil),
@@ -521,7 +623,7 @@ struct ClaudeSessionTests {
         #expect(await refresher.count == 0)
     }
 
-    @Test("explicit repair rejects an unchanged token after one owner refresh")
+    @Test("authorized recovery rejects an unchanged token after one owner refresh")
     func repairUnchangedFailsClosed() async {
         let reader = ClaudeTestCredentialReader(
             file: .success(nil),
@@ -583,8 +685,8 @@ struct ClaudeSessionTests {
         #expect(await reader.interactionFlags == [true])
     }
 
-    @Test("failed explicit repair is retried only by another explicit repair")
-    func failedRepairRequiresAnotherExplicitAction() async {
+    @Test("a read-only lookup does not repeat a failed authorized recovery")
+    func readOnlyLookupDoesNotRepeatFailedRecovery() async {
         let reader = ClaudeTestCredentialReader(
             file: .success(credentials(token: "old", expiry: now.addingTimeInterval(300))),
             keychain: .success(nil)
@@ -793,7 +895,7 @@ struct ClaudeSessionTests {
         #expect(try await provider.session(allowInteraction: false, rejectedAccessToken: nil).accessToken == "new")
     }
 
-    @Test("concurrent explicit repairs coalesce before the initial authorization prompt finishes")
+    @Test("concurrent recoveries coalesce before the initial authorization prompt finishes")
     func concurrentRepairsCoalesceInitialPrompt() async throws {
         let old = credentials(token: "old", expiry: now)
         let replacement = credentials(token: "new", expiry: now.addingTimeInterval(120))

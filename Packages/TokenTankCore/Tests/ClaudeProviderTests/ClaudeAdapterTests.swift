@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 @testable import ClaudeProvider
-import TokenTankCore
+@testable import TokenTankCore
 import TokenTankDomain
 import TokenTankTestSupport
 
@@ -298,8 +298,8 @@ struct ClaudeAdapterTests {
         }
     }
 
-    @Test("ordinary refresh never authorizes repair for expired or inaccessible credentials")
-    func ordinaryRefreshCannotRepair() async {
+    @Test("a context without recovery capability cannot initiate repair")
+    func missingRecoveryCapabilityCannotRepair() async {
         for userInitiated in [false, true] {
             for kind in [CollectionErrorKind.authenticationRejected, .keychainUnavailable] {
                 let failure = CollectionError(kind: kind, diagnosticCode: "test.repair-required",
@@ -310,7 +310,7 @@ struct ClaudeAdapterTests {
                     _ = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
                         network: network, claudeSession: sessions, isUserInitiated: userInitiated
                     ))
-                    Issue.record("Expected explicit repair requirement")
+                    Issue.record("Expected recovery capability requirement")
                 } catch let error as CollectionError {
                     #expect(error == failure)
                 } catch {
@@ -349,7 +349,7 @@ struct ClaudeAdapterTests {
         }
     }
 
-    @Test("a repair click cannot authorize another repair after the renewed token receives 401")
+    @Test("one collection cannot authorize another repair after the renewed token receives 401")
     func repairBudgetSurvivesHTTPRetry() async {
         let failure = CollectionError(kind: .authenticationRejected, diagnosticCode: "test.repair-required",
                                       recoveryAction: .repairClaudeConnection)
@@ -392,14 +392,16 @@ struct ClaudeAdapterTests {
         }
     }
 
-    @Test("denied explicit repair keeps the captured snapshot stale and later refresh stays silent")
+    @Test("denied repair retains usage and the next background collection retries recovery")
     func deniedRepairRetainsLastGoodUsage() async {
         let failure = CollectionError(kind: .keychainUnavailable, diagnosticCode: "test.keychain.denied",
                                       recoveryAction: .repairClaudeConnection)
         let sessions = MemoryClaudeSessionProvider(results: [
-            .success(session), .failure(failure), .failure(failure), .failure(failure),
+            .success(session), .failure(failure), .failure(failure), .failure(failure), .success(session),
         ])
         let network = QueueNetworkClient(results: [
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
             .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
             .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
         ])
@@ -416,10 +418,130 @@ struct ClaudeAdapterTests {
         }
         #expect(previous == captured)
         #expect(error == failure)
-        await coordinator.refresh(.claude, userInitiated: true)
-        #expect(await sessions.allowInteractionRequests == [false, false, true, false])
+        await coordinator.refresh(.claude)
+        #expect(await sessions.allowInteractionRequests == [false, false, true, false, true])
+        #expect(await network.requests.count == 4)
+        guard case let .fresh(recovered) = await coordinator.state(for: .claude) else {
+            Issue.record("Expected next background collection to recover without a repair click")
+            return
+        }
+        #expect(recovered.quotas == captured?.quotas)
+        #expect(recovered.refreshedAt == now)
+    }
+
+    @Test("background collection repairs an inaccessible native Keychain session before fetching usage")
+    func backgroundCollectionAuthorizesNativeKeychain() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let data = try JSONSerialization.data(withJSONObject: [
+            "claudeAiOauth": [
+                "accessToken": session.accessToken,
+                "expiresAt": session.expiresAt.timeIntervalSince1970 * 1_000,
+                "scopes": ["user:profile"],
+            ]
+        ])
+        let reader = NativeClaudeCredentialReader(homeDirectory: root, keychainLookup: { allowed in
+            guard allowed else {
+                throw CollectionError(kind: .keychainUnavailable,
+                                      diagnosticCode: "claude.session.keychain.unavailable")
+            }
+            return data
+        })
+        let refresher = CountingAuthRefresher()
+        let clock = ManualClock(now: now)
+        let sessions = ClaudeCodeSessionProvider(clock: clock, credentials: reader, refresher: refresher)
+        let network = QueueNetworkClient(results: [
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+        ])
+        let coordinator = RefreshCoordinator(adapters: [ClaudeAdapter()], context: TestContextFactory.make(
+            network: network, claudeSession: sessions, clock: clock
+        ))
+
+        await coordinator.refresh(.claude)
+
+        guard case let .fresh(snapshot) = await coordinator.state(for: .claude) else {
+            Issue.record("Expected automatic Keychain authorization instead of a stuck repair-required state")
+            return
+        }
+        #expect(snapshot.quotas.first?.percentage.value == 24)
         #expect(await network.requests.count == 2)
-        #expect(await coordinator.state(for: .claude).snapshot?.refreshedAt == now)
+        #expect(await refresher.count == 0)
+    }
+
+    private actor CountingAuthRefresher: ClaudeAuthRefreshing {
+        private(set) var count = 0
+        func refresh() { count += 1 }
+    }
+
+    @Test("background collection renews expired or HTTP-rejected credentials once through their owner")
+    func backgroundCollectionRenewsOwnerSession() async throws {
+        for rejectedByHTTP in [false, true] {
+            func credentials(_ token: String, expiresAt: Date) throws -> Data {
+                try JSONSerialization.data(withJSONObject: [
+                    "claudeAiOauth": [
+                        "accessToken": token,
+                        "expiresAt": expiresAt.timeIntervalSince1970 * 1_000,
+                        "scopes": ["user:profile"],
+                    ]
+                ])
+            }
+            let owner = RotatingCredentialOwner(
+                initial: try credentials("old-token", expiresAt: rejectedByHTTP ? now.addingTimeInterval(300) : now),
+                renewed: try credentials("new-token", expiresAt: now.addingTimeInterval(3600))
+            )
+            let clock = ManualClock(now: now)
+            let sessions = ClaudeCodeSessionProvider(clock: clock, credentials: owner, refresher: owner)
+            var responses: [Result<NetworkResponse, CollectionError>] = [
+                .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+                .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+            ]
+            if rejectedByHTTP {
+                responses.insert(.success(NetworkResponse(statusCode: 401, headers: [:], body: Data())), at: 0)
+            }
+            let network = QueueNetworkClient(results: responses)
+            let coordinator = RefreshCoordinator(adapters: [ClaudeAdapter()], context: TestContextFactory.make(
+                network: network, claudeSession: sessions, clock: clock
+            ))
+
+            await coordinator.refresh(.claude)
+
+            guard case let .fresh(snapshot) = await coordinator.state(for: .claude) else {
+                Issue.record("Expected automatic owner renewal without a repair click")
+                continue
+            }
+            #expect(snapshot.quotas.first?.percentage.value == 24)
+            #expect(await owner.refreshCount == 1)
+            #expect(await owner.interactionFlags == [false, true, false])
+            #expect(await network.requests.map { $0.headers["Authorization"] } == (
+                rejectedByHTTP
+                    ? ["Bearer old-token", "Bearer new-token", "Bearer new-token"]
+                    : ["Bearer new-token", "Bearer new-token"]
+            ))
+        }
+    }
+
+    private actor RotatingCredentialOwner: ClaudeCredentialReading, ClaudeAuthRefreshing {
+        private var file: Data
+        private let renewed: Data
+        private(set) var refreshCount = 0
+        private(set) var interactionFlags: [Bool] = []
+
+        init(initial: Data, renewed: Data) {
+            self.file = initial
+            self.renewed = renewed
+        }
+
+        func readFile() -> Data? { file }
+        func readKeychain(allowInteraction: Bool) -> Data? {
+            interactionFlags.append(allowInteraction)
+            return nil
+        }
+        func refresh() {
+            refreshCount += 1
+            file = renewed
+        }
     }
 
     @Test("the single retry preserves scope, rate-limit, network, and malformed-response failures")
