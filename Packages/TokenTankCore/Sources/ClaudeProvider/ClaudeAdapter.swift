@@ -110,6 +110,9 @@ public struct ClaudeAdapter: ProviderAdapter {
         guard let grants = grantsValue as? [Any] else {
             throw claudeSchemaError("claude.oauth.reset-credits.grants-invalid")
         }
+        if grants.isEmpty, (ember["eligible"] as? NSNumber)?.boolValue != true {
+            return []
+        }
 
         var rows: [RawQuotaItem] = []
         var grantIDs: Set<String> = []

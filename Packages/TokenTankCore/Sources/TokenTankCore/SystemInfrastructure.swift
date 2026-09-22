@@ -64,7 +64,9 @@ public actor URLSessionNetworkClient: NetworkClient {
         urlRequest.httpMethod = request.method.rawValue
         urlRequest.httpBody = request.body
         urlRequest.timeoutInterval = request.timeout
-        urlRequest.cachePolicy = .reloadIgnoringLocalCacheData
+        urlRequest.cachePolicy = request.providerID == .claude && request.url.path == "/api/oauth/usage"
+            ? .reloadIgnoringLocalAndRemoteCacheData
+            : .reloadIgnoringLocalCacheData
         for (name, value) in request.headers {
             urlRequest.setValue(value, forHTTPHeaderField: name)
         }

@@ -763,6 +763,41 @@ struct ClaudeAdapterTests {
         #expect(overCap.quotas[0].remaining == nil)
     }
 
+    @Test("each poll replaces reset counts and a failed optional request never reuses an older count")
+    func resetCountsAreReadAgainEachPoll() async throws {
+        let counts: [Int?] = [2, 1, 0, nil, 3]
+        let sessions = MemoryClaudeSessionProvider(results: counts.map { _ in .success(session) })
+        var results: [Result<NetworkResponse, CollectionError>] = []
+        for count in counts {
+            results.append(.success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)))
+            results.append(.success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))))
+            if let count {
+                let body = Data("{\"cedar_ember\":{\"eligible\":true,\"grants\":[{\"id\":\"ticket\",\"resets_left\":\(count)}]}}".utf8)
+                results.append(.success(NetworkResponse(statusCode: 200, headers: [:], body: body)))
+            } else {
+                results.append(.failure(CollectionError(kind: .transientNetwork, diagnosticCode: "test.reset.offline")))
+            }
+        }
+        let network = QueueNetworkClient(results: results)
+        let coordinator = RefreshCoordinator(
+            adapters: [ClaudeAdapter()],
+            context: TestContextFactory.make(network: network, claudeSession: sessions)
+        )
+        for expected in counts {
+            await coordinator.refresh(.claude)
+            guard case let .fresh(snapshot) = await coordinator.state(for: .claude) else {
+                Issue.record("Primary usage should remain fresh")
+                return
+            }
+            let count = snapshot.quotas.first { $0.id.rawValue == "rateLimitResetCredits" }?.remaining?.value
+            #expect(count == expected.map { Decimal($0) })
+            #expect(snapshot.accounts.first?.quotas == snapshot.quotas)
+        }
+        let requests = await network.requests
+        #expect(requests.count == 15)
+        #expect(requests.filter { $0.url.query == "cedar_ember=1&skip_spend=1" }.count == 5)
+        #expect(await sessions.allowInteractionRequests == [false, false, false, false, false])
+    }
     @Test("reset credits preserve exact counts, dates, and safe source fields")
     func resetCreditsDecode() throws {
         let body = Data(
@@ -794,11 +829,18 @@ struct ClaudeAdapterTests {
         #expect(rows[1].sourceFields["secret"] == nil)
     }
 
-    @Test("empty grants are explicit zero while absent or null optional data stays unknown")
+    @Test("only eligible empty grants prove zero; gated or absent data remains unknown")
     func resetCreditsEmptyAndUnknown() throws {
         for body in ["{}", "{\"cedar_ember\":null}", "{\"cedar_ember\":{}}", "{\"cedar_ember\":{\"grants\":null}}"] {
             #expect(try ClaudeAdapter.decodeResetCredits(from: Data(body.utf8)).isEmpty)
         }
+        for reason in ["surface", "cli_version", "unavailable", "no_grant"] {
+            let gated = Data("{\"cedar_ember\":{\"eligible\":false,\"ineligible_reason\":\"\(reason)\",\"grants\":[]}}".utf8)
+            #expect(try ClaudeAdapter.decodeResetCredits(from: gated).isEmpty)
+        }
+        #expect(try ClaudeAdapter.decodeResetCredits(
+            from: Data("{\"cedar_ember\":{\"grants\":[]}}".utf8)
+        ).isEmpty)
         let rows = try ClaudeAdapter.decodeResetCredits(
             from: Data("{\"cedar_ember\":{\"eligible\":true,\"grants\":[]}}".utf8)
         )
@@ -844,6 +886,7 @@ struct ClaudeAdapterTests {
             .failure(CollectionError(kind: .transientNetwork, diagnosticCode: "test.optional.failed")),
             .success(NetworkResponse(statusCode: 401, headers: [:], body: Data("secret".utf8))),
             .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{\"cedar_ember\":{\"grants\":[{}]}}".utf8))),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{\"cedar_ember\":{\"eligible\":false,\"ineligible_reason\":\"surface\",\"grants\":[]}}".utf8))),
         ]
         for optionalResponse in responses {
             let sessions = MemoryClaudeSessionProvider(results: [.success(session)])

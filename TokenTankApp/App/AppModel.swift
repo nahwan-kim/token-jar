@@ -799,6 +799,11 @@ final class AppModel: ObservableObject {
                 }
             }
             if providerID == .claude {
+                quotas.insert(RawQuotaItem(
+                    id: "ui-test.claude.session", originalName: "session", used: nil, remaining: nil,
+                    percentage: SourcePercentage(value: 7, rawText: "7", meaning: .used),
+                    resetsAt: now.addingTimeInterval(3600)
+                ), at: 0)
                 quotas.append(RawQuotaItem(
                     id: "ui-test.claude.fable",
                     originalName: "weekly_scoped.Fable",
@@ -934,6 +939,8 @@ final class AppModel: ObservableObject {
             )
         } else if isClaudeRefreshing {
             claudeState = .refreshing(previous: claude)
+        } else if ProcessInfo.processInfo.environment["TOKENTANK_UI_CLAUDE_FRESH"] == "1" {
+            claudeState = .fresh(claude)
         } else {
             claudeState = .stale(
                 snapshot: claude,

@@ -224,7 +224,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(QuotaDisplayFormatter.ticketExpiry(nil), "—")
     }
 
-    func testClaudeResetTicketsExcludeSpentExpiredAndFutureGrants() {
+    func testClaudeResetTicketsPreservePublishedCountsRegardlessOfLocalDates() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let summary = RawQuotaItem(
             id: "rateLimitResetCredits", originalName: "tickets", used: nil,
@@ -255,18 +255,64 @@ final class AppModelTests: XCTestCase {
         ]
         let rows = [summary] + grants
         let result = QuotaDisplayFormatter.resetCredits(rows, now: now)
-        XCTAssertEqual(result.count, 3)
+        XCTAssertEqual(result.count, 20)
         XCTAssertEqual(result.expiresAt, now.addingTimeInterval(3600))
-        XCTAssertEqual(QuotaDisplayFormatter.resetCredits(rows, now: now.addingTimeInterval(1)).count, 11)
+        XCTAssertEqual(QuotaDisplayFormatter.resetCredits(rows, now: now.addingTimeInterval(1)).count, 20)
         let expired = QuotaDisplayFormatter.resetCredits(rows, now: now.addingTimeInterval(7200))
-        XCTAssertEqual(expired.count, 1)
+        XCTAssertEqual(expired.count, 20)
         XCTAssertNil(expired.expiresAt)
-        XCTAssertEqual(QuotaDisplayFormatter.resetCredits([summary], now: now).count, 0)
+        XCTAssertEqual(QuotaDisplayFormatter.resetCredits([summary], now: now).count, 20)
         XCTAssertNil(QuotaDisplayFormatter.resetCredits([], now: now).count)
         XCTAssertTrue(QuotaDisplayFormatter.displayedQuotas(rows, providerID: .claude).isEmpty)
         let extra = RawQuotaItem(id: "extra", originalName: "extra_usage", used: nil, remaining: nil,
                                  percentage: .missing(meaning: .used), resetsAt: nil)
         XCTAssertEqual(QuotaDisplayFormatter.displayedQuotas(rows + [extra], providerID: .claude), [extra])
+    }
+
+    func testClaudeResetTicketsAttachOnlyToFiveHourQuota() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        for name in ["session", "five_hour", "weekly_all", "seven_day", "weekly_scoped.Fable"] {
+            let quota = RawQuotaItem(id: RawQuotaID(rawValue: name), originalName: name,
+                                     used: nil, remaining: nil,
+                                     percentage: .missing(meaning: .used), resetsAt: nil)
+            let tickets = QuotaDisplayFormatter.claudeResetCredits(for: quota, state: .neverLoaded, now: now)
+            if name == "session" || name == "five_hour" {
+                XCTAssertNotNil(tickets)
+                XCTAssertNil(tickets?.count)
+            } else {
+                XCTAssertNil(tickets)
+            }
+        }
+    }
+
+    func testClaudeResetTicketsNeverDisplayRetainedCountsAsCurrent() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let usage = makeSnapshot(providerID: .claude, percentage: 24)
+        let session = RawQuotaItem(id: "session", originalName: "five_hour", used: nil, remaining: nil,
+                                   percentage: .missing(meaning: .used), resetsAt: nil)
+        let summary = RawQuotaItem(
+            id: "rateLimitResetCredits", originalName: "tickets", used: nil,
+            remaining: SourceValue(value: 2, rawText: "2", unit: "credits"),
+            percentage: .missing(meaning: .remaining), resetsAt: nil,
+            sourceFields: ["item": "cedar_ember"]
+        )
+        let snapshot = ProviderSnapshot(providerID: .claude, source: usage.source,
+                                        quotas: [session, summary], refreshedAt: now)
+        XCTAssertEqual(QuotaDisplayFormatter.claudeResetCredits(
+            for: session, state: .fresh(snapshot), now: now
+        )?.count, 2)
+        let failure = CollectionError(kind: .offline, diagnosticCode: "test.offline")
+        let states: [CollectionState] = [
+            .neverLoaded, .refreshing(previous: snapshot),
+            .stale(snapshot: snapshot, failure: failure, failedAt: now),
+            .authenticationActionRequired(snapshot: snapshot, failure: failure),
+        ]
+        for state in states {
+            let tickets = QuotaDisplayFormatter.claudeResetCredits(for: session, state: state, now: now)
+            XCTAssertNotNil(tickets)
+            XCTAssertNil(tickets?.count)
+            XCTAssertNil(tickets?.expiresAt)
+        }
     }
 
     func testClaudeResetTicketsNeverBecomeRepresentativeUsageQuotas() async {

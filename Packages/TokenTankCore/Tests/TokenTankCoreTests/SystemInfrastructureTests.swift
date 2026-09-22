@@ -560,6 +560,11 @@ struct SystemInfrastructureTests {
         _ = try await client.send(request())
         _ = try await client.send(request(url: "https://api.anthropic.com/api/oauth/profile", timeout: 15))
         _ = try await client.send(request(url: resetEndpoint, timeout: 15))
+        #expect(BoundedResponseURLProtocol.recordedRequests.suffix(3).map(\.cachePolicy) == [
+            .reloadIgnoringLocalAndRemoteCacheData,
+            .reloadIgnoringLocalCacheData,
+            .reloadIgnoringLocalAndRemoteCacheData,
+        ])
 
         var wrongHeaders: [[String: String]] = [[:]]
         for (name, value) in [
@@ -1275,10 +1280,18 @@ struct SystemInfrastructureTests {
 private final class BoundedResponseURLProtocol: URLProtocol, @unchecked Sendable {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var payload = Data()
+    nonisolated(unsafe) private static var requests: [URLRequest] = []
+
+    static var recordedRequests: [URLRequest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return requests
+    }
 
     static func setPayload(_ value: Data) {
         lock.lock()
         payload = value
+        requests = []
         lock.unlock()
     }
 
@@ -1297,6 +1310,9 @@ private final class BoundedResponseURLProtocol: URLProtocol, @unchecked Sendable
     }
 
     override func startLoading() {
+        Self.lock.lock()
+        Self.requests.append(request)
+        Self.lock.unlock()
         guard let url = request.url else {
             client?.urlProtocol(self, didFailWithError: URLError(.badURL))
             return

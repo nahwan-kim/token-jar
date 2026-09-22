@@ -617,6 +617,8 @@ final class TokenTankUITests: XCTestCase {
 
     func testClaudeResetTicketsShowQuantityAndExpirationInBothLanguages() {
         continueAfterFailure = false
+        app.launchEnvironment["TOKENTANK_UI_CLAUDE_FRESH"] = "1"
+        defer { app.launchEnvironment.removeValue(forKey: "TOKENTANK_UI_CLAUDE_FRESH") }
         for (language, locale, title) in [("en", "en_US", "Reset tickets"), ("ko", "ko_KR", "리셋 티켓")] {
             app.launchArguments = ["-AppleLanguages", "(\(language))", "-AppleLocale", locale, "-appLanguage", language]
             app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
@@ -624,7 +626,9 @@ final class TokenTankUITests: XCTestCase {
             app.launch()
             let window = app.windows["Token Jar UI Test Detail"]
             XCTAssertTrue(window.waitForExistence(timeout: timeout))
-            let tickets = window.descendants(matching: .any)["provider.claude.reset-credits"]
+            let session = window.descendants(matching: .any)["quota.ui-test.claude.session"]
+            XCTAssertTrue(session.exists)
+            let tickets = session.descendants(matching: .any)["provider.claude.reset-credits"]
             XCTAssertTrue(tickets.exists)
             XCTAssertTrue(accessibilityText(tickets).contains(title))
             let count = tickets.descendants(matching: .any)["provider.claude.ticket-count"]
@@ -635,6 +639,11 @@ final class TokenTankUITests: XCTestCase {
             XCTAssertNotEqual(expiry.label, "—")
             XCTAssertFalse(window.descendants(matching: .any)["quota.rateLimitResetCredits"].exists)
             XCTAssertTrue(window.descendants(matching: .any)["quota.ui-test.claude"].exists)
+            let fable = window.descendants(matching: .any)["quota.scoped.ui-test.claude.fable"]
+            XCTAssertTrue(fable.exists)
+            XCTAssertEqual(tickets.frame.minY, fable.frame.minY, accuracy: 2)
+            XCTAssertLessThanOrEqual(tickets.frame.maxX, fable.frame.minX)
+            XCTAssertGreaterThan(tickets.frame.minY, session.descendants(matching: .any)["field.percentage"].frame.maxY)
             app.terminate()
             XCTAssertTrue(app.wait(for: .notRunning, timeout: timeout))
         }
