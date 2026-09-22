@@ -213,15 +213,101 @@ final class AppModelTests: XCTestCase {
                          used: nil, remaining: nil, percentage: .missing(meaning: .remaining),
                          resetsAt: now.addingTimeInterval(seconds))
         }
-        let result = QuotaDisplayFormatter.codexResetCredits([summary(2)] + tickets, now: now)
+        let result = QuotaDisplayFormatter.resetCredits([summary(2)] + tickets, now: now)
         XCTAssertEqual(result.count, 2)
         XCTAssertEqual(result.expiresAt, now.addingTimeInterval(3600))
         XCTAssertFalse(QuotaDisplayFormatter.ticketExpiry(result.expiresAt).contains("\n"))
-        XCTAssertNil(QuotaDisplayFormatter.codexResetCredits([summary(0)] + tickets, now: now).expiresAt)
-        XCTAssertNil(QuotaDisplayFormatter.codexResetCredits([summary(2)], now: now).expiresAt)
-        XCTAssertNil(QuotaDisplayFormatter.codexResetCredits([summary(2)] + tickets, now: now.addingTimeInterval(7200)).expiresAt)
-        XCTAssertNil(QuotaDisplayFormatter.codexResetCredits([], now: now).count)
+        XCTAssertNil(QuotaDisplayFormatter.resetCredits([summary(0)] + tickets, now: now).expiresAt)
+        XCTAssertNil(QuotaDisplayFormatter.resetCredits([summary(2)], now: now).expiresAt)
+        XCTAssertNil(QuotaDisplayFormatter.resetCredits([summary(2)] + tickets, now: now.addingTimeInterval(7200)).expiresAt)
+        XCTAssertNil(QuotaDisplayFormatter.resetCredits([], now: now).count)
         XCTAssertEqual(QuotaDisplayFormatter.ticketExpiry(nil), "—")
+    }
+
+    func testClaudeResetTicketsExcludeSpentExpiredAndFutureGrants() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let summary = RawQuotaItem(
+            id: "rateLimitResetCredits", originalName: "tickets", used: nil,
+            remaining: SourceValue(value: 20, rawText: "20", unit: "credits"),
+            percentage: .missing(meaning: .remaining), resetsAt: nil,
+            sourceFields: ["item": "cedar_ember"]
+        )
+        func grant(_ id: String, count: Decimal, expiry: TimeInterval?, start: TimeInterval? = nil) -> RawQuotaItem {
+            var fields = ["item": "cedar_ember.grant", "paused": "true", "usable_now": "false"]
+            if let start {
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                fields["starts_at"] = formatter.string(from: now.addingTimeInterval(start))
+            }
+            return RawQuotaItem(
+                id: RawQuotaID(rawValue: "rateLimitResetCredit.\(id)"), originalName: id, used: nil,
+                remaining: SourceValue(value: count, rawText: "\(count)", unit: "credits"),
+                percentage: .missing(meaning: .remaining), resetsAt: expiry.map { now.addingTimeInterval($0) },
+                sourceFields: fields
+            )
+        }
+        let grants = [
+            grant("spent", count: 0, expiry: 100),
+            grant("expired", count: 9, expiry: 0),
+            grant("future", count: 8, expiry: 7200, start: 1),
+            grant("active", count: 2, expiry: 3600, start: 0),
+            grant("undated", count: 1, expiry: nil),
+        ]
+        let rows = [summary] + grants
+        let result = QuotaDisplayFormatter.resetCredits(rows, now: now)
+        XCTAssertEqual(result.count, 3)
+        XCTAssertEqual(result.expiresAt, now.addingTimeInterval(3600))
+        XCTAssertEqual(QuotaDisplayFormatter.resetCredits(rows, now: now.addingTimeInterval(1)).count, 11)
+        let expired = QuotaDisplayFormatter.resetCredits(rows, now: now.addingTimeInterval(7200))
+        XCTAssertEqual(expired.count, 1)
+        XCTAssertNil(expired.expiresAt)
+        XCTAssertEqual(QuotaDisplayFormatter.resetCredits([summary], now: now).count, 0)
+        XCTAssertNil(QuotaDisplayFormatter.resetCredits([], now: now).count)
+        XCTAssertTrue(QuotaDisplayFormatter.displayedQuotas(rows, providerID: .claude).isEmpty)
+        let extra = RawQuotaItem(id: "extra", originalName: "extra_usage", used: nil, remaining: nil,
+                                 percentage: .missing(meaning: .used), resetsAt: nil)
+        XCTAssertEqual(QuotaDisplayFormatter.displayedQuotas(rows + [extra], providerID: .claude), [extra])
+    }
+
+    func testClaudeResetTicketsNeverBecomeRepresentativeUsageQuotas() async {
+        let usage = makeSnapshot(providerID: .claude, percentage: 24)
+        let ticket = RawQuotaItem(
+            id: "rateLimitResetCredits", originalName: "tickets", used: nil,
+            remaining: SourceValue(value: 2, rawText: "2", unit: "credits"),
+            percentage: .missing(meaning: .remaining), resetsAt: nil,
+            sourceFields: ["item": "cedar_ember"]
+        )
+        let snapshot = ProviderSnapshot(
+            providerID: .claude, source: usage.source, quotas: [ticket] + usage.quotas,
+            refreshedAt: usage.refreshedAt
+        )
+        let credentials = InMemoryCredentialStore()
+        let model = AppModel(
+            adapters: [TestAppAdapter(id: .claude, results: [.success(snapshot)])],
+            credentialStore: credentials, preferencesStore: MemoryPreferencesStore(),
+            context: makeContext(credentials: credentials)
+        )
+        model.ensureStarted()
+        let loaded = await eventually { model.states[.claude]?.snapshot != nil }
+        XCTAssertTrue(loaded)
+        XCTAssertEqual(model.quotas(for: .claude), usage.quotas)
+        XCTAssertEqual(model.menuValue(for: model.preference(for: .claude)), "76%")
+        await model.stop()
+    }
+
+    func testResetTicketExpirationUsesSelectedLocaleAndTimeZone() {
+        let date = ISO8601DateFormatter().date(from: "2030-10-23T18:00:00Z")!
+        let korean = QuotaDisplayFormatter.ticketExpiry(
+            date, locale: Locale(identifier: "ko_KR"), timeZone: TimeZone(identifier: "Asia/Seoul")!
+        )
+        let english = QuotaDisplayFormatter.ticketExpiry(
+            date, locale: Locale(identifier: "en_US"), timeZone: TimeZone(secondsFromGMT: 0)!
+        )
+        XCTAssertTrue(korean.contains("24"), korean)
+        XCTAssertTrue(korean.contains("3:00"), korean)
+        XCTAssertTrue(english.contains("23"), english)
+        XCTAssertTrue(english.contains("18:00"), english)
+        XCTAssertNotEqual(korean, english)
     }
 
     func testFreshnessUsesLastSuccessAndMinuteBoundaries() {
@@ -924,7 +1010,7 @@ final class AppModelTests: XCTestCase {
             ).map(\.id.rawValue),
             ["codex-primary"]
         )
-        XCTAssertEqual(QuotaDisplayFormatter.codexResetCredits(
+        XCTAssertEqual(QuotaDisplayFormatter.resetCredits(
             [resetCredits, resetCredit], now: Date(timeIntervalSince1970: 1_800_000_000)
         ).count, 2)
         XCTAssertEqual(

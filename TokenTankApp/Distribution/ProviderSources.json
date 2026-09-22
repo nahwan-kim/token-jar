@@ -46,14 +46,15 @@
     },
     {
       "provider": "claude",
-      "surface": "Claude Code OAuth live five-hour and weekly usage windows",
-      "selectedSource": "Preferred OAuth GET https://api.anthropic.com/api/oauth/usage using the current native Claude Code session; optional same-token GET /api/oauth/profile",
+      "surface": "Claude Code OAuth live five-hour and weekly usage windows plus promotional reset-ticket quantity and expiration",
+      "selectedSource": "Preferred OAuth GET https://api.anthropic.com/api/oauth/usage using the current native Claude Code session; optional same-token GET /api/oauth/profile and GET /api/oauth/usage?cedar_ember=1&skip_spend=1",
       "sourceStatus": "watch",
       "productionComposition": true,
       "sourceStatusReason": "Unofficial WATCH source: every scheduled, startup, restart, ordinary manual, and dedicated-repair Claude collection first rereads exact native credentials noninteractively, preferring a usable file session. If recovery is required, that collection has one bounded opportunity for screen-unlocked native authorization and, for expired or rejected credentials, one Claude Code owner /usage launch. Denial aborts the current attempt without a loop; the next default five-minute cycle may retry. Only claudeAiOauth is eligible, MCP is forbidden, and only a successful live response is fresh.",
       "documentation": [
         "https://github.com/steipete/CodexBar/commit/5e119a9ad76e3453058dab323f98e480f478d049 (delegated-coordinator policy reference)",
-        "https://github.com/robinebers/openusage/commit/56378e5765f85d38ff413036fd984afe3d4664e4 (read-only comparison)"
+        "https://github.com/robinebers/openusage/commit/56378e5765f85d38ff413036fd984afe3d4664e4 (read-only comparison)",
+        "https://registry.npmjs.org/@anthropic-ai/claude-code-darwin-arm64/2.1.280 (reset query and cedar_ember grant schema; published SHA-512 integrity verified)"
       ],
       "credentialOwner": "Claude Code",
       "credentialPersistence": "Claude-owned ~/.claude/.credentials.json and native Keychain generic-password service Claude Code-credentials with account NSUserName(); Token Jar performs exact read-only access and keeps no Claude credential or usage cache, while Claude Code alone may rotate its stores under .oauth_refresh.lock during a bounded collection recovery",
@@ -66,7 +67,7 @@
         "The localized Repair Claude Connection / Claude 연결 복구 action starts an immediate manual collection under the same limits. Concurrent repair callers coalesce. The UI immediately shows pending manual repair or active collection progress with native approval guidance, without inferring internal phases",
         "Claude Code may show its own permission UI during the single bounded owner launch. The owner uses fixed absolute executable candidates, an empty mode-0700 workspace, minimal fixed environment, fixed safe-mode/no-tools arguments, fixed bounded timeout, and the official owner refresh lock",
         "Prompt veto precedes readiness and success. Require readiness plus shift+tab before exactly /usage and a completed panel plus one second quiet; trust is accepted only in the verified-empty workspace and never after /usage. Completed flow sends Esc then /exit with five-second grace; the post-usage hard deadline is passive and pre-readiness cleanup supplies no input",
-        "GET only https://api.anthropic.com/api/oauth/usage and optionally same-token /api/oauth/profile. Do not import browser cookies, automate login/browser approval, scrape PTY usage, call Admin or inference APIs, use ~/.claude.json cached usage, or directly POST/write/copy/cache a Claude token"
+        "GET only https://api.anthropic.com/api/oauth/usage, optionally same-token /api/oauth/profile, and optionally same-token /api/oauth/usage?cedar_ember=1&skip_spend=1 with a 15-second maximum. The reset request uses only the exact fixed query, no body, no authentication recovery, and no redemption POST. Parse cedar_ember.grants id/resets_left/starts_at/ends_at; absent or malformed metadata stays unknown without discarding valid usage. Do not import browser cookies, automate login/browser approval, scrape PTY usage, call Admin or inference APIs, use ~/.claude.json cached usage, or directly POST/write/copy/cache a Claude token"
       ],
       "externalPaths": [
         "~/.claude/.credentials.json",
@@ -75,6 +76,7 @@
         "/opt/homebrew/bin/claude (bounded recovery only)",
         "/usr/local/bin/claude (bounded recovery only)",
         "https://api.anthropic.com/api/oauth/usage",
+        "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1",
         "https://api.anthropic.com/api/oauth/profile"
       ],
       "tccClass": "none; native Keychain authorization is available at most once per collection recovery after the screen-unlocked guard. Every collection silently rereads first; Claude Code may display its own permission UI only during the single bounded owner launch, and macOS authentication is never bypassed",

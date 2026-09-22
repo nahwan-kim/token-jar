@@ -56,9 +56,11 @@ public struct ClaudeAdapter: ProviderAdapter {
         }
         let validationNow = await context.clock.now()
         try claudeValidate(response, now: validationNow)
-        let quotas = try Self.decodeQuotas(from: response.body)
+        let primaryQuotas = try Self.decodeQuotas(from: response.body)
         let refreshedAt = await context.clock.now()
         let profile = try await claudeProfile(token: session.accessToken, network: context.network)
+        let resetCredits = try await claudeResetCredits(token: session.accessToken, network: context.network)
+        let quotas = primaryQuotas + resetCredits
         let email = profile.email
         let plan = claudeNonempty(session.subscriptionType)
             ?? profile.organizationPlan
@@ -91,6 +93,72 @@ public struct ClaudeAdapter: ProviderAdapter {
             quotas: quotas,
             refreshedAt: refreshedAt
         )
+    }
+
+    public static func decodeResetCredits(from data: Data) throws -> [RawQuotaItem] {
+        let root = try claudeObject(from: data)
+        guard let emberValue = root["cedar_ember"], !(emberValue is NSNull) else { return [] }
+        guard let ember = emberValue as? [String: Any] else {
+            throw claudeSchemaError("claude.oauth.reset-credits.invalid")
+        }
+        if let eligible = ember["eligible"] {
+            guard let number = eligible as? NSNumber, JSONScalar.isBoolean(number) else {
+                throw claudeSchemaError("claude.oauth.reset-credits.eligible-invalid")
+            }
+        }
+        guard let grantsValue = ember["grants"], !(grantsValue is NSNull) else { return [] }
+        guard let grants = grantsValue as? [Any] else {
+            throw claudeSchemaError("claude.oauth.reset-credits.grants-invalid")
+        }
+
+        var rows: [RawQuotaItem] = []
+        var grantIDs: Set<String> = []
+        var total = Decimal.zero
+        for value in grants {
+            guard let grant = value as? [String: Any],
+                  let grantID = grant["id"] as? String,
+                  claudeSafeGrantID(grantID),
+                  grantIDs.insert(grantID).inserted,
+                  let count = claudeNonnegativeInteger(grant["resets_left"])
+            else { throw claudeSchemaError("claude.oauth.reset-credit.invalid") }
+            _ = try claudeOptionalDate(grant, key: "starts_at")
+            let endsAt = try claudeOptionalDate(grant, key: "ends_at")
+            let paused = try claudeOptionalBoolean(grant, key: "paused")
+            let usableNow = try claudeOptionalBoolean(grant, key: "usable_now")
+            var summed = Decimal.zero
+            var accumulated = total
+            var increment = count.value
+            guard NSDecimalAdd(&summed, &accumulated, &increment, .plain) == .noError,
+                  !NSDecimalIsNotANumber(&summed)
+            else { throw claudeSchemaError("claude.oauth.reset-credits.sum-invalid") }
+            total = summed
+
+            var fields = ["item": "cedar_ember.grant", "resets_left": count.raw]
+            if let raw = grant["starts_at"] as? String { fields["starts_at"] = raw }
+            if let raw = grant["ends_at"] as? String { fields["ends_at"] = raw }
+            if let paused { fields["paused"] = String(paused) }
+            if let usableNow { fields["usable_now"] = String(usableNow) }
+            rows.append(RawQuotaItem(
+                id: RawQuotaID(rawValue: "rateLimitResetCredit.\(grantID)"),
+                originalName: claudeNonempty(grant["label"] as? String) ?? grantID,
+                used: nil,
+                remaining: SourceValue(value: count.value, rawText: count.raw, unit: "credits"),
+                percentage: .missing(meaning: .remaining),
+                resetsAt: endsAt,
+                sourceFields: fields
+            ))
+        }
+        let totalRaw = NSDecimalNumber(decimal: total).stringValue
+        let summary = RawQuotaItem(
+            id: RawQuotaID(rawValue: "rateLimitResetCredits"),
+            originalName: "rateLimitResetCredits",
+            used: nil,
+            remaining: SourceValue(value: total, rawText: totalRaw, unit: "credits"),
+            percentage: .missing(meaning: .remaining),
+            resetsAt: nil,
+            sourceFields: ["item": "cedar_ember"]
+        )
+        return [summary] + rows
     }
 
 
@@ -166,7 +234,7 @@ private func claudeHeaders(_ token: String) -> [String: String] {
         "Content-Type": "application/json",
         "Authorization": "Bearer \(token)",
         "anthropic-beta": "oauth-2025-04-20",
-        "User-Agent": "claude-code/2.1.0",
+        "User-Agent": "claude-code/2.1.280",
     ]
 }
 
@@ -277,6 +345,51 @@ private func claudeProfile(token: String, network: any NetworkClient) async thro
     } catch {
         return ClaudeProfile(email: nil, organizationPlan: nil)
     }
+}
+
+private func claudeResetCredits(token: String, network: any NetworkClient) async throws -> [RawQuotaItem] {
+    do {
+        let response = try await claudeResponse(
+            path: "/api/oauth/usage?cedar_ember=1&skip_spend=1",
+            token: token,
+            timeout: 15,
+            network: network
+        )
+        guard response.statusCode == 200, !response.body.isEmpty else { return [] }
+        return (try? ClaudeAdapter.decodeResetCredits(from: response.body)) ?? []
+    } catch is CancellationError {
+        throw CancellationError()
+    } catch let error as CollectionError where error.kind == .cancelled {
+        throw error
+    } catch {
+        return []
+    }
+}
+
+private func claudeSafeGrantID(_ value: String) -> Bool {
+    guard (1...40).contains(value.utf8.count) else { return false }
+    return value.utf8.allSatisfy {
+        (48...57).contains($0) || (97...122).contains($0) || $0 == 95 || $0 == 45
+    }
+}
+
+private func claudeNonnegativeInteger(_ value: Any?) -> ClaudeDecimalValue? {
+    guard let number = value as? NSNumber, !JSONScalar.isBoolean(number), number.doubleValue.isFinite else { return nil }
+    let decimal = number.decimalValue
+    var candidate = decimal
+    guard !NSDecimalIsNotANumber(&candidate) else { return nil }
+    var rounded = Decimal.zero
+    NSDecimalRound(&rounded, &candidate, 0, .plain)
+    guard decimal >= 0, rounded == decimal else { return nil }
+    return ClaudeDecimalValue(value: decimal, raw: number.stringValue)
+}
+
+private func claudeOptionalBoolean(_ object: [String: Any], key: String) throws -> Bool? {
+    guard let value = object[key], !(value is NSNull) else { return nil }
+    guard let number = value as? NSNumber, JSONScalar.isBoolean(number) else {
+        throw claudeSchemaError("claude.oauth.reset-credit.\(key)-invalid")
+    }
+    return number.boolValue
 }
 
 private func claudeAppendLimit(

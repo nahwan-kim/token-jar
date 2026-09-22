@@ -329,6 +329,12 @@ struct ProviderDetailView: View {
                         )
                     }
                 }
+                if providerID == .claude {
+                    ResetCreditsView(
+                        tickets: QuotaDisplayFormatter.resetCredits(snapshot.quotas, now: now),
+                        identifierPrefix: "provider.claude"
+                    )
+                }
             }
         }
     }
@@ -535,7 +541,6 @@ private struct CodexAccountDetailView: View {
 }
 
 private struct CodexQuotaColumns: View {
-    @Environment(\.locale) private var locale
     let quotas: [RawQuotaItem]
     let refreshedAt: Date
     let now: Date
@@ -558,30 +563,41 @@ private struct CodexQuotaColumns: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            VStack(alignment: .leading, spacing: 3) {
-                let tickets = QuotaDisplayFormatter.codexResetCredits(quotas, now: now)
-                HStack {
-                    Text("codex.tickets")
-                    Spacer(minLength: 4)
-                    Text(verbatim: tickets.count.map {
-                        QuotaDisplayFormatter.number($0, locale: locale, maximumFractionDigits: 0)
-                    } ?? "—")
-                    .monospacedDigit()
-                }
-                .font(.subheadline.weight(.semibold))
-                Text(verbatim: QuotaDisplayFormatter.ticketExpiry(tickets.expiresAt, locale: locale))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .help(tickets.expiresAt.map { QuotaDisplayFormatter.timestamp($0, locale: locale) } ?? "—")
-                    .accessibilityIdentifier("\(identifierPrefix ?? "provider.codex").ticket-expiry")
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("\(identifierPrefix ?? "provider.codex").reset-credits")
+            ResetCreditsView(tickets: QuotaDisplayFormatter.resetCredits(quotas, now: now),
+                             identifierPrefix: identifierPrefix ?? "provider.codex")
         }
+    }
+}
+
+private struct ResetCreditsView: View {
+    @Environment(\.locale) private var locale
+    let tickets: QuotaDisplayFormatter.ResetCredits
+    let identifierPrefix: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text("quota.tickets")
+                Spacer(minLength: 4)
+                Text(verbatim: tickets.count.map {
+                    QuotaDisplayFormatter.number($0, locale: locale, maximumFractionDigits: 0)
+                } ?? "—")
+                .monospacedDigit()
+                .accessibilityIdentifier("\(identifierPrefix).ticket-count")
+            }
+            .font(.subheadline.weight(.semibold))
+            Text(verbatim: QuotaDisplayFormatter.ticketExpiry(tickets.expiresAt, locale: locale))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .help(tickets.expiresAt.map { QuotaDisplayFormatter.timestamp($0, locale: locale) } ?? "—")
+                .accessibilityIdentifier("\(identifierPrefix).ticket-expiry")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("\(identifierPrefix).reset-credits")
     }
 }
 private struct ProviderStatusPresentation {
@@ -862,7 +878,9 @@ enum QuotaDisplayFormatter {
         case .codex:
             return defaultCodexQuota(quotas).map { [$0] } ?? []
         case .claude:
-            filtered = quotas.filter(isClaudePopupQuota)
+            let usage = quotas.filter { !isResetCredit($0) }
+            let popup = usage.filter(isClaudePopupQuota)
+            return popup.isEmpty ? usage : popup
         case .grok:
             filtered = quotas
         case .cursor:
@@ -948,15 +966,42 @@ enum QuotaDisplayFormatter {
         let expiresAt: Date?
     }
 
-    static func codexResetCredits(_ quotas: [RawQuotaItem], now: Date) -> ResetCredits {
-        let count = quotas.first { $0.id.rawValue == "rateLimitResetCredits" }?.remaining?.value
-        let expiry = quotas.compactMap { quota -> Date? in
-            guard quota.id.rawValue.hasPrefix("rateLimitResetCredit."),
-                  let expiry = quota.resetsAt ?? dateFromSourceFields(quota.sourceFields),
+    static func resetCredits(_ quotas: [RawQuotaItem], now: Date) -> ResetCredits {
+        guard let summary = quotas.first(where: { $0.id.rawValue == "rateLimitResetCredits" }) else {
+            return ResetCredits(count: nil, expiresAt: nil)
+        }
+        let details = quotas.filter { $0.id.rawValue.hasPrefix("rateLimitResetCredit.") }
+        if summary.sourceFields["item"] == "cedar_ember" {
+            let active = details.filter { quota in
+                guard let count = quota.remaining?.value, count > 0 else { return false }
+                if let expiry = quota.resetsAt, expiry <= now { return false }
+                if let raw = quota.sourceFields["starts_at"], let start = resetGrantDate(raw), start > now {
+                    return false
+                }
+                return true
+            }
+            return ResetCredits(
+                count: active.reduce(Decimal.zero) { $0 + ($1.remaining?.value ?? 0) },
+                expiresAt: active.compactMap(\.resetsAt).min()
+            )
+        }
+        let count = summary.remaining?.value
+        let expiry = details.compactMap { quota -> Date? in
+            guard let expiry = quota.resetsAt ?? dateFromSourceFields(quota.sourceFields),
                   expiry > now else { return nil }
             return expiry
         }.min()
         return ResetCredits(count: count, expiresAt: count == 0 ? nil : expiry)
+    }
+
+    static func isResetCredit(_ quota: RawQuotaItem) -> Bool {
+        quota.id.rawValue == "rateLimitResetCredits" || quota.id.rawValue.hasPrefix("rateLimitResetCredit.")
+    }
+
+    private static func resetGrantDate(_ raw: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)
     }
 
     static func ticketExpiry(_ date: Date?, locale: Locale = .current, timeZone: TimeZone = .current) -> String {

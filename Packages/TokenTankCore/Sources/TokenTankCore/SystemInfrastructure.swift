@@ -153,7 +153,7 @@ public actor URLSessionNetworkClient: NetworkClient {
             guard headers["accept"] == "application/json",
                   headers["content-type"] == "application/json",
                   headers["anthropic-beta"] == "oauth-2025-04-20",
-                  headers["user-agent"] == "claude-code/2.1.0",
+                  headers["user-agent"] == "claude-code/2.1.280",
                   let authorization = headers["authorization"],
                   authorization.hasPrefix("Bearer "),
                   authorization.count > "Bearer ".count,
@@ -242,13 +242,15 @@ public actor URLSessionNetworkClient: NetworkClient {
         case .codex, .doubao:
             return false
         case .claude:
+            let isResetCredits = components.percentEncodedPath == "/api/oauth/usage"
+                && components.percentEncodedQuery == "cedar_ember=1&skip_spend=1"
             return request.method == .get
                 && host == "api.anthropic.com"
                 && ["/api/oauth/usage", "/api/oauth/profile"].contains(components.percentEncodedPath)
-                && components.query == nil
+                && (components.query == nil || isResetCredits)
                 && request.body == nil
                 && request.timeout > 0
-                && request.timeout <= (components.percentEncodedPath == "/api/oauth/profile" ? 15 : 30)
+                && request.timeout <= (components.percentEncodedPath == "/api/oauth/profile" || isResetCredits ? 15 : 30)
         case .grok:
             if host == "auth.x.ai" {
                 return request.method == .post

@@ -94,6 +94,7 @@ struct ClaudeAdapterTests {
                 headers: [:],
                 body: Data("{\"account\":{\"email\":\"owner@example.com\"}}".utf8)
             )),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
         ])
         let clock = ManualClock(now: now)
         let snapshot = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
@@ -103,7 +104,7 @@ struct ClaudeAdapterTests {
             isUserInitiated: true
         ))
         let requests = await network.requests
-        #expect(requests.count == 2)
+        #expect(requests.count == 3)
         let usage = requests[0]
         #expect(usage.url.absoluteString == "https://api.anthropic.com/api/oauth/usage")
         #expect(usage.method == .get)
@@ -113,11 +114,14 @@ struct ClaudeAdapterTests {
             "Content-Type": "application/json",
             "Authorization": "Bearer synthetic-claude-token",
             "anthropic-beta": "oauth-2025-04-20",
-            "User-Agent": "claude-code/2.1.0",
+            "User-Agent": "claude-code/2.1.280",
         ])
         #expect(requests[1].url.absoluteString == "https://api.anthropic.com/api/oauth/profile")
         #expect(requests[1].headers == usage.headers)
         #expect(requests[1].timeout == 15)
+        #expect(requests[2].url.absoluteString == "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1")
+        #expect(requests[2].headers == usage.headers)
+        #expect(requests[2].timeout == 15)
         #expect(await sessions.allowInteractionRequests == [false])
         #expect(snapshot.refreshedAt == now)
         #expect(snapshot.accountEmail == "owner@example.com")
@@ -153,8 +157,10 @@ struct ClaudeAdapterTests {
         let network = QueueNetworkClient(results: [
             .success(NetworkResponse(statusCode: 200, headers: [:], body: first)),
             .success(NetworkResponse(statusCode: 500, headers: [:], body: Data())),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
             .success(NetworkResponse(statusCode: 200, headers: [:], body: second)),
             .success(NetworkResponse(statusCode: 500, headers: [:], body: Data())),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
         ])
         let external = RecordingExternalSessionReader()
         let context = TestContextFactory.make(network: network, claudeSession: sessions, externalSessions: external)
@@ -163,7 +169,7 @@ struct ClaudeAdapterTests {
         let new = try await adapter.fetchSnapshot(context: context)
         #expect(old.quotas[0].percentage.value == 12)
         #expect(new.quotas[0].percentage.value == 47)
-        #expect(await network.requests.filter { $0.url.path == "/api/oauth/usage" }.count == 2)
+        #expect(await network.requests.filter { $0.url.path == "/api/oauth/usage" && $0.url.query == nil }.count == 2)
         #expect(await external.operationCount == 0)
     }
 
@@ -177,12 +183,14 @@ struct ClaudeAdapterTests {
                 headers: [:],
                 body: Data("{\"account\":{\"email\":\"first@example.com\"}}".utf8)
             )),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
             .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
             .success(NetworkResponse(
                 statusCode: 403,
                 headers: [:],
                 body: Data("{\"account\":{\"email\":\"stale@example.com\"}}".utf8)
             )),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
         ])
         let context = TestContextFactory.make(network: network, claudeSession: sessions)
         let first = try await ClaudeAdapter().fetchSnapshot(context: context)
@@ -232,6 +240,7 @@ struct ClaudeAdapterTests {
                 .success(NetworkResponse(statusCode: 401, headers: [:], body: Data("secret".utf8))),
                 .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
                 .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{\"account\":{\"email\":\"renewed@example.com\"}}".utf8))),
+                .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
             ])
             let snapshot = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
                 network: network, claudeSession: sessions, isUserInitiated: userInitiated
@@ -241,7 +250,7 @@ struct ClaudeAdapterTests {
             #expect(await sessions.allowInteractionRequests == [false, false])
             #expect(await sessions.rejectedAccessTokens == [nil, session.accessToken])
             #expect(await network.requests.map { $0.headers["Authorization"] } == [
-                "Bearer synthetic-claude-token", "Bearer renewed-token", "Bearer renewed-token",
+                "Bearer synthetic-claude-token", "Bearer renewed-token", "Bearer renewed-token", "Bearer renewed-token",
             ])
         }
     }
@@ -253,6 +262,7 @@ struct ClaudeAdapterTests {
         let network = QueueNetworkClient(results: [
             .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
             .success(NetworkResponse(statusCode: 500, headers: [:], body: Data())),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
             .success(NetworkResponse(statusCode: 401, headers: [:], body: Data())),
             .success(NetworkResponse(statusCode: 401, headers: [:], body: Data("secret".utf8))),
         ])
@@ -269,7 +279,7 @@ struct ClaudeAdapterTests {
         #expect(previous?.quotas.first?.percentage.value == 24)
         #expect(failure.diagnosticCode == "claude.oauth.authentication-rejected")
         #expect(await sessions.rejectedAccessTokens == [nil, nil, session.accessToken])
-        #expect(await network.requests.count == 4)
+        #expect(await network.requests.count == 5)
     }
 
     @Test("renewal failure and cancellation propagate without another usage request")
@@ -331,6 +341,7 @@ struct ClaudeAdapterTests {
             var sessionResults: [Result<ClaudeSession, CollectionError>] = [.failure(failure), .success(renewed)]
             var responses: [Result<NetworkResponse, CollectionError>] = [
                 .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+                .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
                 .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
             ]
             if rejectedByUsage {
@@ -402,7 +413,9 @@ struct ClaudeAdapterTests {
         let network = QueueNetworkClient(results: [
             .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
             .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
             .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
             .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
         ])
         let coordinator = RefreshCoordinator(
@@ -420,7 +433,7 @@ struct ClaudeAdapterTests {
         #expect(error == failure)
         await coordinator.refresh(.claude)
         #expect(await sessions.allowInteractionRequests == [false, false, true, false, true])
-        #expect(await network.requests.count == 4)
+        #expect(await network.requests.count == 6)
         guard case let .fresh(recovered) = await coordinator.state(for: .claude) else {
             Issue.record("Expected next background collection to recover without a repair click")
             return
@@ -454,6 +467,7 @@ struct ClaudeAdapterTests {
         let network = QueueNetworkClient(results: [
             .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
             .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
         ])
         let coordinator = RefreshCoordinator(adapters: [ClaudeAdapter()], context: TestContextFactory.make(
             network: network, claudeSession: sessions, clock: clock
@@ -466,7 +480,7 @@ struct ClaudeAdapterTests {
             return
         }
         #expect(snapshot.quotas.first?.percentage.value == 24)
-        #expect(await network.requests.count == 2)
+        #expect(await network.requests.count == 3)
         #expect(await refresher.count == 0)
     }
 
@@ -496,6 +510,7 @@ struct ClaudeAdapterTests {
             var responses: [Result<NetworkResponse, CollectionError>] = [
                 .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
                 .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+                .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
             ]
             if rejectedByHTTP {
                 responses.insert(.success(NetworkResponse(statusCode: 401, headers: [:], body: Data())), at: 0)
@@ -516,8 +531,8 @@ struct ClaudeAdapterTests {
             #expect(await owner.interactionFlags == [false, true, false])
             #expect(await network.requests.map { $0.headers["Authorization"] } == (
                 rejectedByHTTP
-                    ? ["Bearer old-token", "Bearer new-token", "Bearer new-token"]
-                    : ["Bearer new-token", "Bearer new-token"]
+                    ? ["Bearer old-token", "Bearer new-token", "Bearer new-token", "Bearer new-token"]
+                    : ["Bearer new-token", "Bearer new-token", "Bearer new-token"]
             ))
         }
     }
@@ -608,6 +623,7 @@ struct ClaudeAdapterTests {
         let network = QueueNetworkClient(results: [
             .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
             .success(NetworkResponse(statusCode: 500, headers: [:], body: Data())),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
             .success(NetworkResponse(statusCode: 503, headers: [:], body: Data())),
         ])
         let context = TestContextFactory.make(network: network, claudeSession: sessions, clock: ManualClock(now: now))
@@ -671,7 +687,7 @@ struct ClaudeAdapterTests {
             #expect(await network.requests.count == 1)
             await clock.advance(by: .seconds(0.001))
             await coordinator.refresh(.claude)
-            #expect(await network.requests.filter { $0.url.path == "/api/oauth/usage" }.count == 2)
+            #expect(await network.requests.filter { $0.url.path == "/api/oauth/usage" && $0.url.query == nil }.count == 2)
         }
     }
 
@@ -745,6 +761,144 @@ struct ClaudeAdapterTests {
         #expect(overCap.quotas[0].used?.rawText == "125")
         #expect(overCap.quotas[0].percentage.rawText == "125")
         #expect(overCap.quotas[0].remaining == nil)
+    }
+
+    @Test("reset credits preserve exact counts, dates, and safe source fields")
+    func resetCreditsDecode() throws {
+        let body = Data(
+            """
+            {"cedar_ember":{"eligible":false,"grants":[
+              {"id":"first_grant","label":"First","resets_left":2,"starts_at":"2030-09-01T00:00:00Z","ends_at":"2030-09-02T00:00:00Z","paused":true,"usable_now":false,"secret":"ignored"},
+              {"id":"second-2","label":"","resets_left":3,"starts_at":null,"ends_at":null,"paused":false,"usable_now":true}
+            ]}}
+            """.utf8
+        )
+        let rows = try ClaudeAdapter.decodeResetCredits(from: body)
+        #expect(rows.map(\.id.rawValue) == [
+            "rateLimitResetCredits", "rateLimitResetCredit.first_grant", "rateLimitResetCredit.second-2",
+        ])
+        #expect(rows[0].remaining?.rawText == "5")
+        #expect(rows[0].remaining?.unit == "credits")
+        #expect(rows[0].percentage.value == nil)
+        #expect(rows[1].remaining?.rawText == "2")
+        #expect(rows[2].remaining?.rawText == "3")
+        #expect(rows[2].used == nil)
+        #expect(rows[2].originalName == "second-2")
+        #expect(rows[1].resetsAt == ISO8601DateFormatter().date(from: "2030-09-02T00:00:00Z"))
+        #expect(rows[1].sourceFields == [
+            "item": "cedar_ember.grant", "resets_left": "2",
+            "starts_at": "2030-09-01T00:00:00Z", "ends_at": "2030-09-02T00:00:00Z",
+            "paused": "true", "usable_now": "false",
+        ])
+        #expect(rows[2].sourceFields["starts_at"] == nil)
+        #expect(rows[1].sourceFields["secret"] == nil)
+    }
+
+    @Test("empty grants are explicit zero while absent or null optional data stays unknown")
+    func resetCreditsEmptyAndUnknown() throws {
+        for body in ["{}", "{\"cedar_ember\":null}", "{\"cedar_ember\":{}}", "{\"cedar_ember\":{\"grants\":null}}"] {
+            #expect(try ClaudeAdapter.decodeResetCredits(from: Data(body.utf8)).isEmpty)
+        }
+        let rows = try ClaudeAdapter.decodeResetCredits(
+            from: Data("{\"cedar_ember\":{\"eligible\":true,\"grants\":[]}}".utf8)
+        )
+        #expect(rows.count == 1)
+        #expect(rows[0].remaining?.rawText == "0")
+        let spent = try ClaudeAdapter.decodeResetCredits(
+            from: Data("{\"cedar_ember\":{\"grants\":[{\"id\":\"spent\",\"resets_left\":0}]}}".utf8)
+        )
+        #expect(spent.count == 2)
+        #expect(spent[0].remaining?.value == 0)
+        #expect(spent[1].remaining?.value == 0)
+    }
+
+    @Test("malformed reset grants reject the entire optional response")
+    func malformedResetCredits() {
+        let bodies = [
+            "{\"cedar_ember\":{\"eligible\":1,\"grants\":[]}}",
+            "{\"cedar_ember\":{\"eligible\":\"true\",\"grants\":[]}}",
+            "{\"cedar_ember\":{\"eligible\":null,\"grants\":[]}}",
+            "{\"cedar_ember\":{\"grants\":[{\"id\":\"A\",\"resets_left\":1}]}}",
+            "{\"cedar_ember\":{\"grants\":[{\"id\":\"ok\",\"resets_left\":\"1\"}]}}",
+            "{\"cedar_ember\":{\"grants\":[{\"id\":\"ok\",\"resets_left\":true}]}}",
+            "{\"cedar_ember\":{\"grants\":[{\"id\":\"ok\",\"resets_left\":1.5}]}}",
+            "{\"cedar_ember\":{\"grants\":[{\"id\":\"ok\",\"resets_left\":-1}]}}",
+            "{\"cedar_ember\":{\"grants\":[{\"id\":\"ok\",\"resets_left\":1e128}]}}",
+            "{\"cedar_ember\":{\"grants\":[{\"id\":\"ok\"}]}}",
+            "{\"cedar_ember\":{\"grants\":[{\"id\":\"ok\",\"resets_left\":1,\"ends_at\":\"bad\"}]}}",
+            "{\"cedar_ember\":{\"grants\":[{\"id\":\"ok\",\"resets_left\":1,\"starts_at\":\"bad\"}]}}",
+            "{\"cedar_ember\":{\"grants\":[{\"id\":\"ok\",\"resets_left\":1,\"usable_now\":\"true\"}]}}",
+            "{\"cedar_ember\":{\"grants\":[{\"id\":\"ok\",\"resets_left\":1,\"paused\":0}]}}",
+            "{\"cedar_ember\":{\"grants\":[{\"id\":\"ok\",\"resets_left\":1},{\"id\":\"ok\",\"resets_left\":2}]}}",
+        ]
+        for body in bodies {
+            #expect(throws: CollectionError.self) {
+                try ClaudeAdapter.decodeResetCredits(from: Data(body.utf8))
+            }
+        }
+    }
+
+    @Test("supplemental failures and malformed or non-success bodies cannot drop primary usage")
+    func optionalResetCreditsFailure() async throws {
+        let responses: [Result<NetworkResponse, CollectionError>] = [
+            .failure(CollectionError(kind: .transientNetwork, diagnosticCode: "test.optional.failed")),
+            .success(NetworkResponse(statusCode: 401, headers: [:], body: Data("secret".utf8))),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{\"cedar_ember\":{\"grants\":[{}]}}".utf8))),
+        ]
+        for optionalResponse in responses {
+            let sessions = MemoryClaudeSessionProvider(results: [.success(session)])
+            let network = QueueNetworkClient(results: [
+                .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+                .success(NetworkResponse(statusCode: 500, headers: [:], body: Data())),
+                optionalResponse,
+            ])
+            let snapshot = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
+                network: network, claudeSession: sessions
+            ))
+            #expect(snapshot.quotas.first?.originalName == "five_hour")
+            #expect(!snapshot.quotas.contains { $0.id.rawValue == "rateLimitResetCredits" })
+            #expect(await sessions.allowInteractionRequests == [false])
+            #expect(await network.requests.count == 3)
+        }
+    }
+
+    @Test("supplemental cancellation propagates without credential mutation or retry")
+    func optionalResetCreditsCancellation() async {
+        let sessions = MemoryClaudeSessionProvider(results: [.success(session)])
+        let network = QueueNetworkClient(results: [
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+            .success(NetworkResponse(statusCode: 500, headers: [:], body: Data())),
+            .failure(CollectionError(kind: .cancelled, diagnosticCode: "test.optional.cancelled")),
+        ])
+        do {
+            _ = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
+                network: network, claudeSession: sessions
+            ))
+            Issue.record("Expected supplemental cancellation")
+        } catch let error as CollectionError {
+            #expect(error.kind == .cancelled)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+        #expect(await sessions.allowInteractionRequests == [false])
+        #expect(await sessions.rejectedAccessTokens == [nil])
+        #expect(await network.requests.count == 3)
+    }
+
+    @Test("valid supplemental rows are shared by provider and account snapshots")
+    func supplementalRowsShared() async throws {
+        let sessions = MemoryClaudeSessionProvider(results: [.success(session)])
+        let resetBody = Data("{\"cedar_ember\":{\"grants\":[{\"id\":\"ticket\",\"resets_left\":3}]}}".utf8)
+        let network = QueueNetworkClient(results: [
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+            .success(NetworkResponse(statusCode: 500, headers: [:], body: Data())),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: resetBody)),
+        ])
+        let snapshot = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
+            network: network, claudeSession: sessions
+        ))
+        #expect(snapshot.quotas == snapshot.accounts.first?.quotas)
+        #expect(snapshot.quotas.first { $0.id.rawValue == "rateLimitResetCredits" }?.remaining?.rawText == "3")
     }
 
     @Test("transport cancellation propagates without a fallback snapshot")

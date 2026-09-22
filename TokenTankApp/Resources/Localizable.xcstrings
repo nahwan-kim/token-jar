@@ -8,7 +8,7 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "주간" } }
       }
     },
-    "codex.tickets" : {
+    "quota.tickets" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : { "stringUnit" : { "state" : "translated", "value" : "Reset tickets" } },

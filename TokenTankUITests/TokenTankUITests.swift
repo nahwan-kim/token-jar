@@ -615,6 +615,31 @@ final class TokenTankUITests: XCTestCase {
         XCTAssertLessThan(weekly.frame.height, 60)
     }
 
+    func testClaudeResetTicketsShowQuantityAndExpirationInBothLanguages() {
+        continueAfterFailure = false
+        for (language, locale, title) in [("en", "en_US", "Reset tickets"), ("ko", "ko_KR", "리셋 티켓")] {
+            app.launchArguments = ["-AppleLanguages", "(\(language))", "-AppleLocale", locale, "-appLanguage", language]
+            app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
+            app.launchEnvironment["TOKENTANK_UI_MATRIX"] = "1"
+            app.launch()
+            let window = app.windows["Token Jar UI Test Detail"]
+            XCTAssertTrue(window.waitForExistence(timeout: timeout))
+            let tickets = window.descendants(matching: .any)["provider.claude.reset-credits"]
+            XCTAssertTrue(tickets.exists)
+            XCTAssertTrue(accessibilityText(tickets).contains(title))
+            let count = tickets.descendants(matching: .any)["provider.claude.ticket-count"]
+            XCTAssertEqual(count.label, "2")
+            let expiry = tickets.descendants(matching: .any)["provider.claude.ticket-expiry"]
+            XCTAssertTrue(expiry.exists)
+            XCTAssertFalse(expiry.label.isEmpty)
+            XCTAssertNotEqual(expiry.label, "—")
+            XCTAssertFalse(window.descendants(matching: .any)["quota.rateLimitResetCredits"].exists)
+            XCTAssertTrue(window.descendants(matching: .any)["quota.ui-test.claude"].exists)
+            app.terminate()
+            XCTAssertTrue(app.wait(for: .notRunning, timeout: timeout))
+        }
+    }
+
     func testEveryProviderShowsCompactRefreshAgeNextToStatus() {
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appLanguage", "en"]
         app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"

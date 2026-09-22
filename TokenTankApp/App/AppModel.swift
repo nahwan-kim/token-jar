@@ -726,6 +726,9 @@ final class AppModel: ObservableObject {
         } else {
             quotas = snapshot.quotas
         }
+        if providerID == .claude {
+            return quotas.filter { !QuotaDisplayFormatter.isResetCredit($0) }
+        }
         guard providerID == .codex else { return quotas }
         return QuotaDisplayFormatter.displayedQuotas(quotas, providerID: .codex)
     }
@@ -803,6 +806,19 @@ final class AppModel: ObservableObject {
                     remaining: nil,
                     percentage: SourcePercentage(value: 44, rawText: "44", meaning: .used),
                     resetsAt: nil
+                ))
+                quotas.append(RawQuotaItem(
+                    id: "rateLimitResetCredits", originalName: "tickets", used: nil,
+                    remaining: SourceValue(value: 2, rawText: "2", unit: "credits"),
+                    percentage: .missing(meaning: .remaining), resetsAt: nil,
+                    sourceFields: ["item": "cedar_ember"]
+                ))
+                quotas.append(RawQuotaItem(
+                    id: "rateLimitResetCredit.claude-promotion", originalName: "Reset", used: nil,
+                    remaining: SourceValue(value: 2, rawText: "2", unit: "credits"),
+                    percentage: .missing(meaning: .remaining),
+                    resetsAt: now.addingTimeInterval(30 * 86400),
+                    sourceFields: ["item": "cedar_ember.grant"]
                 ))
             }
             return ProviderSnapshot(

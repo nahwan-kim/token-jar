@@ -492,7 +492,7 @@ struct SystemInfrastructureTests {
             "Content-Type": "application/json",
             "Authorization": "Bearer synthetic-token",
             "anthropic-beta": "oauth-2025-04-20",
-            "User-Agent": "claude-code/2.1.0",
+            "User-Agent": "claude-code/2.1.280",
         ]
         func request(
             url: String = endpoint,
@@ -513,7 +513,19 @@ struct SystemInfrastructureTests {
         #expect(URLSessionNetworkClient.isAllowed(request(
             url: "https://api.anthropic.com/api/oauth/profile", timeout: 15
         )))
+        let resetEndpoint = endpoint + "?cedar_ember=1&skip_spend=1"
+        #expect(URLSessionNetworkClient.isAllowed(request(url: resetEndpoint, timeout: 15)))
         let disallowed = [
+            request(url: resetEndpoint, method: .post, timeout: 15),
+            request(url: resetEndpoint, body: Data(), timeout: 15),
+            request(url: resetEndpoint, timeout: 16),
+            request(url: resetEndpoint + "&token=forbidden", timeout: 15),
+            request(url: resetEndpoint + "&cedar_ember=1", timeout: 15),
+            request(url: endpoint + "?cedar_ember=0&skip_spend=1", timeout: 15),
+            request(url: endpoint + "?cedar_ember=1", timeout: 15),
+            request(url: endpoint + "?at_wall=1&skip_spend=1", timeout: 15),
+            request(url: endpoint + "?%63edar_ember=1&skip_spend=1", timeout: 15),
+            request(url: "https://api.anthropic.com/api/oauth/profile?cedar_ember=1&skip_spend=1", timeout: 15),
             request(url: endpoint + "?token=forbidden"),
             request(url: endpoint + "?"),
             request(url: endpoint + "#fragment"),
@@ -547,6 +559,7 @@ struct SystemInfrastructureTests {
         let client = URLSessionNetworkClient(session: session, maximumResponseBytes: 1024)
         _ = try await client.send(request())
         _ = try await client.send(request(url: "https://api.anthropic.com/api/oauth/profile", timeout: 15))
+        _ = try await client.send(request(url: resetEndpoint, timeout: 15))
 
         var wrongHeaders: [[String: String]] = [[:]]
         for (name, value) in [

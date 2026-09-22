@@ -61,7 +61,7 @@ Token Jar 자체 계정은 필요하지 않습니다. Claude의 기본 5분 주�
 | 서비스 | 읽는 데이터 | 준비 사항 |
 | --- | --- | --- |
 | **Codex** | 공식 `codex app-server`의 구독 사용량 한도 | Codex CLI 로그인. 기본 `~/.codex`, 선택적으로 `~/.codex-secondary` |
-| **Claude** | Claude Code OAuth 세션으로 `https://api.anthropic.com/api/oauth/usage`에서 조회한 라이브 사용량 | `user:profile` 범위와 유효한 만료 시각이 있는 Claude Code 로그인 |
+| **Claude** | Claude Code OAuth 세션으로 조회한 라이브 사용량과 프로모션 리셋권 잔여 수량·만료일 | `user:profile` 범위와 유효한 만료 시각이 있는 Claude Code 로그인 |
 | **Grok** | Grok CLI 세션으로 조회한 SuperGrok 크레딧 (필요 시 공식 OAuth 갱신, 프록시 우선, 사용량 누락 시 동일 세션 bearer의 제한된 billing fallback) | Grok CLI 로그인 및 `~/.grok/auth.json` |
 | **Cursor** | Cursor 로컬 세션으로 조회한 계정 사용량 요약 | Cursor 앱 로그인 |
 | **Doubao** | 공식 `arkcli usage plan --format json`의 플랜 한도 | `arkcli` 설치 및 유효한 SSO 로그인 |
@@ -77,6 +77,8 @@ Token Jar는 정확한 Claude Code 파일·현재 macOS 사용자 키체인 계�
 > **연동 범위에 주의하세요.** 모든 서비스가 안정적인 공개 사용량 API를 제공하지는 않습니다. Claude OAuth와 Grok·Cursor의 연동은 제공자 변경에 영향을 받을 수 있습니다. 세션·응답 형식이 달라지거나 승인된 경계를 벗어나면 데이터를 만들거나 다른 출처로 대체하지 않고 오류를 표시합니다. API 과금 전체를 합산하는 비용 관리 도구는 아닙니다.
 
 정확한 경로, 조회 방식, 알려진 제한과 검증 상태는 [ProviderSources.json](TokenTankApp/Distribution/ProviderSources.json)에 기록되어 있습니다.
+
+Claude 리셋권은 사용량과 같은 OAuth 세션의 읽기 전용 조회로 표시합니다. 수량은 유효 기간 내 리셋권 잔여 수량을 합산하고, 만료일은 잔여 리셋권 중 가장 빠른 날짜를 로컬 시간으로 표시합니다. 만료되었거나 아직 시작되지 않은 리셋권은 수량에서 제외합니다. 조회 실패·미제공은 `—`이며 `0`으로 추정하지 않습니다. 리셋권 조회가 실패해도 정상 조회된 사용량은 유지하며, 리셋권을 사용하는 기능은 제공하지 않습니다.
 
 ## 내 계정은 원래 있던 곳에
 
