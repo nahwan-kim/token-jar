@@ -839,10 +839,9 @@ struct ClaudeSessionTests {
         let refresher = RecordingClaudeRefresher()
         let provider = provider(reader: reader, refresher: refresher)
         let task = Task {
-            await Task.yield()
+            withUnsafeCurrentTask { $0?.cancel() }
             return try await provider.session(allowInteraction: true, rejectedAccessToken: nil)
         }
-        task.cancel()
 
         do {
             _ = try await task.value
