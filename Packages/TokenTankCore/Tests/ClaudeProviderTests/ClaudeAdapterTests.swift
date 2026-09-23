@@ -114,7 +114,7 @@ struct ClaudeAdapterTests {
             "Content-Type": "application/json",
             "Authorization": "Bearer synthetic-claude-token",
             "anthropic-beta": "oauth-2025-04-20",
-            "User-Agent": "claude-code/2.1.280",
+            "User-Agent": "claude-cli/2.1.280 (external, cli)",
         ])
         #expect(requests[1].url.absoluteString == "https://api.anthropic.com/api/oauth/profile")
         #expect(requests[1].headers == usage.headers)
@@ -926,6 +926,31 @@ struct ClaudeAdapterTests {
         #expect(await sessions.allowInteractionRequests == [false])
         #expect(await sessions.rejectedAccessTokens == [nil])
         #expect(await network.requests.count == 3)
+    }
+
+    @Test("official usage client identity decodes the observed single reset grant")
+    func officialUsageIdentityAndSingleGrant() async throws {
+        let body = Data("""
+        {"cedar_ember":{"eligible":true,"ineligible_reason":null,"grants":[{
+          "id":"synthetic-promotion","resets_left":1,"resets_total":1,
+          "starts_at":"2026-09-22T16:00:00+00:00","ends_at":"2026-10-22T16:00:00+00:00",
+          "paused":false,"usable_now":true
+        }]}}
+        """.utf8)
+        let network = QueueNetworkClient(results: [
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: body)),
+        ])
+        let snapshot = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
+            network: network, claudeSession: MemoryClaudeSessionProvider(results: [.success(session)])
+        ))
+        let requests = await network.requests
+        #expect(requests.count == 3)
+        #expect(requests.allSatisfy { $0.headers["User-Agent"] == "claude-cli/2.1.280 (external, cli)" })
+        #expect(snapshot.quotas.first { $0.id.rawValue == "rateLimitResetCredits" }?.remaining?.value == 1)
+        #expect(snapshot.quotas.first { $0.id.rawValue == "rateLimitResetCredit.synthetic-promotion" }?.resetsAt
+            == ISO8601DateFormatter().date(from: "2026-10-22T16:00:00Z"))
     }
 
     @Test("valid supplemental rows are shared by provider and account snapshots")

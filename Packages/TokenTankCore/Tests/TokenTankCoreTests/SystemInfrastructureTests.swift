@@ -492,7 +492,7 @@ struct SystemInfrastructureTests {
             "Content-Type": "application/json",
             "Authorization": "Bearer synthetic-token",
             "anthropic-beta": "oauth-2025-04-20",
-            "User-Agent": "claude-code/2.1.280",
+            "User-Agent": "claude-cli/2.1.280 (external, cli)",
         ]
         func request(
             url: String = endpoint,
@@ -577,6 +577,8 @@ struct SystemInfrastructureTests {
             ("anthropic-beta", "wrong-version"),
             ("Content-Type", "text/plain"),
             ("User-Agent", "arbitrary-agent"),
+            ("User-Agent", "claude-code/2.1.280"),
+            ("User-Agent", "claude-cli/2.1.280"),
             ("Accept", "*/*"),
             ("authorization", "Bearer duplicate-case"),
         ] {

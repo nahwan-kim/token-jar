@@ -155,7 +155,7 @@ public actor URLSessionNetworkClient: NetworkClient {
             guard headers["accept"] == "application/json",
                   headers["content-type"] == "application/json",
                   headers["anthropic-beta"] == "oauth-2025-04-20",
-                  headers["user-agent"] == "claude-code/2.1.280",
+                  headers["user-agent"] == "claude-cli/2.1.280 (external, cli)",
                   let authorization = headers["authorization"],
                   authorization.hasPrefix("Bearer "),
                   authorization.count > "Bearer ".count,

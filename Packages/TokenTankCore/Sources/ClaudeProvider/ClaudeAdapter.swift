@@ -237,7 +237,7 @@ private func claudeHeaders(_ token: String) -> [String: String] {
         "Content-Type": "application/json",
         "Authorization": "Bearer \(token)",
         "anthropic-beta": "oauth-2025-04-20",
-        "User-Agent": "claude-code/2.1.280",
+        "User-Agent": "claude-cli/2.1.280 (external, cli)",
     ]
 }
 
