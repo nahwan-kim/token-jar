@@ -341,6 +341,93 @@ final class AppModelTests: XCTestCase {
         await model.stop()
     }
 
+    func testMenuBarFlagsSelectedQuotaWhoseResetIsImminent() async {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func quota(
+            _ name: String,
+            used: Decimal = 40,
+            resetIn seconds: TimeInterval?,
+            fields: [String: String] = [:]
+        ) -> RawQuotaItem {
+            RawQuotaItem(
+                id: RawQuotaID(rawValue: name), originalName: name, used: nil, remaining: nil,
+                percentage: SourcePercentage(
+                    value: used, rawText: NSDecimalNumber(decimal: used).stringValue, meaning: .used
+                ),
+                resetsAt: seconds.map { now.addingTimeInterval($0) },
+                sourceFields: fields
+            )
+        }
+        func imminent(_ quota: RawQuotaItem) -> Bool {
+            QuotaDisplayFormatter.isResetImminent(quota, now: now)
+        }
+
+        XCTAssertTrue(imminent(quota("five_hour", resetIn: 3_600)))
+        XCTAssertFalse(imminent(quota("five_hour", resetIn: 3_601)))
+        XCTAssertTrue(imminent(quota("seven_day", resetIn: 86_400)))
+        XCTAssertFalse(imminent(quota("seven_day", resetIn: 86_401)))
+        XCTAssertTrue(imminent(quota("pro.weekly", resetIn: 600)))
+        XCTAssertFalse(imminent(quota("five_hour", used: 100, resetIn: 600)), "Nothing left to use")
+        XCTAssertFalse(imminent(quota("five_hour", used: 99.6, resetIn: 600)), "Displayed as 0%")
+        XCTAssertTrue(imminent(quota("five_hour", used: 99.5, resetIn: 600)), "Displayed as 1%")
+        XCTAssertFalse(imminent(quota("weekly_scoped.Fable", resetIn: 600)), "Not named Weekly")
+        XCTAssertFalse(imminent(quota("five_hour", resetIn: 0)), "Reset already pending")
+        XCTAssertFalse(imminent(quota("five_hour", resetIn: nil)))
+        XCTAssertFalse(imminent(quota("pro.monthly", resetIn: 600)), "Unknown window")
+        XCTAssertTrue(imminent(quota(
+            "codex.primary", resetIn: 1_800,
+            fields: ["limitId": "codex", "window": "primary", "windowDurationMins": "300"]
+        )))
+        XCTAssertFalse(imminent(quota(
+            "codex.secondary", resetIn: 2 * 86_400,
+            fields: ["limitId": "codex", "window": "secondary", "windowDurationMins": "10080"]
+        )))
+
+        let source = makeSnapshot(providerID: .claude, percentage: 0).source
+        let snapshot = ProviderSnapshot(
+            providerID: .claude, source: source,
+            quotas: [quota("five_hour", resetIn: 1_800), quota("seven_day", resetIn: 3 * 86_400)],
+            refreshedAt: now
+        )
+        let credentials = InMemoryCredentialStore()
+        let model = AppModel(
+            adapters: [TestAppAdapter(id: .claude, results: [.success(snapshot)])],
+            credentialStore: credentials, preferencesStore: MemoryPreferencesStore(),
+            context: makeContext(credentials: credentials)
+        )
+        model.ensureStarted()
+        let loaded = await eventually { model.states[.claude]?.snapshot != nil }
+        XCTAssertTrue(loaded)
+        let resetSoon = CodexAccountPresentation.localized("state.reset_soon", locale: model.locale)
+        func claudeItem() -> MenuBarSummaryItem? {
+            model.menuBarSummaryItems(now: now).first { $0.providerID == .claude }
+        }
+
+        var preference = model.preference(for: .claude)
+        preference.representativeQuotaID = "seven_day"
+        model.updatePreference(preference)
+        XCTAssertEqual(claudeItem(), MenuBarSummaryItem(providerID: .claude, text: "60%"))
+        XCTAssertFalse(model.menuBarLabelText(now: now).contains(resetSoon))
+
+        preference.representativeQuotaID = "five_hour"
+        model.updatePreference(preference)
+        XCTAssertEqual(
+            claudeItem(),
+            MenuBarSummaryItem(providerID: .claude, text: "60%", isResetImminent: true)
+        )
+        XCTAssertTrue(model.menuBarLabelText(now: now).contains("Claude 60% (\(resetSoon))"))
+
+        let plain = MenuBarSummaryRenderer.compose(
+            summaryItems: [MenuBarSummaryItem(providerID: .claude, text: "60%")]
+        )
+        let flagged = MenuBarSummaryRenderer.compose(
+            summaryItems: [MenuBarSummaryItem(providerID: .claude, text: "60%", isResetImminent: true)]
+        )
+        XCTAssertEqual(flagged?.isTemplate, true)
+        XCTAssertGreaterThan(flagged?.size.width ?? 0, plain?.size.width ?? 0)
+        await model.stop()
+    }
+
     func testResetTicketExpirationUsesSelectedLocaleAndTimeZone() {
         let date = ISO8601DateFormatter().date(from: "2030-10-23T18:00:00Z")!
         let korean = QuotaDisplayFormatter.ticketExpiry(

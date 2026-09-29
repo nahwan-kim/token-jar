@@ -45,6 +45,7 @@ struct CodexAccountMenuValue: Equatable, Identifiable, Sendable {
     let sourceID: String
     let value: String
     let isStale: Bool
+    var isResetImminent = false
 
     var id: String { sourceID }
 }
@@ -563,7 +564,10 @@ final class AppModel: ObservableObject {
     }
 
 
-    func codexMenuValues(for preference: ProviderPreference) -> [CodexAccountMenuValue] {
+    func codexMenuValues(
+        for preference: ProviderPreference,
+        now: Date = Date()
+    ) -> [CodexAccountMenuValue] {
         guard preference.providerID == .codex else { return [] }
         return codexAccounts().map { account in
             let quota = menuQuota(for: account, preference: preference)
@@ -575,18 +579,29 @@ final class AppModel: ObservableObject {
             return CodexAccountMenuValue(
                 sourceID: account.sourceID,
                 value: value,
-                isStale: account.isStale
+                isStale: account.isStale,
+                isResetImminent: quota.map { QuotaDisplayFormatter.isResetImminent($0, now: now) } ?? false
             )
         }
     }
 
-    func menuSummaryText(for preference: ProviderPreference) -> String {
+    func isMenuResetImminent(for preference: ProviderPreference, now: Date = Date()) -> Bool {
+        guard let quota = menuQuota(for: preference) else { return false }
+        return QuotaDisplayFormatter.isResetImminent(quota, now: now)
+    }
+
+    func menuSummaryText(for preference: ProviderPreference, now: Date = Date()) -> String {
         let staleLabel = CodexAccountPresentation.localized("state.stale", locale: locale)
+        let resetSoonLabel = CodexAccountPresentation.localized("state.reset_soon", locale: locale)
         if preference.providerID == .codex {
-            let values = codexMenuValues(for: preference)
+            let values = codexMenuValues(for: preference, now: now)
             if !values.isEmpty {
                 let accounts = values.map { value in
-                    let suffix = value.isStale ? " (\(staleLabel))" : ""
+                    let notes = [
+                        value.isStale ? staleLabel : nil,
+                        value.isResetImminent ? resetSoonLabel : nil,
+                    ].compactMap { $0 }
+                    let suffix = notes.isEmpty ? "" : " (\(notes.joined(separator: ", ")))"
                     return "\(value.value)\(suffix)"
                 }.joined(separator: " · ")
                 return "\(preference.providerID.displayName) \(accounts)"
@@ -594,25 +609,34 @@ final class AppModel: ObservableObject {
         }
 
         var value = "\(preference.providerID.displayName) \(menuValue(for: preference))"
-        if states[preference.providerID]?.isStale == true {
-            value += " (\(staleLabel))"
+        let notes = [
+            states[preference.providerID]?.isStale == true ? staleLabel : nil,
+            isMenuResetImminent(for: preference, now: now) ? resetSoonLabel : nil,
+        ].compactMap { $0 }
+        if !notes.isEmpty {
+            value += " (\(notes.joined(separator: ", ")))"
         }
         return value
     }
 
-    func menuBarSummaryItems() -> [MenuBarSummaryItem] {
+    func menuBarSummaryItems(now: Date = Date()) -> [MenuBarSummaryItem] {
         preferences.visibleProviders.map { preference in
             let text: String
+            let isResetImminent: Bool
             if preference.providerID == .codex, !codexAccounts().isEmpty {
-                text = codexMenuValues(for: preference).map {
+                let values = codexMenuValues(for: preference, now: now)
+                text = values.map {
                     "\($0.value)\($0.isStale ? "*" : "")"
                 }.joined(separator: " · ")
+                isResetImminent = values.contains(where: \.isResetImminent)
             } else {
                 text = menuValue(for: preference)
+                isResetImminent = isMenuResetImminent(for: preference, now: now)
             }
             return MenuBarSummaryItem(
                 providerID: preference.providerID,
-                text: menuBarDisplayText(text)
+                text: menuBarDisplayText(text),
+                isResetImminent: isResetImminent
             )
         }
     }
@@ -624,8 +648,10 @@ final class AppModel: ObservableObject {
         return NSDecimalNumber(decimal: rounded).intValue
     }
 
-    func menuBarLabelText(forDisplay: Bool = false) -> String {
-        let text = preferences.visibleProviders.map { menuSummaryText(for: $0) }.joined(separator: "  ")
+    func menuBarLabelText(forDisplay: Bool = false, now: Date = Date()) -> String {
+        let text = preferences.visibleProviders
+            .map { menuSummaryText(for: $0, now: now) }
+            .joined(separator: "  ")
         return forDisplay ? menuBarDisplayText(text) : text
     }
 

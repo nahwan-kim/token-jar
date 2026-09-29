@@ -1095,6 +1095,56 @@ enum QuotaDisplayFormatter {
         return korean ? "\(hours)시간" : "\(hours)h"
     }
 
+    enum ResetWindow: Equatable {
+        case fiveHour
+        case weekly
+
+        /// How close the reset must be before the menu bar nudges the user to spend what is left.
+        var imminentThreshold: TimeInterval {
+            switch self {
+            case .fiveHour: 3_600
+            case .weekly: 86_400
+            }
+        }
+    }
+
+    static func resetWindow(for quota: RawQuotaItem) -> ResetWindow? {
+        if isCodexWindowQuota(quota) {
+            switch codexWindowMinutes(quota) {
+            case 300: return .fiveHour
+            case 10_080: return .weekly
+            default: return nil
+            }
+        }
+        let name = quota.originalName
+        switch name {
+        case "session", "five_hour", "5h":
+            return .fiveHour
+        case "weekly_all", "seven_day", "weekly", "credits":
+            return .weekly
+        default:
+            break
+        }
+        if name.hasSuffix(".5h") { return .fiveHour }
+        if name.hasSuffix(".weekly") { return .weekly }
+        return nil
+    }
+
+    /// True when a 5-hour window resets within 1 hour or a weekly window within 24 hours
+    /// while the displayed (rounded) remaining percentage is above zero.
+    static func isResetImminent(_ quota: RawQuotaItem, now: Date) -> Bool {
+        guard
+            let window = resetWindow(for: quota),
+            let reset = quota.resetsAt,
+            var remaining = remainingPercentage(quota.percentage)
+        else { return false }
+        var rounded = Decimal()
+        NSDecimalRound(&rounded, &remaining, 0, .plain)
+        guard rounded > 0 else { return false }
+        let seconds = reset.timeIntervalSince(now)
+        return seconds > 0 && seconds <= window.imminentThreshold
+    }
+
     private static func isCodexWindowQuota(_ quota: RawQuotaItem) -> Bool {
         let id = quota.id.rawValue
         if id.hasPrefix("rateLimitReset") { return false }

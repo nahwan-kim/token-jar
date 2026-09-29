@@ -610,6 +610,13 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "갱신 중" } }
       }
     },
+    "state.reset_soon" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Resets soon" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "곧 리셋" } }
+      }
+    },
     "state.source.empty" : {
       "extractionState" : "manual",
       "localizations" : {

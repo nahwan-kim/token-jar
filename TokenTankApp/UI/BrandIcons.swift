@@ -94,6 +94,7 @@ struct ProviderBrandIcon: View {
 struct MenuBarSummaryItem: Equatable, Sendable {
     let providerID: ProviderID
     let text: String
+    var isResetImminent = false
 }
 
 enum MenuBarSummaryRenderer {
@@ -122,8 +123,10 @@ enum MenuBarSummaryRenderer {
         let iconTextGap: CGFloat = 3
         let itemGap: CGFloat = 8
         let height: CGFloat = 16
+        let badgeGap: CGFloat = 2
+        let badge = resetSoonBadge()
 
-        var segments: [(NSImage, NSAttributedString, CGSize)] = []
+        var segments: [(NSImage, NSAttributedString, CGSize, NSImage?)] = []
         var totalWidth: CGFloat = 0
         for (index, item) in items.enumerated() {
             guard let icon = BrandIcon.image(
@@ -136,8 +139,12 @@ enum MenuBarSummaryRenderer {
             }
             let text = NSAttributedString(string: item.text, attributes: textAttributes)
             let textSize = text.size()
-            let width = iconSide + iconTextGap + ceil(textSize.width)
-            segments.append((icon, text, NSSize(width: width, height: height)))
+            let itemBadge = item.isResetImminent ? badge : nil
+            var width = iconSide + iconTextGap + ceil(textSize.width)
+            if let itemBadge {
+                width += badgeGap + ceil(itemBadge.size.width)
+            }
+            segments.append((icon, text, NSSize(width: width, height: height), itemBadge))
             totalWidth += width
             if index + 1 < items.count {
                 totalWidth += itemGap
@@ -170,6 +177,22 @@ enum MenuBarSummaryRenderer {
                         y: (height - textSize.height) / 2
                     )
                 )
+                if let badge = segment.3 {
+                    let badgeSize = badge.size
+                    badge.draw(
+                        in: NSRect(
+                            x: x + segment.2.width - ceil(badgeSize.width),
+                            y: (height - badgeSize.height) / 2,
+                            width: badgeSize.width,
+                            height: badgeSize.height
+                        ),
+                        from: .zero,
+                        operation: .sourceOver,
+                        fraction: 1,
+                        respectFlipped: true,
+                        hints: nil
+                    )
+                }
                 x += segment.2.width
                 if index + 1 < segments.count {
                     x += itemGap
@@ -179,5 +202,11 @@ enum MenuBarSummaryRenderer {
         }
         image.isTemplate = true
         return image
+    }
+
+    /// Small hourglass drawn after a value whose selected quota resets soon.
+    private static func resetSoonBadge() -> NSImage? {
+        NSImage(systemSymbolName: "hourglass.bottomhalf.filled", accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 9, weight: .semibold))
     }
 }

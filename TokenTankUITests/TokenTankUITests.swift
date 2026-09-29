@@ -823,12 +823,11 @@ final class TokenTankUITests: XCTestCase {
         let summaryText = accessibilityText(summary)
         XCTAssertFalse(summaryText.contains("Work"))
         XCTAssertFalse(summaryText.contains("Personal"))
-        for expected in ["74% · 98%"] {
-            XCTAssertTrue(
-                summaryText.contains(expected),
-                "Menu accessibility summary is missing \(expected): \(summaryText)"
-            )
-        }
+        // Fixture weekly resets are imminent, so each account value may carry a status note.
+        XCTAssertNotNil(
+            summaryText.range(of: #"74%[^·]* · 98%"#, options: .regularExpression),
+            "Menu accessibility summary is missing ordered account values: \(summaryText)"
+        )
     }
 
     func testMenuBarAccessibilityAndTermination() {
