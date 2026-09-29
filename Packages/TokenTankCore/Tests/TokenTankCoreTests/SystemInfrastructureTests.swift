@@ -1152,7 +1152,13 @@ struct SystemInfrastructureTests {
         printf '%s\\n' '{"id":0,"result":{}}'
         IFS= read -r initialized
         IFS= read -r rateLimitsRequest
-        sleep 0.2
+        # Barrier, not a timed hold: stay running until two servers have started, so the
+        # observed peak is exactly the reader's limit instead of depending on scheduling.
+        waited=0
+        while [ "$(grep -c '^start$' "\(log.path)")" -lt 2 ] && [ "$waited" -lt 400 ]; do
+          sleep 0.01
+          waited=$((waited + 1))
+        done
         printf 'end\\n' >> "\(log.path)"
         printf '%s\\n' '{"id":1,"result":{"rate_limits":{"primary":{"used_percent":1}}}}'
         IFS= read -r accountRequest

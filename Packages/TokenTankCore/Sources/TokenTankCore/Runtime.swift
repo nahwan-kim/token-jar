@@ -228,6 +228,8 @@ public actor RefreshCoordinator {
                 && (nextDueAt[providerID] ?? .distantPast) <= now
         }
         guard !due.isEmpty else { return }
+        // Claim before the next suspension so an overlapping due run cannot pick them too.
+        for providerID in due { queued.insert(providerID) }
         await context.diagnostics.record(
             DiagnosticEvent(level: .debug, category: "schedule", code: "schedule.cycle")
         )
@@ -370,10 +372,9 @@ public actor RefreshCoordinator {
                     for remaining in providerIDs[index...] { queued.remove(remaining) }
                     break
                 }
-                queued.remove(providerID)
                 group.addTask { [weak self] in
                     guard let self else { return }
-                    await self.refresh(providerID, userInitiated: userInitiated, enforcesManualFloor: false)
+                    await self.runPooled(providerID, userInitiated: userInitiated)
                     await self.releasePoolSlot()
                 }
             }
@@ -412,6 +413,13 @@ public actor RefreshCoordinator {
         while let run = triggeredRuns.values.first {
             await run.value
         }
+    }
+
+    /// Leaves `queued` and reserves the collection in one actor step, so the provider never
+    /// looks idle and due in between.
+    private func runPooled(_ providerID: ProviderID, userInitiated: Bool) async {
+        queued.remove(providerID)
+        await refresh(providerID, userInitiated: userInitiated, enforcesManualFloor: false)
     }
 
     private func finishTriggeredRun(_ id: UUID) {

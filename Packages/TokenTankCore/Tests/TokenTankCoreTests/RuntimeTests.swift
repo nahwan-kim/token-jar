@@ -466,9 +466,13 @@ struct RuntimeTests {
             adapters: [adapter],
             context: TestContextFactory.make(clock: clock, diagnostics: diagnostics)
         )
+        let start = await clock.now()
 
         await coordinator.start()
         #expect(await eventually { await adapter.fetchCount == 1 })
+        // The fetch having started is not enough: the clock may only move once the collection
+        // has finished and booked its next check, or that check lands after the advance.
+        #expect(await eventually { await coordinator.nextDue(for: .codex) == start.addingTimeInterval(300) })
         #expect(await eventually { await clock.waitingCount == 1 })
         #expect(await adapter.fetchCount == 1)
 
@@ -507,9 +511,11 @@ struct RuntimeTests {
             adapters: [adapter],
             context: TestContextFactory.make(clock: clock)
         )
+        let start = await clock.now()
 
         await coordinator.start()
         #expect(await eventually { await adapter.fetchCount == 1 })
+        #expect(await eventually { await coordinator.nextDue(for: .claude) == start.addingTimeInterval(60) })
         #expect(await eventually { await clock.waitingCount == 1 })
         #expect(await adapter.contexts == [
             CollectionContextFlags(isUserInitiated: false, allowsClaudeRecovery: true),
@@ -552,6 +558,7 @@ struct RuntimeTests {
 
         await coordinator.start()
         #expect(await eventually { await adapter.fetchCount == 1 })
+        #expect(await eventually { await coordinator.nextDue(for: .codex) != nil })
         #expect(await eventually { await clock.waitingCount == 1 })
 
         await clock.advance(by: .seconds(299))
