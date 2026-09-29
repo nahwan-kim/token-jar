@@ -24,13 +24,15 @@ struct GrokSessionTests {
     func expiryFormats() async throws {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        for rawExpiry: Any in [
-            formatter.string(from: now.addingTimeInterval(3_600)),
-            String(Int(now.addingTimeInterval(3_600).timeIntervalSince1970)),
-            now.addingTimeInterval(3_600).timeIntervalSince1970 * 1_000,
-        ] {
+        // Each entry is built inside its iteration: Swift 6.0 rejects sending a `[String: Any]`
+        // whose values still belong to a non-Sendable array the loop reads again.
+        for format in 0..<3 {
             var value = entry(token: "access-fresh", expiresAt: nil)
-            value["expires_at"] = rawExpiry
+            switch format {
+            case 0: value["expires_at"] = formatter.string(from: now.addingTimeInterval(3_600))
+            case 1: value["expires_at"] = String(Int(now.addingTimeInterval(3_600).timeIntervalSince1970))
+            default: value["expires_at"] = now.addingTimeInterval(3_600).timeIntervalSince1970 * 1_000
+            }
             let refresher = RecordingGrokRefresher()
             let provider = GrokOAuthSessionProvider(
                 clock: ManualClock(now: now),
