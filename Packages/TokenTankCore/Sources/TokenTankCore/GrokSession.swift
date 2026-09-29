@@ -192,8 +192,11 @@ public actor GrokOAuthSessionProvider: GrokSessionProviding {
     }
 
     private func decodedEntry(key: String, value: [String: Any]) throws -> Entry {
-        guard key == "https://accounts.x.ai/sign-in" || isOfficialOIDC(key: key, entry: value) else {
-            throw sourceAuthenticationError("grok.session.identity-invalid")
+        // No `||` here: Swift 6.0 treats its autoclosure as sending the non-Sendable `value`.
+        if key != "https://accounts.x.ai/sign-in" {
+            guard isOfficialOIDC(key: key, entry: value) else {
+                throw sourceAuthenticationError("grok.session.identity-invalid")
+            }
         }
         guard let token = value["key"] as? String, grokAccessTokenIsSafe(token) else {
             throw sourceAuthenticationError("grok.session.token-missing")
