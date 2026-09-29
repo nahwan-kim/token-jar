@@ -107,6 +107,11 @@ struct DetailPopoverView: View {
             model.ensureStarted()
             #endif
         }
+        .onAppear {
+            #if !UITEST
+            model.usageSurfaceDidOpen()
+            #endif
+        }
     }
 
     private var header: some View {
@@ -181,13 +186,11 @@ struct DetailPopoverView: View {
         var hasRefreshing = false
         var hasUnavailable = false
         for providerID in ProviderID.allCases {
-            if providerID == .codex {
-                let accounts = model.codexAccounts()
-                if accounts.contains(where: { $0.failure?.kind.requiresAuthenticationAction == true }) {
-                    return StatusPresentation(title: "state.authentication_required", tint: .red)
-                }
-                hasStale = hasStale || accounts.contains(where: \.isStale)
+            let accounts = model.accounts(for: providerID)
+            if accounts.contains(where: { $0.failure?.kind.requiresAuthenticationAction == true }) {
+                return StatusPresentation(title: "state.authentication_required", tint: .red)
             }
+            hasStale = hasStale || accounts.contains(where: \.isStale)
             switch model.states[providerID] ?? .neverLoaded {
             case .authenticationActionRequired:
                 return StatusPresentation(
@@ -278,8 +281,8 @@ struct ProviderDetailView: View {
             statusView
 
             if let snapshot = state.snapshot {
-                if providerID == .codex, !snapshot.accounts.isEmpty {
-                    codexAccountContent(snapshot)
+                if hasAccountCards {
+                    accountContent(snapshot)
                 } else {
                     snapshotContent(snapshot)
                 }
@@ -337,11 +340,13 @@ struct ProviderDetailView: View {
     }
 
     @ViewBuilder
-    private func codexAccountContent(_ snapshot: ProviderSnapshot) -> some View {
+    private func accountContent(_ snapshot: ProviderSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(CodexAccountPresentation.accounts(for: state)) { account in
-                CodexAccountDetailView(
+            ForEach(CodexAccountPresentation.cardAccounts(providerID: providerID, state: state)) { account in
+                AccountDetailView(
+                    providerID: providerID,
                     account: account,
+                    isFresh: isFresh,
                     fallbackRefreshedAt: snapshot.refreshedAt,
                     now: now,
                     retry: retry,
@@ -405,7 +410,12 @@ struct ProviderDetailView: View {
 
     private var brandTint: Color { BrandIcon.tint(for: providerID) }
     private var hasAccountCards: Bool {
-        providerID == .codex && !(state.snapshot?.accounts.isEmpty ?? true)
+        !CodexAccountPresentation.cardAccounts(providerID: providerID, state: state).isEmpty
+    }
+
+    private var isFresh: Bool {
+        if case .fresh = state { return true }
+        return false
     }
 
     @ViewBuilder
@@ -484,16 +494,18 @@ private struct FreshnessText: View {
     }
 }
 
-private struct CodexAccountDetailView: View {
+private struct AccountDetailView: View {
     @Environment(\.locale) private var locale
+    let providerID: ProviderID
     let account: ProviderAccountSnapshot
+    let isFresh: Bool
     let fallbackRefreshedAt: Date
     let now: Date
     let retry: () -> Void
     let repairClaudeConnection: () -> Void
     let configure: () -> Void
 
-    private var accessibilityID: String { "provider.codex.account.\(account.sourceID)" }
+    private var accessibilityID: String { "provider.\(providerID.rawValue).account.\(account.sourceID)" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -511,13 +523,31 @@ private struct CodexAccountDetailView: View {
                     .accessibilityIdentifier("\(accessibilityID).status")
             }
             if let failure = account.failure {
-                FailureView(providerID: .codex, failure: failure, retry: retry,
+                FailureView(providerID: providerID, failure: failure, retry: retry,
                             repairClaudeConnection: repairClaudeConnection, configure: configure,
                             identifierPrefix: accessibilityID)
             }
-            CodexQuotaColumns(quotas: account.quotas,
-                              refreshedAt: account.refreshedAt ?? fallbackRefreshedAt,
-                              now: now, identifierPrefix: accessibilityID)
+            if providerID == .codex {
+                CodexQuotaColumns(quotas: account.quotas,
+                                  refreshedAt: account.refreshedAt ?? fallbackRefreshedAt,
+                                  now: now, identifierPrefix: accessibilityID)
+            } else {
+                ForEach(QuotaDisplayFormatter.displayedQuotas(account.quotas, providerID: providerID)) { quota in
+                    QuotaValueView(
+                        quota: quota,
+                        refreshedAt: account.refreshedAt ?? fallbackRefreshedAt,
+                        now: now,
+                        scopedLimit: QuotaDisplayFormatter.claudeFableLimit(for: quota, in: account.quotas),
+                        resetCredits: providerID == .claude
+                            && (quota.originalName == "session" || quota.originalName == "five_hour")
+                            ? (isFresh && account.failure == nil
+                                ? QuotaDisplayFormatter.resetCredits(account.quotas, now: now)
+                                : QuotaDisplayFormatter.ResetCredits(count: nil, expiresAt: nil))
+                            : nil,
+                        identifierPrefix: accessibilityID
+                    )
+                }
+            }
         }
         .padding(8)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
@@ -673,6 +703,7 @@ private struct FailureView: View {
     @ViewBuilder
     private var recoveryView: some View {
         if failure.recoveryAction == .signInSourceApp
+            || failure.recoveryAction == .runSourceCLI
             || failure.recoveryAction == .waitForNextRefresh
             || failure.recoveryAction == .allowAccessInSystemSettings {
             Text(actionKey)
@@ -694,7 +725,7 @@ private struct FailureView: View {
                     retry()
                 case .signInTokenTank:
                     configure()
-                case .repairClaudeConnection, .signInSourceApp, .allowAccessInSystemSettings,
+                case .repairClaudeConnection, .signInSourceApp, .runSourceCLI, .allowAccessInSystemSettings,
                      .waitForNextRefresh, .none:
                     break
                 }
@@ -730,6 +761,7 @@ private struct FailureView: View {
         case .retry: "action.retry"
         case .repairClaudeConnection: "action.repair_claude_connection"
         case .waitForNextRefresh: "action.wait"
+        case .runSourceCLI: "action.run_grok_cli"
         case .signInSourceApp:
             providerID == .claude ? "action.sign_in_claude" : "action.sign_in_source"
         case .signInTokenTank: "action.sign_in_token_tank"

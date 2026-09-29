@@ -16,11 +16,12 @@ final class AppModelTests: XCTestCase {
             .success(makeSnapshot(providerID: .claude, percentage: 27)),
         ])
         let credentials = InMemoryCredentialStore()
+        let clock = OffsetClock()
         let model = AppModel(
             adapters: [adapter],
             credentialStore: credentials,
             preferencesStore: MemoryPreferencesStore(),
-            context: makeContext(credentials: credentials)
+            context: makeContext(credentials: credentials, clock: clock)
         )
         model.ensureStarted()
         let loaded = await eventually {
@@ -33,11 +34,14 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(startupUserInitiated, [false])
         XCTAssertEqual(startupRecovery, [true])
 
+        // Step past the 30-second manual-refresh floor so each manual refresh collects.
+        clock.advance(by: 31)
         model.refresh(.claude)
         let singleRefreshed = await eventually {
             model.states[.claude]?.snapshot?.quotas.first?.percentage.value == 25
         }
         XCTAssertTrue(singleRefreshed)
+        clock.advance(by: 31)
         model.refreshAll()
         let allRefreshed = await eventually {
             model.states[.claude]?.snapshot?.quotas.first?.percentage.value == 26
@@ -1620,7 +1624,10 @@ final class AppModelTests: XCTestCase {
             launchAtLoginService: service
         )
     }
-    private func makeContext(credentials: any AppCredentialStore) -> CollectionContext {
+    private func makeContext(
+        credentials: any AppCredentialStore,
+        clock: any TokenTankClock = SystemClock()
+    ) -> CollectionContext {
         CollectionContext(
             network: UnavailableNetworkClient(),
             credentials: credentials,
@@ -1630,7 +1637,7 @@ final class AppModelTests: XCTestCase {
             doubaoPlan: NoDoubaoPlanUsageReader(),
             grokSession: NoGrokSessionProvider(),
             claudeSession: NoClaudeSessionProvider(),
-            clock: SystemClock(),
+            clock: clock,
             diagnostics: NoDiagnostics()
         )
     }
@@ -1698,6 +1705,29 @@ private actor MemoryPreferencesStore: PreferencesStore {
     func save(_ preferences: UserPreferences) {
         saveCount += 1
         value = preferences
+    }
+}
+
+/// System time shifted by a test-controlled offset; sleeps and monotonic time stay real.
+private final class OffsetClock: TokenTankClock, @unchecked Sendable {
+    private let lock = NSLock()
+    private var offset: TimeInterval = 0
+    private let system = SystemClock()
+
+    func advance(by seconds: TimeInterval) {
+        lock.withLock { offset += seconds }
+    }
+
+    func now() async -> Date {
+        Date().addingTimeInterval(lock.withLock { offset })
+    }
+
+    func monotonicNow() async -> Duration {
+        await system.monotonicNow()
+    }
+
+    func sleep(for duration: Duration) async throws {
+        try await system.sleep(for: duration)
     }
 }
 

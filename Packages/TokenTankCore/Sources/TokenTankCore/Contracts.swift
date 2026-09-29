@@ -159,6 +159,20 @@ public protocol DoubaoPlanUsageReader: Sendable {
     func readPlanUsage() async throws -> Data
 }
 
+/// Machine-level events that change when collection is useful: system sleep/wake and
+/// whether the default network path can currently reach anything.
+public enum SystemActivityEvent: Equatable, Sendable {
+    case willSleep
+    case didWake
+    case networkPathChanged(isSatisfied: Bool)
+}
+
+public protocol SystemActivityMonitoring: Sendable {
+    /// A fresh stream per subscriber. Implementations may emit the current network path
+    /// right after `didWake` so a subscriber does not wait for the next path change.
+    func events() -> AsyncStream<SystemActivityEvent>
+}
+
 public protocol TokenTankClock: Sendable {
     func now() async -> Date
     func monotonicNow() async -> Duration

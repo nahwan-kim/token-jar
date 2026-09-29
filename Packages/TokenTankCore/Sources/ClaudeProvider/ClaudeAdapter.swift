@@ -18,6 +18,11 @@ public struct ClaudeAdapter: ProviderAdapter {
         )
     }
 
+    /// Reset tickets change rarely; the supplemental request runs at most this often per account.
+    public static let resetCreditsInterval: TimeInterval = 30 * 60
+
+    private let memory = ClaudeAccountMemory()
+
     public init() {}
 
     public func probeAvailability(context: CollectionContext) async -> ProviderAvailability {
@@ -25,10 +30,87 @@ public struct ClaudeAdapter: ProviderAdapter {
     }
 
     public func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
+        let accounts = try await context.claudeSession.accounts()
+        guard !accounts.isEmpty else {
+            throw CollectionError(
+                kind: .externalSessionMissing,
+                diagnosticCode: "claude.session.credentials-missing",
+                recoveryAction: .signInSourceApp
+            )
+        }
+        await memory.retain(sourceIDs: Set(accounts.map(\.sourceID)))
+
+        var readings: [(account: ClaudeAccount, result: Result<ProviderAccountSnapshot, CollectionError>)] = []
+        var seenTokens: Set<String> = []
+        for account in accounts {
+            do {
+                if let snapshot = try await fetchAccount(account, context: context, seenTokens: &seenTokens) {
+                    readings.append((account, .success(snapshot)))
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as CollectionError where error.kind == .cancelled {
+                throw error
+            } catch let error as CollectionError {
+                readings.append((account, .failure(error)))
+            }
+        }
+
+        if readings.count == 1 {
+            let snapshot = try readings[0].result.get()
+            return ProviderSnapshot(
+                providerID: .claude,
+                source: sourceDescriptor,
+                quotas: snapshot.quotas,
+                refreshedAt: snapshot.refreshedAt ?? Date(timeIntervalSince1970: 0),
+                accountEmail: snapshot.accountEmail,
+                accounts: [snapshot]
+            )
+        }
+        guard readings.contains(where: { (try? $0.result.get()) != nil }) else {
+            throw (readings.first.map { reading -> CollectionError in
+                if case let .failure(error) = reading.result { return error }
+                return claudeMalformedError("claude.oauth.accounts.empty")
+            }) ?? claudeMalformedError("claude.oauth.accounts.empty")
+        }
+        let now = await context.clock.now()
+        let snapshots = readings.map { reading -> ProviderAccountSnapshot in
+            switch reading.result {
+            case let .success(snapshot):
+                return snapshot
+            case let .failure(error):
+                return ProviderAccountSnapshot(
+                    sourceID: reading.account.sourceID,
+                    quotas: [],
+                    accountEmail: reading.account.email,
+                    failure: error,
+                    failedAt: now
+                )
+            }
+        }
+        return ProviderSnapshot(
+            providerID: .claude,
+            source: sourceDescriptor,
+            accounts: snapshots,
+            refreshedAt: snapshots.compactMap(\.refreshedAt).max() ?? now
+        )
+    }
+
+    /// One account's usage. Returns `nil` when the account signs in with a token another
+    /// account already used in this collection (the same login found in two places).
+    private func fetchAccount(
+        _ account: ClaudeAccount,
+        context: CollectionContext,
+        seenTokens: inout Set<String>
+    ) async throws -> ProviderAccountSnapshot? {
         var repairAvailable = context.allowsClaudeRecovery
         var session = try await claudeSourceSession(
-            in: context, rejectedAccessToken: nil, repairAvailable: &repairAvailable
+            account: account.sourceID,
+            in: context,
+            rejectedAccessToken: nil,
+            repairAvailable: &repairAvailable
         )
+        guard seenTokens.insert(session.accessToken).inserted else { return nil }
         var response = try await claudeResponse(
             path: "/api/oauth/usage",
             token: session.accessToken,
@@ -38,7 +120,10 @@ public struct ClaudeAdapter: ProviderAdapter {
         if response.statusCode == 401 {
             let rejectedToken = session.accessToken
             session = try await claudeSourceSession(
-                in: context, rejectedAccessToken: rejectedToken, repairAvailable: &repairAvailable
+                account: account.sourceID,
+                in: context,
+                rejectedAccessToken: rejectedToken,
+                repairAvailable: &repairAvailable
             )
             guard session.accessToken != rejectedToken else {
                 throw CollectionError(
@@ -47,6 +132,7 @@ public struct ClaudeAdapter: ProviderAdapter {
                     recoveryAction: .signInSourceApp
                 )
             }
+            seenTokens.insert(session.accessToken)
             response = try await claudeResponse(
                 path: "/api/oauth/usage",
                 token: session.accessToken,
@@ -58,28 +144,71 @@ public struct ClaudeAdapter: ProviderAdapter {
         try claudeValidate(response, now: validationNow)
         let primaryQuotas = try Self.decodeQuotas(from: response.body)
         let refreshedAt = await context.clock.now()
-        let profile = try await claudeProfile(token: session.accessToken, network: context.network)
-        let resetCredits = try await claudeResetCredits(token: session.accessToken, network: context.network)
-        let quotas = primaryQuotas + resetCredits
-        let email = profile.email
+
+        let tokenDigest = ClaudeAccountMemory.digest(session.accessToken)
+        let profile: ClaudeProfile?
+        if let cached = await memory.profile(for: account.sourceID, tokenDigest: tokenDigest) {
+            profile = cached
+        } else {
+            profile = try await claudeProfile(token: session.accessToken, network: context.network)
+            if let profile {
+                await memory.storeProfile(profile, for: account.sourceID, tokenDigest: tokenDigest)
+            }
+        }
+
+        let identity = account.accountUUID ?? profile?.email ?? account.email
+        let resetCredits: [RawQuotaItem]
+        if let cached = await memory.resetCredits(
+            for: account.sourceID,
+            identity: identity,
+            now: refreshedAt,
+            maximumAge: Self.resetCreditsInterval
+        ) {
+            resetCredits = cached
+        } else if let fetched = try await claudeResetCredits(token: session.accessToken, network: context.network) {
+            await memory.storeResetCredits(fetched, for: account.sourceID, identity: identity, fetchedAt: refreshedAt)
+            resetCredits = fetched
+        } else {
+            resetCredits = await memory.lastResetCredits(for: account.sourceID, identity: identity) ?? []
+        }
+
+        let quotas = primaryQuotas + Self.activeResetCredits(resetCredits, now: refreshedAt)
         let plan = claudeNonempty(session.subscriptionType)
-            ?? profile.organizationPlan
+            ?? profile?.organizationPlan
             ?? claudeNonempty(session.rateLimitTier)
-        let account = ProviderAccountSnapshot(
-            sourceID: "claude.oauth",
+        return ProviderAccountSnapshot(
+            sourceID: account.sourceID,
             quotas: quotas,
             refreshedAt: refreshedAt,
-            accountEmail: email,
+            accountEmail: account.email ?? profile?.email,
             plan: plan
         )
-        return ProviderSnapshot(
-            providerID: .claude,
-            source: sourceDescriptor,
-            quotas: quotas,
-            refreshedAt: refreshedAt,
-            accountEmail: email,
-            accounts: [account]
+    }
+
+    /// Drops reset tickets whose `ends_at` has passed and recomputes the summary count.
+    public static func activeResetCredits(_ items: [RawQuotaItem], now: Date) -> [RawQuotaItem] {
+        guard let summaryIndex = items.firstIndex(where: { $0.id.rawValue == "rateLimitResetCredits" }) else {
+            return items
+        }
+        let grants = items.filter { $0.id.rawValue.hasPrefix("rateLimitResetCredit.") }
+        let active = grants.filter { grant in grant.resetsAt.map { $0 > now } ?? true }
+        guard active.count != grants.count else { return items }
+        var total = Decimal.zero
+        for grant in active {
+            total += grant.remaining?.value ?? 0
+        }
+        let summary = items[summaryIndex]
+        let raw = NSDecimalNumber(decimal: total).stringValue
+        let recomputed = RawQuotaItem(
+            id: summary.id,
+            originalName: summary.originalName,
+            used: summary.used,
+            remaining: SourceValue(value: total, rawText: raw, unit: summary.remaining?.unit ?? "credits"),
+            percentage: summary.percentage,
+            resetsAt: summary.resetsAt,
+            sourceFields: summary.sourceFields
         )
+        return [recomputed] + active
     }
 
     public static func decodeSnapshot(
@@ -202,12 +331,14 @@ private struct ClaudeDecimalValue {
 }
 
 private func claudeSourceSession(
+    account sourceID: String,
     in context: CollectionContext,
     rejectedAccessToken: String?,
     repairAvailable: inout Bool
 ) async throws -> ClaudeSession {
     do {
         return try await context.claudeSession.session(
+            account: sourceID,
             allowInteraction: false,
             rejectedAccessToken: rejectedAccessToken
         )
@@ -219,6 +350,7 @@ private func claudeSourceSession(
         repairAvailable = false
         try Task.checkCancellation()
         return try await context.claudeSession.session(
+            account: sourceID,
             allowInteraction: true,
             rejectedAccessToken: rejectedAccessToken
         )
@@ -316,12 +448,13 @@ private func claudeRetryAfter(_ raw: String?, now: Date) -> Date {
     return now.addingTimeInterval(300)
 }
 
-private struct ClaudeProfile {
+struct ClaudeProfile: Sendable, Equatable {
     let email: String?
     let organizationPlan: String?
 }
 
-private func claudeProfile(token: String, network: any NetworkClient) async throws -> ClaudeProfile {
+/// `nil` when the profile could not be read; the collection continues without it.
+private func claudeProfile(token: String, network: any NetworkClient) async throws -> ClaudeProfile? {
     do {
         let response = try await claudeResponse(
             path: "/api/oauth/profile",
@@ -331,7 +464,7 @@ private func claudeProfile(token: String, network: any NetworkClient) async thro
         )
         guard response.statusCode == 200, !response.body.isEmpty,
               let root = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any]
-        else { return ClaudeProfile(email: nil, organizationPlan: nil) }
+        else { return nil }
         let account = root["account"] as? [String: Any]
         let organization = root["organization"] as? [String: Any]
         let email = claudeNonempty(account?["email"] as? String)
@@ -346,11 +479,12 @@ private func claudeProfile(token: String, network: any NetworkClient) async thro
     } catch let error as CollectionError where error.kind == .cancelled {
         throw error
     } catch {
-        return ClaudeProfile(email: nil, organizationPlan: nil)
+        return nil
     }
 }
 
-private func claudeResetCredits(token: String, network: any NetworkClient) async throws -> [RawQuotaItem] {
+/// `nil` when the supplemental reset request failed; the caller keeps its previous value.
+private func claudeResetCredits(token: String, network: any NetworkClient) async throws -> [RawQuotaItem]? {
     do {
         let response = try await claudeResponse(
             path: "/api/oauth/usage?cedar_ember=1&skip_spend=1",
@@ -358,14 +492,14 @@ private func claudeResetCredits(token: String, network: any NetworkClient) async
             timeout: 15,
             network: network
         )
-        guard response.statusCode == 200, !response.body.isEmpty else { return [] }
-        return (try? ClaudeAdapter.decodeResetCredits(from: response.body)) ?? []
+        guard response.statusCode == 200, !response.body.isEmpty else { return nil }
+        return try? ClaudeAdapter.decodeResetCredits(from: response.body)
     } catch is CancellationError {
         throw CancellationError()
     } catch let error as CollectionError where error.kind == .cancelled {
         throw error
     } catch {
-        return []
+        return nil
     }
 }
 

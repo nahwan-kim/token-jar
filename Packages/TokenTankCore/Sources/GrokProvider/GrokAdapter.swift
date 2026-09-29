@@ -14,7 +14,7 @@ public struct GrokAdapter: ProviderAdapter {
             kind: .localSession,
             credentialOwnership: .externalProvider,
             documentationURL: URL(string: "https://github.com/steipete/CodexBar/blob/main/docs/grok.md"),
-            detail: "Grok CLI ~/.grok/auth.json OAuth session plus cli-chat-proxy.grok.com/v1/billing?format=credits. Session expiry or one proxy authentication rejection triggers OAuth refresh through auth.x.ai and an atomic update of the same auth file. When that successful proxy snapshot omits usage, Token Jar may make a bearer-only grpc-web POST to grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig using the same captured session token. Proxy reset, source metadata, and account identity remain authoritative; web billing supplies usage only. Token Jar never imports browser cookies, never launches a CLI subprocess, never calls the xAI Management prepaid-balance API, and never maintains a separate token cache."
+            detail: "Grok CLI ~/.grok/auth.json OAuth sessions (every signed-in scope, one account each) plus cli-chat-proxy.grok.com/v1/billing?format=credits. Token Jar only reads the auth file. Session expiry or one proxy authentication rejection runs the installed Grok CLI once per collection (`grok models`, fixed path, empty working directory, 30-second limit, bounded output) so the CLI renews under its own lock, then rereads the file; if the session is still expired Token Jar reports that running the Grok CLI once renews it. When that successful proxy snapshot omits usage, Token Jar may make a bearer-only grpc-web POST to grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig using the same captured session token. Proxy reset, source metadata, and account identity remain authoritative; web billing supplies usage only. Token Jar never imports browser cookies, never sends an OAuth refresh grant, never writes the auth file, never calls the xAI Management prepaid-balance API, and never maintains a separate token cache."
         )
     }
 
@@ -25,17 +25,99 @@ public struct GrokAdapter: ProviderAdapter {
     }
 
     public func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
-        var session = try await grokSourceSession(in: context, rejectedAccessToken: nil)
-        var refreshedAt = await context.clock.now()
-        var response = try await grokBillingResponse(token: session.accessToken, network: context.network)
-
-        if response.statusCode == 401 || response.statusCode == 403 {
-            let rejectedAccessToken = session.accessToken
-            session = try await grokSourceSession(in: context, rejectedAccessToken: rejectedAccessToken)
-            refreshedAt = await context.clock.now()
-            response = try await grokBillingResponse(token: session.accessToken, network: context.network)
+        let firstRead = try await grokAccounts(in: context, rejectedAccessTokens: [])
+        var outcomes: [String: Result<ProviderSnapshot, CollectionError>] = [:]
+        var rejectedTokens: Set<String> = []
+        for account in firstRead.accounts {
+            guard let session = account.session else {
+                outcomes[account.sourceID] = .failure(account.failure ?? grokMissingSession())
+                continue
+            }
+            do {
+                outcomes[account.sourceID] = .success(
+                    try await billingSnapshot(session: session, context: context, acceptsRejection: false)
+                )
+            } catch let rejection as GrokProxyRejection {
+                rejectedTokens.insert(rejection.accessToken)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as CollectionError where error.kind == .cancelled {
+                throw error
+            } catch let error as CollectionError {
+                outcomes[account.sourceID] = .failure(error)
+            }
         }
 
+        var accounts = firstRead.accounts
+        if !rejectedTokens.isEmpty {
+            // One proxy rejection per account gets one reread; the CLI may renew in between.
+            let secondRead = try await grokAccounts(in: context, rejectedAccessTokens: rejectedTokens)
+            accounts = secondRead.accounts
+            for account in secondRead.accounts where outcomes[account.sourceID] == nil {
+                guard let session = account.session else {
+                    outcomes[account.sourceID] = .failure(account.failure ?? grokMissingSession())
+                    continue
+                }
+                do {
+                    outcomes[account.sourceID] = .success(
+                        try await billingSnapshot(session: session, context: context, acceptsRejection: true)
+                    )
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch let error as CollectionError where error.kind == .cancelled {
+                    throw error
+                } catch let error as CollectionError {
+                    outcomes[account.sourceID] = .failure(error)
+                }
+            }
+        }
+
+        let ordered = accounts.compactMap { account in outcomes[account.sourceID].map { (account, $0) } }
+        if ordered.count == 1 {
+            return try ordered[0].1.get()
+        }
+        guard ordered.contains(where: { (try? $0.1.get()) != nil }) else {
+            if case let .failure(error)? = ordered.first?.1 { throw error }
+            throw grokMissingSession()
+        }
+        let now = await context.clock.now()
+        let snapshots = ordered.map { account, outcome -> ProviderAccountSnapshot in
+            switch outcome {
+            case let .success(snapshot):
+                return ProviderAccountSnapshot(
+                    sourceID: account.sourceID,
+                    quotas: snapshot.quotas,
+                    refreshedAt: snapshot.refreshedAt,
+                    accountEmail: snapshot.accountEmail
+                )
+            case let .failure(error):
+                return ProviderAccountSnapshot(
+                    sourceID: account.sourceID,
+                    quotas: [],
+                    accountEmail: account.accountEmail,
+                    failure: error,
+                    failedAt: now
+                )
+            }
+        }
+        return ProviderSnapshot(
+            providerID: .grok,
+            source: sourceDescriptor,
+            accounts: snapshots,
+            refreshedAt: snapshots.compactMap(\.refreshedAt).max() ?? now
+        )
+    }
+
+    private func billingSnapshot(
+        session: GrokSession,
+        context: CollectionContext,
+        acceptsRejection: Bool
+    ) async throws -> ProviderSnapshot {
+        let refreshedAt = await context.clock.now()
+        let response = try await grokBillingResponse(token: session.accessToken, network: context.network)
+        if !acceptsRejection, response.statusCode == 401 || response.statusCode == 403 {
+            throw GrokProxyRejection(accessToken: session.accessToken)
+        }
         try grokValidate(response, now: refreshedAt)
         let proxySnapshot = try Self.decodeSnapshot(
             from: response.body,
@@ -187,12 +269,27 @@ private struct GrokDecimalValue {
     let raw: String
 }
 
-private func grokSourceSession(
+private struct GrokProxyRejection: Error {
+    let accessToken: String
+}
+
+private func grokMissingSession() -> CollectionError {
+    CollectionError(
+        kind: .externalSessionMissing,
+        diagnosticCode: "grok.session.token-missing",
+        recoveryAction: .signInSourceApp
+    )
+}
+
+private func grokAccounts(
     in context: CollectionContext,
-    rejectedAccessToken: String?
-) async throws -> GrokSession {
+    rejectedAccessTokens: Set<String>
+) async throws -> GrokAccountsRead {
     do {
-        return try await context.grokSession.session(rejectedAccessToken: rejectedAccessToken)
+        return try await context.grokSession.accounts(
+            rejectedAccessTokens: rejectedAccessTokens,
+            allowsCLIRefresh: true
+        )
     } catch is CancellationError {
         throw CancellationError()
     } catch let error as CollectionError {

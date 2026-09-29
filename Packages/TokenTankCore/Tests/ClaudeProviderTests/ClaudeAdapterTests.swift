@@ -433,7 +433,8 @@ struct ClaudeAdapterTests {
         #expect(error == failure)
         await coordinator.refresh(.claude)
         #expect(await sessions.allowInteractionRequests == [false, false, true, false, true])
-        #expect(await network.requests.count == 6)
+        // Profile and reset tickets are cached for the unchanged token.
+        #expect(await network.requests.count == 4)
         guard case let .fresh(recovered) = await coordinator.state(for: .claude) else {
             Issue.record("Expected next background collection to recover without a repair click")
             return
@@ -763,40 +764,100 @@ struct ClaudeAdapterTests {
         #expect(overCap.quotas[0].remaining == nil)
     }
 
-    @Test("each poll replaces reset counts and a failed optional request never reuses an older count")
-    func resetCountsAreReadAgainEachPoll() async throws {
-        let counts: [Int?] = [2, 1, 0, nil, 3]
-        let sessions = MemoryClaudeSessionProvider(results: counts.map { _ in .success(session) })
-        var results: [Result<NetworkResponse, CollectionError>] = []
-        for count in counts {
-            results.append(.success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)))
-            results.append(.success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))))
-            if let count {
-                let body = Data("{\"cedar_ember\":{\"eligible\":true,\"grants\":[{\"id\":\"ticket\",\"resets_left\":\(count)}]}}".utf8)
-                results.append(.success(NetworkResponse(statusCode: 200, headers: [:], body: body)))
-            } else {
-                results.append(.failure(CollectionError(kind: .transientNetwork, diagnosticCode: "test.reset.offline")))
-            }
-        }
-        let network = QueueNetworkClient(results: results)
-        let coordinator = RefreshCoordinator(
-            adapters: [ClaudeAdapter()],
-            context: TestContextFactory.make(network: network, claudeSession: sessions)
+    @Test("profile is read once per token and reset tickets at most every 30 minutes")
+    func supplementalRequestsAreCached() async throws {
+        let clock = ManualClock(now: now)
+        let rotated = ClaudeSession(
+            accessToken: "rotated-claude-token",
+            expiresAt: session.expiresAt,
+            subscriptionType: session.subscriptionType,
+            rateLimitTier: session.rateLimitTier
         )
-        for expected in counts {
-            await coordinator.refresh(.claude)
-            guard case let .fresh(snapshot) = await coordinator.state(for: .claude) else {
-                Issue.record("Primary usage should remain fresh")
-                return
-            }
-            let count = snapshot.quotas.first { $0.id.rawValue == "rateLimitResetCredits" }?.remaining?.value
-            #expect(count == expected.map { Decimal($0) })
-            #expect(snapshot.accounts.first?.quotas == snapshot.quotas)
+        let sessions = MemoryClaudeSessionProvider(results: [
+            .success(session), .success(session), .success(rotated), .success(rotated),
+        ])
+        func reset(_ count: Int) -> Result<NetworkResponse, CollectionError> {
+            .success(NetworkResponse(
+                statusCode: 200,
+                headers: [:],
+                body: Data("{\"cedar_ember\":{\"eligible\":true,\"grants\":[{\"id\":\"ticket\",\"resets_left\":\(count)}]}}".utf8)
+            ))
         }
+        let usage = Result<NetworkResponse, CollectionError>.success(
+            NetworkResponse(statusCode: 200, headers: [:], body: fixture)
+        )
+        let profile = Result<NetworkResponse, CollectionError>.success(NetworkResponse(
+            statusCode: 200,
+            headers: [:],
+            body: Data("{\"account\":{\"email\":\"owner@example.com\"}}".utf8)
+        ))
+        let network = QueueNetworkClient(results: [
+            usage, profile, reset(2),
+            usage,
+            usage, profile,
+            usage, reset(1),
+        ])
+        let adapter = ClaudeAdapter()
+        let context = TestContextFactory.make(network: network, claudeSession: sessions, clock: clock)
+        func resetCount(_ snapshot: ProviderSnapshot) -> Decimal? {
+            snapshot.quotas.first { $0.id.rawValue == "rateLimitResetCredits" }?.remaining?.value
+        }
+
+        let first = try await adapter.fetchSnapshot(context: context)
+        #expect(resetCount(first) == 2)
+        #expect(first.accountEmail == "owner@example.com")
+
+        await clock.advance(by: .seconds(300))
+        let sameToken = try await adapter.fetchSnapshot(context: context)
+        #expect(resetCount(sameToken) == 2)
+        #expect(sameToken.accountEmail == "owner@example.com")
+
+        await clock.advance(by: .seconds(300))
+        let newToken = try await adapter.fetchSnapshot(context: context)
+        #expect(resetCount(newToken) == 2)
+
+        await clock.advance(by: .seconds(1_200))
+        let afterInterval = try await adapter.fetchSnapshot(context: context)
+        #expect(resetCount(afterInterval) == 1)
+
         let requests = await network.requests
-        #expect(requests.count == 15)
-        #expect(requests.filter { $0.url.query == "cedar_ember=1&skip_spend=1" }.count == 5)
-        #expect(await sessions.allowInteractionRequests == [false, false, false, false, false])
+        #expect(requests.count == 8)
+        #expect(requests.filter { $0.url.path == "/api/oauth/profile" }.count == 2)
+        #expect(requests.filter { $0.url.query == "cedar_ember=1&skip_spend=1" }.count == 2)
+        #expect(requests.filter { $0.url.path == "/api/oauth/profile" }.map { $0.headers["Authorization"] } == [
+            "Bearer \(session.accessToken)", "Bearer rotated-claude-token",
+        ])
+    }
+
+    @Test("a failed reset request keeps the previous count and expired tickets are hidden")
+    func resetFailureKeepsPreviousAndExpiredTicketsDrop() async throws {
+        let clock = ManualClock(now: now)
+        let sessions = MemoryClaudeSessionProvider(results: [.success(session), .success(session), .success(session)])
+        let body = Data("""
+        {"cedar_ember":{"eligible":true,"grants":[
+          {"id":"soon","resets_left":1,"ends_at":"\(ISO8601DateFormatter().string(from: now.addingTimeInterval(3_000)))"},
+          {"id":"later","resets_left":2,"ends_at":"\(ISO8601DateFormatter().string(from: now.addingTimeInterval(86_400)))"}
+        ]}}
+        """.utf8)
+        let network = QueueNetworkClient(results: [
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: body)),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+            .failure(CollectionError(kind: .transientNetwork, diagnosticCode: "test.reset.offline")),
+        ])
+        let adapter = ClaudeAdapter()
+        let context = TestContextFactory.make(network: network, claudeSession: sessions, clock: clock)
+
+        let first = try await adapter.fetchSnapshot(context: context)
+        #expect(first.quotas.first { $0.id.rawValue == "rateLimitResetCredits" }?.remaining?.value == 3)
+
+        await clock.advance(by: .seconds(3_600))
+        let second = try await adapter.fetchSnapshot(context: context)
+        #expect(second.quotas.first { $0.id.rawValue == "rateLimitResetCredits" }?.remaining?.value == 2)
+        #expect(second.quotas.contains { $0.id.rawValue == "rateLimitResetCredit.soon" } == false)
+        #expect(second.quotas.contains { $0.id.rawValue == "rateLimitResetCredit.later" })
+        #expect(await network.requests.count == 5)
     }
     @Test("reset credits preserve exact counts, dates, and safe source fields")
     func resetCreditsDecode() throws {
@@ -942,8 +1003,11 @@ struct ClaudeAdapterTests {
             .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
             .success(NetworkResponse(statusCode: 200, headers: [:], body: body)),
         ])
+        let beforeGrantEnds = ISO8601DateFormatter().date(from: "2026-09-29T00:00:00Z")!
         let snapshot = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
-            network: network, claudeSession: MemoryClaudeSessionProvider(results: [.success(session)])
+            network: network,
+            claudeSession: MemoryClaudeSessionProvider(results: [.success(session)]),
+            clock: ManualClock(now: beforeGrantEnds)
         ))
         let requests = await network.requests
         #expect(requests.count == 3)
@@ -984,7 +1048,114 @@ struct ClaudeAdapterTests {
         }
         #expect(await sessions.allowInteractionRequests == [false])
     }
+
+    @Test("each Claude sign-in is collected separately and a shared token is collected once")
+    func multipleAccountsAreCollectedSeparately() async throws {
+        let work = ClaudeAccount(sourceID: "claude.oauth.claude-work", accountUUID: "uuid-work", email: "work@example.com")
+        let copy = ClaudeAccount(sourceID: "claude.oauth.claude-copy", accountUUID: nil, email: nil)
+        let sessions = AccountClaudeSessions(accounts: [.default, work, copy], sessions: [
+            ClaudeAccount.defaultSourceID: .success(session),
+            work.sourceID: .success(ClaudeSession(accessToken: "work-token", expiresAt: session.expiresAt)),
+            copy.sourceID: .success(session),
+        ])
+        let network = QueueNetworkClient(results: [
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+            .success(NetworkResponse(
+                statusCode: 200, headers: [:],
+                body: Data("{\"account\":{\"email\":\"personal@example.com\"}}".utf8)
+            )),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+        ])
+        let snapshot = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
+            network: network, claudeSession: sessions, clock: ManualClock(now: now)
+        ))
+        #expect(snapshot.accounts.map(\.sourceID) == ["claude.oauth", "claude.oauth.claude-work"])
+        #expect(snapshot.account(for: "claude.oauth")?.accountEmail == "personal@example.com")
+        #expect(snapshot.account(for: "claude.oauth.claude-work")?.accountEmail == "work@example.com")
+        #expect(snapshot.quotas.isEmpty)
+        #expect(await network.requests.count == 6)
+    }
+
+    @Test("one failing Claude account is isolated; all failing accounts fail the collection")
+    func accountFailuresAreIsolated() async throws {
+        let work = ClaudeAccount(sourceID: "claude.oauth.claude-work", email: "work@example.com")
+        let expired = CollectionError(
+            kind: .authenticationRejected,
+            diagnosticCode: "test.claude.expired",
+            recoveryAction: .signInSourceApp
+        )
+        let partial = AccountClaudeSessions(accounts: [.default, work], sessions: [
+            ClaudeAccount.defaultSourceID: .success(session),
+            work.sourceID: .failure(expired),
+        ])
+        let network = QueueNetworkClient(results: [
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+        ])
+        let snapshot = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
+            network: network, claudeSession: partial, clock: ManualClock(now: now)
+        ))
+        #expect(snapshot.account(for: ClaudeAccount.defaultSourceID)?.failure == nil)
+        #expect(snapshot.account(for: work.sourceID)?.failure == expired)
+        #expect(snapshot.account(for: work.sourceID)?.accountEmail == "work@example.com")
+
+        let allFailing = AccountClaudeSessions(accounts: [.default, work], sessions: [
+            ClaudeAccount.defaultSourceID: .failure(expired),
+            work.sourceID: .failure(expired),
+        ])
+        do {
+            _ = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
+                network: QueueNetworkClient(results: []), claudeSession: allFailing
+            ))
+            Issue.record("Expected every account failing to fail the collection")
+        } catch let error as CollectionError {
+            #expect(error == expired)
+        }
+    }
+
+    @Test("recovery budget applies once per Claude account per collection")
+    func recoveryBudgetIsPerAccount() async throws {
+        let work = ClaudeAccount(sourceID: "claude.oauth.claude-work")
+        let base = AccountClaudeSessions(accounts: [.default, work], sessions: [:])
+        let scoped = TestContextFactory.make(claudeSession: base).scoped(
+            to: .claude, isUserInitiated: false, allowsClaudeRecovery: true
+        )
+        _ = try? await scoped.claudeSession.session(account: ClaudeAccount.defaultSourceID, allowInteraction: true, rejectedAccessToken: nil)
+        _ = try? await scoped.claudeSession.session(account: work.sourceID, allowInteraction: true, rejectedAccessToken: nil)
+        _ = try? await scoped.claudeSession.session(account: work.sourceID, allowInteraction: true, rejectedAccessToken: nil)
+        #expect(await base.interactiveRequests == [ClaudeAccount.defaultSourceID, work.sourceID])
+    }
 }
+
+private actor AccountClaudeSessions: ClaudeSessionProviding {
+    private let knownAccounts: [ClaudeAccount]
+    private let sessions: [String: Result<ClaudeSession, CollectionError>]
+    private(set) var interactiveRequests: [String] = []
+
+    init(accounts: [ClaudeAccount], sessions: [String: Result<ClaudeSession, CollectionError>]) {
+        self.knownAccounts = accounts
+        self.sessions = sessions
+    }
+
+    func accounts() -> [ClaudeAccount] { knownAccounts }
+
+    func session(allowInteraction: Bool, rejectedAccessToken: String?) throws -> ClaudeSession {
+        try session(account: ClaudeAccount.defaultSourceID, allowInteraction: allowInteraction, rejectedAccessToken: rejectedAccessToken)
+    }
+
+    func session(account sourceID: String, allowInteraction: Bool, rejectedAccessToken: String?) throws -> ClaudeSession {
+        if allowInteraction { interactiveRequests.append(sourceID) }
+        guard let result = sessions[sourceID] else {
+            throw CollectionError(kind: .externalSessionMissing, diagnosticCode: "test.claude.none")
+        }
+        return try result.get()
+    }
+}
+
 
 private actor RecordingExternalSessionReader: ExternalSessionReader {
     private(set) var operationCount = 0

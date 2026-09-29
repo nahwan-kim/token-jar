@@ -14,8 +14,49 @@ public struct GrokSession: Sendable, Equatable {
     }
 }
 
+/// One Grok CLI sign-in (one `auth.json` scope entry) and either its usable session or why not.
+public struct GrokAccountRead: Sendable, Equatable {
+    public static let defaultSourceID = "grok.cli"
+
+    public let sourceID: String
+    public let accountEmail: String?
+    public let session: GrokSession?
+    public let failure: CollectionError?
+
+    public init(sourceID: String, accountEmail: String? = nil, session: GrokSession?, failure: CollectionError? = nil) {
+        self.sourceID = sourceID
+        self.accountEmail = accountEmail ?? session?.accountEmail
+        self.session = session
+        self.failure = failure
+    }
+}
+
+public struct GrokAccountsRead: Sendable, Equatable {
+    public let accounts: [GrokAccountRead]
+    /// Whether this read ran the Grok CLI to let it renew its own session.
+    public let ranCLIRefresh: Bool
+
+    public init(accounts: [GrokAccountRead], ranCLIRefresh: Bool) {
+        self.accounts = accounts
+        self.ranCLIRefresh = ranCLIRefresh
+    }
+}
+
 public protocol GrokSessionProviding: Sendable {
     func session(rejectedAccessToken: String?) async throws -> GrokSession
+    /// Every Grok CLI sign-in. With `allowsCLIRefresh`, an expired or rejected session may run the
+    /// Grok CLI once so it renews its own tokens; Token Jar itself never renews or writes them.
+    func accounts(rejectedAccessTokens: Set<String>, allowsCLIRefresh: Bool) async throws -> GrokAccountsRead
+}
+
+public extension GrokSessionProviding {
+    func accounts(rejectedAccessTokens: Set<String>, allowsCLIRefresh: Bool) async throws -> GrokAccountsRead {
+        let session = try await session(rejectedAccessToken: rejectedAccessTokens.sorted().first)
+        return GrokAccountsRead(
+            accounts: [GrokAccountRead(sourceID: GrokAccountRead.defaultSourceID, session: session)],
+            ranCLIRefresh: false
+        )
+    }
 }
 
 public struct NoGrokSessionProvider: GrokSessionProviding {
@@ -27,256 +68,168 @@ public struct NoGrokSessionProvider: GrokSessionProviding {
     }
 }
 
+/// Reads `~/.grok/auth.json` without modifying it. When a session is expired or was rejected,
+/// the Grok CLI is run once (`grok models`) so the CLI renews under its own lock, then the
+/// file is read again. Token Jar sends no refresh grant and never writes the file.
 public actor GrokOAuthSessionProvider: GrokSessionProviding {
-    private let network: any NetworkClient
+    private static let minimumValidity: TimeInterval = 60
+
     private let clock: any TokenTankClock
     private let store: any GrokAuthFileStoring
-    private var renewalTask: Task<GrokSession, Error>?
+    private let refresher: any GrokAuthRefreshing
 
     public init(
-        network: any NetworkClient,
         clock: any TokenTankClock,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) {
-        self.network = network
         self.clock = clock
         self.store = GrokAuthFileStore(homeDirectory: homeDirectory)
+        self.refresher = GrokCLIAuthRefresher(homeDirectory: homeDirectory)
     }
 
-    init(network: any NetworkClient, clock: any TokenTankClock, store: any GrokAuthFileStoring) {
-        self.network = network
+    init(clock: any TokenTankClock, store: any GrokAuthFileStoring, refresher: any GrokAuthRefreshing) {
         self.clock = clock
         self.store = store
+        self.refresher = refresher
     }
 
     public func session(rejectedAccessToken: String?) async throws -> GrokSession {
-        try Task.checkCancellation()
-        let now = await clock.now()
-        let first = try await store.load()
-        let firstSession = try decodedSession(first)
-
-        if rejectedAccessToken != firstSession.accessToken,
-           firstSession.expiresAt.map({ $0.timeIntervalSince(now) > 60 }) != false {
-            return firstSession
-        }
-        if let renewalTask {
-            return try await waitForRenewal(renewalTask)
-        }
-        guard isRefreshable(first) else {
-            throw sourceAuthenticationError("grok.session.refresh-unavailable")
-        }
-
-        try Task.checkCancellation()
-        let task = Task { try await self.renew(rejectedAccessToken: rejectedAccessToken) }
-        renewalTask = task
-        do {
-            let result = try await waitForRenewal(task)
-            renewalTask = nil
-            return result
-        } catch {
-            renewalTask = nil
-            throw error
-        }
+        let read = try await accounts(
+            rejectedAccessTokens: rejectedAccessToken.map { [$0] } ?? [],
+            allowsCLIRefresh: true
+        )
+        guard let first = read.accounts.first else { throw sourceAuthenticationError("grok.session.token-missing") }
+        if let session = first.session { return session }
+        throw first.failure ?? sourceAuthenticationError("grok.session.token-missing")
     }
 
-    private func waitForRenewal(_ task: Task<GrokSession, Error>) async throws -> GrokSession {
-        // Once renewal starts, let its bounded transaction settle. Cancelling any
-        // observer must not abort another observer or discard a rotated token.
-        let result = try await task.value
+    public func accounts(rejectedAccessTokens: Set<String>, allowsCLIRefresh: Bool) async throws -> GrokAccountsRead {
         try Task.checkCancellation()
-        return result
-    }
-
-    private func renew(rejectedAccessToken: String?) async throws -> GrokSession {
-        // Hold the cross-process lock for the entire read/refresh/persist transaction.
-        let lock = try await store.acquireRenewalLock()
-        defer { lock.unlock() }
-        try Task.checkCancellation()
-        let document = try await store.load()
-        let now = await clock.now()
-        let existing = try decodedSession(document)
-        if rejectedAccessToken != existing.accessToken,
-           existing.expiresAt.map({ $0.timeIntervalSince(now) > 60 }) != false {
-            return existing
+        var entries = try await validatedEntries()
+        var now = await clock.now()
+        guard allowsCLIRefresh,
+              entries.contains(where: { !isUsable($0, now: now, rejected: rejectedAccessTokens) })
+        else {
+            return GrokAccountsRead(
+                accounts: entries.map { read($0, now: now, rejected: rejectedAccessTokens, refreshFailure: nil) },
+                ranCLIRefresh: false
+            )
         }
-        guard isRefreshable(document) else {
-            throw sourceAuthenticationError("grok.session.refresh-unavailable")
-        }
-        let entry = document.selectedEntry
-        guard let clientID = nonempty(entry["oidc_client_id"]),
-              let refreshToken = nonempty(entry["refresh_token"]),
-              refreshTokenIsSafe(refreshToken)
-        else { throw sourceAuthenticationError("grok.session.refresh-unavailable") }
 
-        let response: NetworkResponse
+        var refreshFailure: CollectionError?
         do {
-            try Task.checkCancellation()
-            response = try await network.send(NetworkRequest(
-                providerID: .grok,
-                url: URL(string: "https://auth.x.ai/oauth2/token")!,
-                method: .post,
-                headers: [
-                    "Accept": "application/json",
-                    "Content-Type": "application/x-www-form-urlencoded",
-                ],
-                body: formBody([
-                    ("grant_type", "refresh_token"),
-                    ("client_id", clientID),
-                    ("refresh_token", refreshToken),
-                ]),
-                timeout: 15
-            ))
+            try await refresher.refresh()
         } catch is CancellationError {
-            throw CancellationError()
-        } catch let error as CollectionError where error.kind == .cancelled {
             throw CancellationError()
         } catch let error as CollectionError {
-            throw error
+            refreshFailure = error
         } catch {
-            throw CollectionError(kind: .transientNetwork, diagnosticCode: "grok.session.refresh.network-failed")
+            refreshFailure = CollectionError(kind: .sourceUnavailable, diagnosticCode: "grok.cli-refresh.failed")
         }
-
-        if response.statusCode == 429 {
-            throw CollectionError(
-                kind: .rateLimited,
-                diagnosticCode: "grok.session.refresh.rate-limited",
-                retryAfter: retryAfter(response.header("Retry-After"), now: now)
-            )
-        }
-        if response.statusCode == 401 || response.statusCode == 403 {
-            return try await recoverAfterRejectedGrant(document)
-        }
-        guard (200..<300).contains(response.statusCode) else {
-            let errorCode = oauthError(in: response.body)
-            if response.statusCode == 400,
-               errorCode == "invalid_grant" || errorCode == "invalid_client" {
-                return try await recoverAfterRejectedGrant(document)
-            }
-            throw CollectionError(
-                kind: .transientNetwork,
-                diagnosticCode: "grok.session.refresh.http-failed"
-            )
-        }
-        guard response.body.count <= 64 * 1024 else {
-            throw malformedResponse("grok.session.refresh.response-oversize")
-        }
-        let token = try decodeTokenResponse(response.body, now: now)
-        var replacement = entry
-        replacement["key"] = token.accessToken
-        if let rotatedRefreshToken = token.refreshToken {
-            replacement["refresh_token"] = rotatedRefreshToken
-        }
-        let expiry = now.addingTimeInterval(token.expiresIn)
-        replacement["expires_at"] = encodedExpiry(expiry, like: entry["expires_at"])
-
-        // Do not inspect cancellation here: a successful rotation must be durably recorded first.
-        do {
-            let saved = try await store.replacingEntry(
-                in: document,
-                mutation: GrokAuthFileMutation(expectedEntry: entry, replacement: replacement)
-            )
-            return try decodedSession(saved)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let error as CollectionError where error.diagnosticCode == "grok.session.auth-file.conflict" {
-            let current = try await store.load()
-            let session = try decodedSession(current)
-            let recoveredAt = await clock.now()
-            guard session.accessToken != (entry["key"] as? String),
-                  session.expiresAt.map({ $0.timeIntervalSince(recoveredAt) > 0 }) != false
-            else { throw error }
-            return session
-        }
-    }
-
-    private func recoverAfterRejectedGrant(_ original: GrokAuthFileDocument) async throws -> GrokSession {
-        let current = try await store.load()
-        let session = try decodedSession(current)
-        let recoveredAt = await clock.now()
-        if current.selectedKey != original.selectedKey
-            || !NSDictionary(dictionary: current.selectedEntry).isEqual(to: original.selectedEntry) {
-            guard session.expiresAt.map({ $0.timeIntervalSince(recoveredAt) > 0 }) != false else {
-                throw CollectionError(
-                    kind: .sourceUnavailable,
-                    diagnosticCode: "grok.session.refresh.credentials-changed-expired"
-                )
-            }
-            return session
-        }
-        throw sourceAuthenticationError("grok.session.refresh.authentication-rejected")
-    }
-
-    private func decodedSession(_ document: GrokAuthFileDocument) throws -> GrokSession {
-        guard document.selectedKey == "https://accounts.x.ai/sign-in" || isOfficialOIDC(document) else {
-            throw sourceAuthenticationError("grok.session.identity-invalid")
-        }
-        guard let token = document.selectedEntry["key"] as? String, grokAccessTokenIsSafe(token) else {
-            throw sourceAuthenticationError("grok.session.token-missing")
-        }
-        let expiresAt = expiryDate(document.selectedEntry["expires_at"])
-        if document.selectedEntry["expires_at"] != nil, expiresAt == nil {
-            throw malformedResponse("grok.session.invalid-expiry")
-        }
-        return GrokSession(
-            accessToken: token,
-            accountEmail: nonempty(document.selectedEntry["email"]),
-            expiresAt: expiresAt
+        try Task.checkCancellation()
+        entries = try await validatedEntries()
+        now = await clock.now()
+        return GrokAccountsRead(
+            accounts: entries.map { read($0, now: now, rejected: rejectedAccessTokens, refreshFailure: refreshFailure) },
+            ranCLIRefresh: true
         )
     }
 
-    private func isOfficialOIDC(_ document: GrokAuthFileDocument) -> Bool {
+    private struct Entry {
+        let sourceID: String
+        let userID: String?
+        let session: GrokSession
+    }
+
+    private func validatedEntries() async throws -> [Entry] {
+        let document = try await store.load()
+        var entries: [Entry] = []
+        var seenUsers: Set<String> = []
+        var firstFailure: CollectionError?
+        for (key, value) in document.entries {
+            do {
+                let entry = try decodedEntry(key: key, value: value)
+                if let userID = entry.userID, !seenUsers.insert(userID).inserted { continue }
+                entries.append(entry)
+            } catch let error as CollectionError {
+                firstFailure = firstFailure ?? error
+            }
+        }
+        guard !entries.isEmpty else {
+            throw firstFailure ?? sourceAuthenticationError("grok.session.token-missing")
+        }
+        return entries
+    }
+
+    private func isUsable(_ entry: Entry, now: Date, rejected: Set<String>) -> Bool {
+        !rejected.contains(entry.session.accessToken)
+            && entry.session.expiresAt.map { $0.timeIntervalSince(now) > Self.minimumValidity } != false
+    }
+
+    private func read(
+        _ entry: Entry,
+        now: Date,
+        rejected: Set<String>,
+        refreshFailure: CollectionError?
+    ) -> GrokAccountRead {
+        if isUsable(entry, now: now, rejected: rejected) {
+            return GrokAccountRead(sourceID: entry.sourceID, session: entry.session)
+        }
+        // Expired or refused: the owner CLI renews it the next time it runs.
+        let code = refreshFailure?.diagnosticCode ?? (rejected.contains(entry.session.accessToken)
+            ? "grok.session.rejected"
+            : "grok.session.expired")
+        return GrokAccountRead(
+            sourceID: entry.sourceID,
+            accountEmail: entry.session.accountEmail,
+            session: nil,
+            failure: CollectionError(
+                kind: .sourceUnavailable,
+                diagnosticCode: code,
+                recoveryAction: .runSourceCLI
+            )
+        )
+    }
+
+    private func decodedEntry(key: String, value: [String: Any]) throws -> Entry {
+        guard key == "https://accounts.x.ai/sign-in" || isOfficialOIDC(key: key, entry: value) else {
+            throw sourceAuthenticationError("grok.session.identity-invalid")
+        }
+        guard let token = value["key"] as? String, grokAccessTokenIsSafe(token) else {
+            throw sourceAuthenticationError("grok.session.token-missing")
+        }
+        let expiresAt = expiryDate(value["expires_at"])
+        if value["expires_at"] != nil, expiresAt == nil {
+            throw malformedResponse("grok.session.invalid-expiry")
+        }
+        return Entry(
+            sourceID: Self.sourceID(forScope: key),
+            userID: nonempty(value["user_id"]),
+            session: GrokSession(accessToken: token, accountEmail: nonempty(value["email"]), expiresAt: expiresAt)
+        )
+    }
+
+    static func sourceID(forScope key: String) -> String {
         let prefix = "https://auth.x.ai::"
-        guard document.selectedKey.hasPrefix(prefix),
-              document.selectedEntry["auth_mode"] as? String == "oidc",
-              document.selectedEntry["oidc_issuer"] as? String == "https://auth.x.ai",
-              let clientID = nonempty(document.selectedEntry["oidc_client_id"]),
-              clientID == String(document.selectedKey.dropFirst(prefix.count))
+        guard key.hasPrefix(prefix) else { return "grok.sign-in" }
+        let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789-_")
+        let client = String(key.dropFirst(prefix.count)).lowercased()
+        guard !client.isEmpty, client.count <= 64, client.allSatisfy(allowed.contains) else {
+            return "grok.oidc.\(SHA256Hex.digest(client).prefix(8))"
+        }
+        return "grok.oidc.\(client)"
+    }
+
+    private func isOfficialOIDC(key: String, entry: [String: Any]) -> Bool {
+        let prefix = "https://auth.x.ai::"
+        guard key.hasPrefix(prefix),
+              entry["auth_mode"] as? String == "oidc",
+              entry["oidc_issuer"] as? String == "https://auth.x.ai",
+              let clientID = nonempty(entry["oidc_client_id"]),
+              clientID == String(key.dropFirst(prefix.count))
         else { return false }
         return true
     }
-
-    private func isRefreshable(_ document: GrokAuthFileDocument) -> Bool {
-        guard isOfficialOIDC(document),
-              let refreshToken = nonempty(document.selectedEntry["refresh_token"]) else { return false }
-        return refreshTokenIsSafe(refreshToken)
-    }
-}
-
-private struct GrokTokenResponse {
-    let accessToken: String
-    let refreshToken: String?
-    let expiresIn: TimeInterval
-}
-
-private func decodeTokenResponse(_ data: Data, now: Date) throws -> GrokTokenResponse {
-    let object: [String: Any]
-    do {
-        guard let decoded = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw malformedResponse("grok.session.refresh.invalid-json")
-        }
-        object = decoded
-    } catch let error as CollectionError {
-        throw error
-    } catch {
-        throw malformedResponse("grok.session.refresh.invalid-json")
-    }
-    guard let accessToken = nonempty(object["access_token"]), grokAccessTokenIsSafe(accessToken),
-          let tokenType = nonempty(object["token_type"]), tokenType.caseInsensitiveCompare("Bearer") == .orderedSame,
-          let expires = object["expires_in"] as? NSNumber,
-          CFGetTypeID(expires) != CFBooleanGetTypeID(),
-          expires.doubleValue.isFinite,
-          expires.doubleValue > 0,
-          expires.doubleValue <= Date.distantFuture.timeIntervalSince(now)
-    else { throw malformedResponse("grok.session.refresh.malformed-response") }
-
-    var refreshToken: String?
-    if object.keys.contains("refresh_token") {
-        guard let candidate = nonempty(object["refresh_token"]), refreshTokenIsSafe(candidate) else {
-            throw malformedResponse("grok.session.refresh.malformed-response")
-        }
-        refreshToken = candidate
-    }
-    return GrokTokenResponse(accessToken: accessToken, refreshToken: refreshToken, expiresIn: expires.doubleValue)
 }
 
 private func nonempty(_ value: Any?) -> String? {
@@ -285,12 +238,6 @@ private func nonempty(_ value: Any?) -> String? {
           !value.isEmpty
     else { return nil }
     return value
-}
-
-private func refreshTokenIsSafe(_ token: String) -> Bool {
-    !token.isEmpty
-        && token.utf8.count <= 16_384
-        && token.unicodeScalars.allSatisfy { $0.value >= 0x21 && $0.value != 0x7f }
 }
 
 private func expiryDate(_ value: Any?) -> Date? {
@@ -311,55 +258,6 @@ private func expiryDate(_ value: Any?) -> Date? {
     let seconds = raw >= 100_000_000_000 ? raw / 1_000 : raw
     guard seconds <= Date.distantFuture.timeIntervalSince1970 else { return nil }
     return Date(timeIntervalSince1970: seconds)
-}
-
-private func encodedExpiry(_ date: Date, like original: Any?) -> Any {
-    if let number = original as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
-        return number.doubleValue >= 100_000_000_000
-            ? Int64((date.timeIntervalSince1970 * 1_000).rounded())
-            : Int64(date.timeIntervalSince1970.rounded())
-    }
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return formatter.string(from: date)
-}
-
-private func formBody(_ fields: [(String, String)]) -> Data {
-    Data(fields.map { "\(formEncode($0.0))=\(formEncode($0.1))" }.joined(separator: "&").utf8)
-}
-
-private func formEncode(_ value: String) -> String {
-    var result = ""
-    for byte in value.utf8 {
-        switch byte {
-        case 0x41...0x5A, 0x61...0x7A, 0x30...0x39, 0x2A, 0x2D, 0x2E, 0x5F:
-            result.append(Character(UnicodeScalar(byte)))
-        case 0x20:
-            result.append("+")
-        default:
-            result += String(format: "%%%02X", byte)
-        }
-    }
-    return result
-}
-
-private func oauthError(in data: Data) -> String? {
-    guard data.count <= 64 * 1024,
-          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-    else { return nil }
-    return object["error"] as? String
-}
-
-private func retryAfter(_ value: String?, now: Date) -> Date? {
-    guard let value else { return nil }
-    if let seconds = TimeInterval(value), seconds.isFinite, seconds >= 0 {
-        return now.addingTimeInterval(seconds)
-    }
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.timeZone = TimeZone(secondsFromGMT: 0)
-    formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss z"
-    return formatter.date(from: value)
 }
 
 private func sourceAuthenticationError(_ code: String) -> CollectionError {

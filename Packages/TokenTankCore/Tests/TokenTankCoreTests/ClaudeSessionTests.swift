@@ -1066,6 +1066,105 @@ struct ClaudeSessionTests {
             Issue.record("Unexpected error: \(error)")
         }
     }
+
+    @Test("Claude sign-ins are discovered per config directory, deduplicated, and dropped when removed")
+    func claudeAccountDiscovery() async throws {
+        let home = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let fileManager = FileManager.default
+        func write(_ relativePath: String, _ text: String) throws {
+            let url = home.appendingPathComponent(relativePath)
+            try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: url)
+        }
+        func oauth(_ uuid: String, _ email: String) -> String {
+            "{\"oauthAccount\":{\"accountUuid\":\"\(uuid)\",\"emailAddress\":\"\(email)\"}}"
+        }
+        try write(".claude.json", oauth("uuid-default", "default@example.com"))
+        try write(".claude-work/.claude.json", oauth("uuid-work", "work@example.com"))
+        try write(".claude-alias/.claude.json", oauth("uuid-work", "work@example.com"))
+        try write(".claude-personal/.credentials.json", "{}")
+        try write("custom-claude/.claude.json", oauth("uuid-custom", "custom@example.com"))
+        try fileManager.createDirectory(
+            at: home.appendingPathComponent(".claude-empty"),
+            withIntermediateDirectories: true
+        )
+        let customPath = home.appendingPathComponent("custom-claude").path
+        let environment = ["CLAUDE_CONFIG_DIR": customPath]
+
+        let locations = ClaudeCodeSessionProvider.locations(homeDirectory: home, environment: environment)
+        #expect(locations.map(\.sourceID) == [
+            "claude.oauth",
+            "claude.oauth.dir-\(SHA256Hex.digest(customPath).prefix(8))",
+            "claude.oauth.claude-alias",
+            "claude.oauth.claude-personal",
+            "claude.oauth.claude-work",
+        ])
+        let workPath = home.standardizedFileURL.path + "/.claude-work"
+        let work = try #require(locations.first { $0.sourceID == "claude.oauth.claude-work" })
+        #expect(work.keychainService == "Claude Code-credentials-\(SHA256Hex.digest(workPath).prefix(8))")
+        #expect(work.credentialsRelativePath == ".claude-work/.credentials.json")
+        #expect(work.configDirectory == workPath)
+        #expect(locations[0].keychainService == "Claude Code-credentials")
+
+        let provider = ClaudeCodeSessionProvider(clock: ManualClock(now: now), homeDirectory: home, environment: environment)
+        let accounts = try await provider.accounts()
+        #expect(accounts.map(\.sourceID) == [
+            "claude.oauth",
+            "claude.oauth.dir-\(SHA256Hex.digest(customPath).prefix(8))",
+            "claude.oauth.claude-alias",
+            "claude.oauth.claude-personal",
+        ])
+        #expect(accounts.map(\.email) == ["default@example.com", "custom@example.com", "work@example.com", nil])
+
+        try fileManager.removeItem(at: home.appendingPathComponent(".claude-personal"))
+        #expect(try await provider.accounts().map(\.sourceID).contains("claude.oauth.claude-personal") == false)
+
+        // Repair must receive the exact string whose hash names the Keychain item.
+        let slashed = customPath + "/"
+        let slashedLocations = ClaudeCodeSessionProvider.locations(
+            homeDirectory: home,
+            environment: ["CLAUDE_CONFIG_DIR": slashed]
+        )
+        let custom = try #require(slashedLocations.dropFirst().first)
+        #expect(custom.configDirectory == slashed)
+        #expect(custom.keychainService == "Claude Code-credentials-\(SHA256Hex.digest(slashed).prefix(8))")
+    }
+
+    @Test("A default Claude location without a sign-in is listed only when it is the only location")
+    func claudeDefaultWithoutSignInIsSkippedBesideOthers() async throws {
+        let home = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let provider = ClaudeCodeSessionProvider(clock: ManualClock(now: now), homeDirectory: home, environment: [:])
+        #expect(try await provider.accounts().map(\.sourceID) == ["claude.oauth"])
+
+        let work = home.appendingPathComponent(".claude-work/.claude.json")
+        try FileManager.default.createDirectory(at: work.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("{\"oauthAccount\":{\"accountUuid\":\"uuid-work\"}}".utf8).write(to: work)
+        #expect(try await provider.accounts().map(\.sourceID) == ["claude.oauth.claude-work"])
+
+        let credentials = home.appendingPathComponent(".claude/.credentials.json")
+        try FileManager.default.createDirectory(at: credentials.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: credentials)
+        #expect(try await provider.accounts().map(\.sourceID) == ["claude.oauth", "claude.oauth.claude-work"])
+    }
+
+    @Test("Claude Code repair for a config directory receives that CLAUDE_CONFIG_DIR")
+    func repairEnvironmentTargetsAccountDirectory() {
+        let home = URL(fileURLWithPath: "/Users/example")
+        let scoped = ClaudeCLIAuthRefresher.safeEnvironment(
+            homeDirectory: home,
+            workingDirectory: URL(fileURLWithPath: "/tmp/probe"),
+            configDirectory: "/Users/example/.claude-work/"
+        )
+        #expect(scoped["CLAUDE_CONFIG_DIR"] == "/Users/example/.claude-work/")
+        let defaultAccount = ClaudeCLIAuthRefresher.safeEnvironment(
+            homeDirectory: home,
+            workingDirectory: URL(fileURLWithPath: "/tmp/probe")
+        )
+        #expect(defaultAccount["CLAUDE_CONFIG_DIR"] == nil)
+    }
+
 }
 
 private final class GatedNativeKeychainLookup: @unchecked Sendable {

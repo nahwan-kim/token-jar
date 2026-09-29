@@ -178,12 +178,6 @@ public actor URLSessionNetworkClient: NetworkClient {
                       authorization.hasPrefix("Bearer "),
                       authorization.count > "Bearer ".count
                 else { return false }
-            } else if request.url.host?.lowercased() == "auth.x.ai" {
-                expectedNames = ["accept", "content-type"]
-                let headers = Dictionary(uniqueKeysWithValues: request.headers.map { ($0.key.lowercased(), $0.value) })
-                guard headers["accept"] == "application/json",
-                      headers["content-type"] == "application/x-www-form-urlencoded"
-                else { return false }
             } else {
                 expectedNames = ["accept", "authorization", "x-xai-token-auth"]
             }
@@ -254,14 +248,6 @@ public actor URLSessionNetworkClient: NetworkClient {
                 && request.timeout > 0
                 && request.timeout <= (components.percentEncodedPath == "/api/oauth/profile" || isResetCredits ? 15 : 30)
         case .grok:
-            if host == "auth.x.ai" {
-                return request.method == .post
-                    && components.percentEncodedPath == "/oauth2/token"
-                    && components.query == nil
-                    && request.timeout > 0
-                    && request.timeout <= 15
-                    && refreshTokenFormIsAllowed(request.body)
-            }
             if host == "grok.com" {
                 return request.method == .post
                     && components.percentEncodedPath == "/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig"
@@ -284,48 +270,6 @@ public actor URLSessionNetworkClient: NetworkClient {
                 && components.percentEncodedPath == "/api/usage-summary"
                 && components.query == nil
                 && request.body == nil
-        }
-    }
-
-    private static func refreshTokenFormIsAllowed(_ body: Data?) -> Bool {
-        guard let body, !body.isEmpty, body.count <= 32 * 1024,
-              let encoded = String(data: body, encoding: .utf8)
-        else { return false }
-
-        let pairs = encoded.split(separator: "&", omittingEmptySubsequences: false)
-        guard pairs.count == 3 else { return false }
-
-        var fields: [String: String] = [:]
-        for pair in pairs {
-            let components = pair.split(separator: "=", omittingEmptySubsequences: false)
-            guard components.count == 2,
-                  let name = decodeFormComponent(components[0]),
-                  let value = decodeFormComponent(components[1]),
-                  fields.updateValue(value, forKey: name) == nil
-            else { return false }
-        }
-
-        return fields.count == 3
-            && fields["grant_type"] == "refresh_token"
-            && fields["client_id"]?.isEmpty == false
-            && fields["refresh_token"]?.isEmpty == false
-    }
-
-    private static func decodeFormComponent(_ component: Substring) -> String? {
-        guard component.utf8.allSatisfy({
-            isUnescapedFormByte($0) || $0 == 0x2B || $0 == 0x25
-        }) else { return nil }
-        return String(component)
-            .replacingOccurrences(of: "+", with: " ")
-            .removingPercentEncoding
-    }
-
-    private static func isUnescapedFormByte(_ byte: UInt8) -> Bool {
-        switch byte {
-        case 0x30...0x39, 0x41...0x5A, 0x61...0x7A, 0x2A, 0x2D, 0x2E, 0x5F:
-            true
-        default:
-            false
         }
     }
 
@@ -866,11 +810,22 @@ public actor SQLiteExternalSessionReader: ReadOnlySQLiteReader {
     }
 }
 
+/// A Codex sign-in directory handed to `codex app-server` as `CODEX_HOME`.
+public struct CodexHome: Equatable, Sendable {
+    public let source: CodexAccountSource
+    public let directory: URL
+    /// Non-default homes are read with `cli_auth_credentials_store="file"`: they are discovered by
+    /// their `auth.json`, and the Keychain store would otherwise be keyed by another home.
+    public let usesFileCredentialStore: Bool
+}
+
 public actor CodexAppServerUsageReader: CodexAccountUsageReader {
     private let executableCandidates: [URL]
     private let homeDirectory: URL
-    private let accountSources: [CodexAccountSource]
+    private let environment: [String: String]
+    private let accountSources: [CodexAccountSource]?
     private let timeout: Duration
+    private let maximumConcurrentServers: Int
 
     private static let authenticationEnvironmentKeys: Set<String> = [
         "OPENAI_API_KEY",
@@ -881,17 +836,22 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
         "CODEX_REFRESH_TOKEN_URL_OVERRIDE"
     ]
 
+    /// - Parameter accountSources: `nil` discovers every home; a list restricts discovery to those sources.
     public init(
         executableCandidates: [URL] = CodexAppServerUsageReader.defaultExecutableCandidates,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
-        accountSources: [CodexAccountSource] = CodexAccountSource.allCases,
-        timeout: Duration = .seconds(20)
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        accountSources: [CodexAccountSource]? = nil,
+        timeout: Duration = .seconds(20),
+        maximumConcurrentServers: Int = 2
     ) {
+        precondition(maximumConcurrentServers > 0)
         self.executableCandidates = executableCandidates
         self.homeDirectory = homeDirectory.standardizedFileURL
-        var seen = Set<CodexAccountSource>()
-        self.accountSources = accountSources.filter { seen.insert($0).inserted }
+        self.environment = environment
+        self.accountSources = accountSources
         self.timeout = timeout
+        self.maximumConcurrentServers = maximumConcurrentServers
     }
 
     public func readAccounts() async throws -> [CodexAccountRead] {
@@ -904,40 +864,165 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
             )
         }
 
-        let sources = accountSources.filter { source in
-            !source.isOptional || Self.isDirectory(
-                at: homeDirectory.appendingPathComponent(source.directoryName, isDirectory: true)
-            )
+        var homes = await Self.discoverHomes(homeDirectory: homeDirectory, environment: environment)
+        if let accountSources {
+            homes = homes.filter { accountSources.contains($0.source) }
         }
-        guard !sources.isEmpty else {
+        guard !homes.isEmpty else {
             throw CollectionError(
                 kind: .sourceUnavailable,
                 diagnosticCode: "codex.app-server.account-source-missing"
             )
         }
 
+        let limit = maximumConcurrentServers
         return try await withThrowingTaskGroup(of: CodexAccountRead.self) { group in
-            for source in sources {
+            var pending = homes[...]
+            var results: [CodexAccountRead] = []
+            func startNext() {
+                guard let home = pending.popFirst() else { return }
                 group.addTask { [self] in
-                    try await readAccount(source, executable: executable)
+                    try await readAccount(home, executable: executable)
                 }
             }
-            var results: [CodexAccountRead] = []
-            for try await result in group {
+            for _ in 0..<min(limit, homes.count) { startNext() }
+            while let result = try await group.next() {
                 results.append(result)
+                startNext()
             }
             return results.sorted { lhs, rhs in
-                lhs.sourceID.rawValue < rhs.sourceID.rawValue
+                (lhs.sourceID.displayRank, lhs.sourceID.rawValue) < (rhs.sourceID.displayRank, rhs.sourceID.rawValue)
             }
         }
     }
 
+    /// `~/.codex` always, then `CODEX_HOME` and every `~/.codex-*` directory holding an
+    /// `auth.json`. Homes signed in to the same ChatGPT account are read once, keeping the first.
+    static func discoverHomes(
+        homeDirectory: URL,
+        environment: [String: String],
+        fileManager: FileManager = .default
+    ) async -> [CodexHome] {
+        let home = homeDirectory.standardizedFileURL.path
+        var candidates: [(source: CodexAccountSource, path: String)] = [(.primary, "\(home)/.codex")]
+        if let configured = environment["CODEX_HOME"], configured.hasPrefix("/") {
+            let path = URL(fileURLWithPath: configured).standardizedFileURL.path
+            let name = (path as NSString).lastPathComponent
+            let parent = (path as NSString).deletingLastPathComponent
+            if parent == home, let source = CodexAccountSource.homeDirectory(named: name) {
+                candidates.append((source, path))
+            } else {
+                let hash = SHA256Hex.digest(path).prefix(8)
+                candidates.append((CodexAccountSource(rawValue: "codex.env.\(hash)"), path))
+            }
+        }
+        let siblings = ((try? fileManager.contentsOfDirectory(atPath: home)) ?? [])
+            .filter { $0.hasPrefix(".codex-") }
+            .sorted()
+        for name in siblings {
+            guard let source = CodexAccountSource.homeDirectory(named: name) else { continue }
+            candidates.append((source, "\(home)/\(name)"))
+        }
+
+        var present: [(source: CodexAccountSource, path: String, hasAuthFile: Bool)] = []
+        var seenPaths: Set<String> = []
+        var seenSources: Set<CodexAccountSource> = []
+        for candidate in candidates {
+            guard seenPaths.insert(candidate.path).inserted,
+                  !seenSources.contains(candidate.source)
+            else { continue }
+            var isDirectory: ObjCBool = false
+            let exists = fileManager.fileExists(atPath: candidate.path, isDirectory: &isDirectory)
+                && isDirectory.boolValue
+                && (try? fileManager.destinationOfSymbolicLink(atPath: candidate.path)) == nil
+            let hasAuthFile = exists && fileManager.fileExists(atPath: "\(candidate.path)/auth.json")
+            guard candidate.source == .primary || hasAuthFile else { continue }
+            seenSources.insert(candidate.source)
+            present.append((candidate.source, candidate.path, hasAuthFile))
+        }
+
+        // Account identity is only needed to merge duplicates, so a single home is never read.
+        let policy = FilesystemAccessPolicy(homeDirectory: homeDirectory)
+        let needsIdentity = present.filter(\.hasAuthFile).count > 1
+        var homes: [CodexHome] = []
+        var seenAccounts: Set<String> = []
+        for entry in present {
+            if needsIdentity, entry.hasAuthFile,
+               let accountID = await accountIdentity(authPath: "\(entry.path)/auth.json", home: home, policy: policy),
+               !seenAccounts.insert(accountID).inserted {
+                continue
+            }
+            homes.append(CodexHome(
+                source: entry.source,
+                directory: URL(fileURLWithPath: entry.path, isDirectory: true),
+                usesFileCredentialStore: entry.source != .primary
+            ))
+        }
+        return homes
+    }
+
+    /// The ChatGPT account a home is signed in to, from the JWT claims in its `auth.json`:
+    /// `chatgpt_account_user_id`, else user ID plus workspace ID. Only this identifier leaves
+    /// the function; tokens are neither kept nor used.
+    static func accountIdentity(
+        authPath: String,
+        home: String,
+        policy: FilesystemAccessPolicy
+    ) async -> String? {
+        guard authPath.hasPrefix(home + "/") else { return nil }
+        let relative = String(authPath.dropFirst(home.count + 1))
+        guard let data = try? await policy.read(ExternalFileRequest(
+            providerID: .codex,
+            relativePath: relative,
+            maximumBytes: 64 * 1024
+        )) else { return nil }
+        return accountIdentity(authJSON: data)
+    }
+
+    static func accountIdentity(authJSON data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tokens = root["tokens"] as? [String: Any]
+        else { return nil }
+        let claims = [tokens["id_token"], tokens["access_token"]]
+            .compactMap { $0 as? String }
+            .compactMap(jwtClaims)
+        for claim in claims {
+            guard let auth = claim["https://api.openai.com/auth"] as? [String: Any] else { continue }
+            if let accountUser = nonemptyClaim(auth["chatgpt_account_user_id"]) {
+                return accountUser
+            }
+            let user = nonemptyClaim(auth["chatgpt_user_id"]) ?? nonemptyClaim(auth["user_id"])
+            let workspace = nonemptyClaim(tokens["account_id"]) ?? nonemptyClaim(auth["chatgpt_account_id"])
+            if user != nil || workspace != nil {
+                return [user, workspace].compactMap { $0 }.joined(separator: "__")
+            }
+        }
+        return nil
+    }
+
+    private static func jwtClaims(_ token: String) -> [String: Any]? {
+        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts[1].utf8.count <= 16 * 1024 else { return nil }
+        var payload = parts[1].replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while payload.utf8.count % 4 != 0 { payload += "=" }
+        guard let data = Data(base64Encoded: payload) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private static func nonemptyClaim(_ value: Any?) -> String? {
+        guard let text = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty, text.utf8.count <= 256
+        else { return nil }
+        return text
+    }
+
     private func readAccount(
-        _ source: CodexAccountSource,
+        _ home: CodexHome,
         executable: URL
     ) async throws -> CodexAccountRead {
+        let source = home.source
         do {
-            let data = try await readRateLimits(for: source, executable: executable)
+            let data = try await readRateLimits(for: home, executable: executable)
             return .success(sourceID: source, data: data)
         } catch is CancellationError {
             throw CancellationError()
@@ -955,7 +1040,7 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
     }
 
     private func readRateLimits(
-        for source: CodexAccountSource,
+        for home: CodexHome,
         executable: URL
     ) async throws -> Data {
         let process = Process()
@@ -963,11 +1048,8 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
         let inputHandle = input.fileHandleForWriting
         let output = Pipe()
         process.executableURL = executable
-        process.arguments = Self.arguments(for: source)
-        process.environment = Self.environment(
-            for: source,
-            homeDirectory: homeDirectory
-        )
+        process.arguments = Self.arguments(for: home)
+        process.environment = Self.environment(for: home)
         process.standardInput = input
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
@@ -1052,35 +1134,19 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
         }
     }
 
-    private static func arguments(for source: CodexAccountSource) -> [String] {
-        switch source {
-        case .primary:
-            ["app-server"]
-        case .secondary:
-            ["-c", "cli_auth_credentials_store=\"file\"", "app-server"]
-        }
+    private static func arguments(for home: CodexHome) -> [String] {
+        home.usesFileCredentialStore
+            ? ["-c", "cli_auth_credentials_store=\"file\"", "app-server"]
+            : ["app-server"]
     }
 
-    private static func environment(
-        for source: CodexAccountSource,
-        homeDirectory: URL
-    ) -> [String: String] {
+    private static func environment(for home: CodexHome) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         for key in authenticationEnvironmentKeys {
             environment.removeValue(forKey: key)
         }
-        environment["CODEX_HOME"] = homeDirectory
-            .appendingPathComponent(source.directoryName, isDirectory: true)
-            .path
+        environment["CODEX_HOME"] = home.directory.path
         return environment
-    }
-
-    private static func isDirectory(at url: URL) -> Bool {
-        var isDirectory: ObjCBool = false
-        return FileManager.default.fileExists(
-            atPath: url.path,
-            isDirectory: &isDirectory
-        ) && isDirectory.boolValue
     }
 
     public static var defaultExecutableCandidates: [URL] {
@@ -1419,7 +1485,7 @@ public actor ArkCLIPlanUsageReader: DoubaoPlanUsageReader {
 
 // Register the handler before launch: exit may precede the first await.
 // waitUntilExit spins a thread-local run loop and can miss wakeups on Swift workers.
-private actor ProcessTermination {
+actor ProcessTermination {
     private var exited = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
 

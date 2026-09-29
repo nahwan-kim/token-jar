@@ -25,17 +25,18 @@ struct GrokAdapterTests {
         expiresAt: Date(timeIntervalSince1970: 4_070_908_800)
     )
 
-    @Test("descriptor identifies the Grok OAuth refresh and credits services")
+    @Test("descriptor identifies the read-only Grok session, CLI-owned renewal, and credits services")
     func descriptor() {
         let descriptor = GrokAdapter().sourceDescriptor
         #expect(descriptor.id == "grok.cli-proxy.credits")
         #expect(descriptor.name == "Grok CLI SuperGrok credits")
         #expect(descriptor.kind == .localSession)
         #expect(descriptor.credentialOwnership == .externalProvider)
-        #expect(descriptor.detail.contains("auth.x.ai"))
+        #expect(descriptor.detail.contains("never sends an OAuth refresh grant"))
+        #expect(descriptor.detail.contains("never writes the auth file"))
+        #expect(descriptor.detail.contains("grok models"))
         #expect(descriptor.detail.contains("cli-chat-proxy.grok.com"))
         #expect(descriptor.detail.contains("never imports browser cookies"))
-        #expect(descriptor.detail.contains("never launches a CLI subprocess"))
         #expect(descriptor.detail.contains("never calls the xAI Management prepaid-balance API"))
     }
 

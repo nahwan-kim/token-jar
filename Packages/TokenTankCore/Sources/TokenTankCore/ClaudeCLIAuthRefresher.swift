@@ -53,6 +53,8 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
     private let workingDirectory: URL?
     private let timeout: Duration
     private let homeDirectory: URL
+    /// Passed as `CLAUDE_CONFIG_DIR` so Claude Code repairs that directory's sign-in, not the default.
+    private let configDirectory: String?
     private let fileManager: FileManager
     private let screenIsUnlocked: @Sendable () -> Bool
 
@@ -61,7 +63,11 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
     private var primaryHandle: FileHandle?
     private var secondaryHandle: FileHandle?
 
-    public init(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) {
+    public init(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        configDirectory: String? = nil
+    ) {
+        self.configDirectory = configDirectory
         self.executableCandidates = [
             homeDirectory.appendingPathComponent(".local/bin/claude"),
             URL(fileURLWithPath: "/opt/homebrew/bin/claude"),
@@ -79,9 +85,11 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
         workingDirectory: URL,
         timeout: Duration,
         homeDirectory: URL,
+        configDirectory: String? = nil,
         fileManager: FileManager = .default,
         screenIsUnlocked: @escaping @Sendable () -> Bool = { true }
     ) {
+        self.configDirectory = configDirectory
         self.executableCandidates = executableCandidates
         self.workingDirectory = workingDirectory
         self.timeout = min(max(timeout, .milliseconds(1)), Self.maximumTimeout)
@@ -146,7 +154,11 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
         self.primaryHandle = primaryHandle
         self.secondaryHandle = secondaryHandle
 
-        let environment = Self.safeEnvironment(homeDirectory: homeDirectory, workingDirectory: directory)
+        let environment = Self.safeEnvironment(
+            homeDirectory: homeDirectory,
+            workingDirectory: directory,
+            configDirectory: configDirectory
+        )
         let pid: pid_t
         do {
             pid = try Self.spawn(
@@ -477,13 +489,14 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
         return session["CGSSessionScreenIsLocked"] as? Bool != true
     }
 
-    private nonisolated static func safeEnvironment(
+    nonisolated static func safeEnvironment(
         homeDirectory: URL,
-        workingDirectory: URL
+        workingDirectory: URL,
+        configDirectory: String? = nil
     ) -> [String: String] {
         let temporary = FileManager.default.temporaryDirectory.path
         let username = NSUserName()
-        return [
+        var environment = [
             "HOME": homeDirectory.path,
             // Claude's native Keychain account lookup depends on USER. Keep it
             // aligned with the OS account rather than inheriting arbitrary env.
@@ -498,6 +511,10 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
             "CLAUDE_CODE_SAFE_MODE": "1",
         ]
+        if let configDirectory {
+            environment["CLAUDE_CONFIG_DIR"] = configDirectory
+        }
+        return environment
     }
 
     private nonisolated func failure(_ kind: CollectionErrorKind, _ code: String) -> CollectionError {

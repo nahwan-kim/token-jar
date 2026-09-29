@@ -184,6 +184,17 @@ for target in "${TARGETS[@]}"; do
   done <<<"$file_list"
 done
 
+# Grok decision (2026-09-29): the Grok CLI renews its own OAuth session. No source target may
+# send an OAuth refresh grant, name the token endpoint, or create Token Jar's legacy Grok lock.
+grok_renewal_findings=""
+if ! grok_renewal_findings="$(/usr/bin/grep -rnE 'oauth2/token|grant_type|token-tank-auth' "$SOURCES_ROOT" --include='*.swift')"; then
+  grok_renewal_findings=""
+fi
+if [[ -n "$grok_renewal_findings" ]]; then
+  printf 'FAIL: Grok OAuth renewal must stay with the Grok CLI:\n%s\n' "$grok_renewal_findings" >&2
+  failed=1
+fi
+
 if (( failed != 0 )); then
   printf 'Provider I/O audit: FAIL (%d Swift file(s) scanned)\n' "$scanned_files" >&2
   exit 1

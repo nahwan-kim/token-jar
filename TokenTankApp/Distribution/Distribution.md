@@ -212,7 +212,7 @@ This is an operator template, not release evidence. A checked item records work 
 
 ## Native Codex account setup
 
-Token Jar collects the existing `~/.codex` login and an optional second login in `~/.codex-secondary` through separate official `codex app-server` processes. GJC is not required. Do not copy or swap authentication files. The Codex CLI owns credential storage and refresh; Token Jar never opens those files.
+Token Jar collects the existing `~/.codex` login plus every `CODEX_HOME` and `~/.codex-*` home that holds `auth.json` (for example `~/.codex-secondary` or `~/.codex-work`) through separate official `codex app-server` processes, at most two at once. GJC is not required. Do not copy or swap authentication files. The Codex CLI owns credential storage and refresh. When two or more homes are signed in, Token Jar reads each `auth.json` only to decode account-identity JWT claims so the same account is shown once; it never keeps or uses the tokens.
 
 To add the second account without replacing the first, run the following in a terminal and choose the other ChatGPT account in the browser:
 
@@ -233,7 +233,7 @@ Promotional reset tickets use one additional optional same-token `GET https://ap
 
 Historical v0.1.14 verification: the fixed OAuth User-Agent and Core header allowlist were aligned to `claude-code/2.1.280`; all 218 package tests and 39 app tests passed. The focused XCUITests compiled but their runner was killed before establishing a connection, both unsigned and ad-hoc signed. The subsequent zero-count/layout correction passed 33 Claude adapter tests, Release compilation, UITEST source parsing, Provider I/O audit, JSON validation, and `git diff --check`. Current app/UI automated tests were not executed under the existing QA exclusion; regression assertions were updated for source-authoritative counts, gated empty grants, and reset/Fable row placement. Neither the earlier tests nor the correction establish live-account or rendered-layout verification.
 
-Reset freshness policy: every collection makes a new supplemental GET and replaces its previous result, including explicit zero or missing metadata. Claude usage requests use `reloadIgnoringLocalAndRemoteCacheData`; the ephemeral URLSession has no URL cache. The reset UI accepts only `.fresh` collection snapshots, hiding retained reset count/expiry during `.refreshing`, `.stale`, or `.authenticationActionRequired`. Other stale usage remains separately labelled under the existing policy. The cadence is still five-minute polling plus manual refresh, not a realtime subscription; a displayed number represents the latest successful collection, not a guarantee against changes after that response.
+Reset freshness policy (2026-09-29): the supplemental GET runs at most every 30 minutes per account and its result is kept in process memory in between; a failed GET keeps the previous result and is retried at the next collection. Tickets whose `ends_at` has passed are removed from display and the summary count is recomputed. `/api/oauth/profile` is requested only when the access token changes. (Before 2026-09-29, every collection made a new supplemental GET.) Claude usage requests use `reloadIgnoringLocalAndRemoteCacheData`; the ephemeral URLSession has no URL cache. The reset UI accepts only `.fresh` collection snapshots, hiding retained reset count/expiry during `.refreshing`, `.stale`, or `.authenticationActionRequired`. Other stale usage remains separately labelled under the existing policy. The cadence is result-based scheduling (five minutes after success) plus manual refresh, not a realtime subscription; a displayed number represents the latest successful collection, not a guarantee against changes after that response.
 
 2026-09-23 live reset verification after user-owned Claude Code login: a controlled same-session/same-endpoint comparison with `claude-code/2.1.280` returned HTTP 200 but `eligible:false`, `ineligible_reason:surface`, and `grants:[]`. The official usage transport identity `claude-cli/2.1.280 (external, cli)` returned HTTP 200, `eligible:true`, one grant with `resets_left:1`, `usable_now:true`, and `ends_at:2026-10-22T16:00:00+00:00` (2026-10-23 01:00 Asia/Seoul). The plain usage response had no populated reset block. A separate executable using the actual corrected `ClaudeAdapter`, `URLSessionNetworkClient` allowlist, and `ClaudeCodeSessionProvider` verified the live remaining count 1, expiration, primary usage, and equal provider/account quota rows. It used normal native authorization; tokens, account identity, and raw responses were not logged or persisted. This supersedes the earlier reset-query live-validation gap and identifies the wrong User-Agent as the `surface` rejection cause. It does not establish installed UI rendering, token-expiry recovery, or an updater installation pass.
 
@@ -259,44 +259,34 @@ QA rejected the initial candidate's interactive process-policy escalation becaus
 
 The draft's uploaded ZIP and checksum were downloaded and byte-compared before publication. Feed commit `4d5ef72` published the exact generated signed `appcast.xml`. The configured public raw feed URL and public release ZIP/SHA256SUMS were fetched independently after publication, matched generated bytes, and passed version/build/URL/length/checksum checks. CryptoKit verified both the feed payload and ZIP Ed25519 signatures against the pinned public key without reading a private key. Archive SHA-256: `9727d747e0b071b2ccc44afd6329b9afc2b09815a7e1f235f5e21cd7b8e99ce4`. Actual Claude approval/token rotation, Sparkle old-to-new installation/relaunch, clean/quarantined bootstrap and physical Intel validation remain unperformed and are disclosed in the release notes.
 
-## Grok OAuth renewal and recovery
+## Grok session reading and CLI-owned renewal
 
-Token Jar reads the selected OIDC entry in `~/.grok/auth.json`. When its access
-token expires within 60 seconds, or when the first SuperGrok credits proxy
-request returns 401/403, Token Jar checks the fixed `https://auth.x.ai` issuer
-and exact selected client/scope identity, then sends one public-client
-`refresh_token` grant to `https://auth.x.ai/oauth2/token`. Redirects and cookies
-are disabled. After a successful grant, it preserves the new access token and
-expiry plus an optional rotated refresh token in the same owner file, then
-retries the credits proxy once. The existing successful-unknown-usage-only,
-same-session bearer billing enrichment remains unchanged.
+Since 2026-09-29 Token Jar only reads `~/.grok/auth.json`. Every official
+`https://auth.x.ai::<client>` scope (and the legacy sign-in entry) is shown as its
+own account, deduplicated by `user_id`. When an account's access token expires
+within 60 seconds, or its first SuperGrok credits proxy request returns 401/403,
+Token Jar runs the installed Grok CLI once for that collection as `grok models`
+(first of `~/.grok/bin/grok`, `~/.local/bin/grok`, `/opt/homebrew/bin/grok`,
+`/usr/local/bin/grok`; empty mode-0700 working directory; closed stdin; fixed
+environment without `GROK_*` overrides; 30-second limit; 256 KiB output cap).
+The CLI renews under its own `auth.json.lock`; Token Jar then rereads the file and
+retries the proxy once. It sends no refresh grant and writes no Grok file. An
+older version's `.token-tank-auth.lock` is left untouched.
 
-Treat `~/.grok/auth.json` as a password: never paste, commit, export, or back it
-up for Token Jar. Renewal uses only a same-directory mode-0600 temporary file
-and atomic replacement. A bounded token-free lock shared only by Token Jar
-processes spans the current-file reread, HTTP rotation, conflict comparison,
-and same-file persistence. The cancellation handler is installed before checking
-cancellation so cancellation before waiter registration still seals the waiter
-gate. Once renewal starts, the shared transaction settles; a canceled observer
-receives `CancellationError` after commit, while pre-start cancellation aborts.
-Token Jar detects an observable external CLI rotation and prefers the
-newer session, but cannot close the final rename window against an uncooperative
-concurrent Grok CLI writer, and the CLI is not assumed to honor Token Jar's
-lock. No browser-cookie import, Grok CLI subprocess or interactive automation,
-manual-token UI, Grok ACP stdio, xAI Management API, or Keychain token cache is
-part of this flow.
+`grok models` exits 0 even when renewal fails, so Token Jar judges only by the
+reread token. A session that is still expired shows "Run the Grok CLI once to
+renew" and is reread on the transient-failure schedule. If the CLI is missing or
+the login was revoked, run `grok login`. The successful-unknown-usage-only,
+same-session bearer billing enrichment is unchanged.
 
-If the selected entry has no usable refresh credential, or the token endpoint
-explicitly rejects or revokes it, run `grok login` and retry Token Jar. A network
-error is transient and must not be reported as revocation or trigger a login
-instruction. On 2026-09-11, a token-safe current-host probe used the production
-provider to force one renewal and then fetch real adapter usage; it verified
-rotated access and refresh tokens, matching persisted session, future expiry,
-mode 0600, preserved noncredential metadata, one percentage-bearing quota, and
-matching account identity without printing or copying secrets. This release
-remains **WATCH** because that probe did not cover natural expiry, real HTTP
-401/403 injection, concurrent real CLI rotation, packaged release, another OS,
-CI, or notarization.
+Decision evidence (rule (b)): the official Grok CLI 1.0.44 build, exercised with
+fake credentials and a local mock issuer, rereads `auth.json` under a blocking
+flock and adopts a sibling's rotation, but Token Jar's former separate lock did
+not exclude it, and a CLI `invalid_grant` without an observable sibling rotation
+deletes the entry. `grok models` renewed an expired fake session without prompts
+or model usage. No real Grok account was available for live validation; the
+earlier 2026-09-11 live renewal probe applies only to the removed direct-renewal
+implementation.
 
 The popup header's **Open in Window** button opens a resizable standalone usage window. It shares the popup's data and refresh cycle, remains open when focus moves elsewhere, and reuses the same window on repeated clicks. Closing that window leaves the menu-bar app running; the header button can reopen it. This is a normal desktop window, not an always-on-top overlay.
 

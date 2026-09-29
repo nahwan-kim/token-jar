@@ -5,632 +5,337 @@ import Testing
 import TokenTankDomain
 import TokenTankTestSupport
 
-@Suite("Grok OAuth session renewal", .serialized)
+@Suite("Grok CLI session (read-only, CLI-owned renewal)", .serialized)
 struct GrokSessionTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
+    private let officialScope = "https://auth.x.ai::client-id"
 
-    @Test("a session without expiry is reused without network I/O")
-    func noExpiryReusesToken() async throws {
-        let store = makeStore(entry(token: "access-old", expiresAt: nil))
-        let network = QueueNetworkClient(results: [])
-        let provider = GrokOAuthSessionProvider(network: network, clock: ManualClock(now: now), store: store)
+    @Test("a fresh session is returned without running the Grok CLI")
+    func freshSessionNeedsNoCLI() async throws {
+        let store = MemoryGrokAuthStore([officialScope: entry(token: "access-fresh", expiresAt: now.addingTimeInterval(3_600))])
+        let refresher = RecordingGrokRefresher()
+        let provider = GrokOAuthSessionProvider(clock: ManualClock(now: now), store: store, refresher: refresher)
 
-        let session = try await provider.session(rejectedAccessToken: nil)
-
-        #expect(session.accessToken == "access-old")
-        #expect(await network.requests.isEmpty)
+        #expect(try await provider.session(rejectedAccessToken: nil).accessToken == "access-fresh")
+        #expect(await refresher.runs == 0)
     }
 
-    @Test("ISO-8601 and epoch millisecond expiries retain a fresh session")
+    @Test("ISO-8601, epoch, and epoch-millisecond expiries are understood")
     func expiryFormats() async throws {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         for rawExpiry: Any in [
             formatter.string(from: now.addingTimeInterval(3_600)),
             String(Int(now.addingTimeInterval(3_600).timeIntervalSince1970)),
-            (now.addingTimeInterval(3_600).timeIntervalSince1970 * 1_000),
+            now.addingTimeInterval(3_600).timeIntervalSince1970 * 1_000,
         ] {
-            var value = entry(token: "access-old", expiresAt: nil)
+            var value = entry(token: "access-fresh", expiresAt: nil)
             value["expires_at"] = rawExpiry
-            let network = QueueNetworkClient(results: [])
+            let refresher = RecordingGrokRefresher()
             let provider = GrokOAuthSessionProvider(
-                network: network,
                 clock: ManualClock(now: now),
-                store: makeStore(value)
+                store: MemoryGrokAuthStore([officialScope: value]),
+                refresher: refresher
             )
-            #expect(try await provider.session(rejectedAccessToken: nil).accessToken == "access-old")
-            #expect(await network.requests.isEmpty)
+            #expect(try await provider.session(rejectedAccessToken: nil).accessToken == "access-fresh")
+            #expect(await refresher.runs == 0)
         }
     }
 
-    @Test("near-expiry and expired sessions renew and preserve unrelated metadata")
-    func expiryRenewsAndRotatesRefreshToken() async throws {
-        for expiry in [now.addingTimeInterval(60), now.addingTimeInterval(-1)] {
-            let original = entry(token: "access-old", expiresAt: expiry).merging(["custom": "preserved"]) { _, new in new }
-            let store = makeStore(original)
-            let network = QueueNetworkClient(results: [.success(tokenResponse(
-                access: "access-new",
-                refresh: "refresh-new",
-                expiresIn: 3_600
-            ))])
-            let provider = GrokOAuthSessionProvider(network: network, clock: ManualClock(now: now), store: store)
-
-            let session = try await provider.session(rejectedAccessToken: nil)
-            let saved = await store.snapshot()
-
-            #expect(session.accessToken == "access-new")
-            #expect(saved.selectedEntry["refresh_token"] as? String == "refresh-new")
-            #expect(saved.selectedEntry["custom"] as? String == "preserved")
-            #expect(await network.requests.count == 1)
-            let request = try #require(await network.requests.first)
-            #expect(request.url.absoluteString == "https://auth.x.ai/oauth2/token")
-            #expect(request.method == .post)
-            #expect(request.timeout == 15)
-            #expect(request.headers == [
-                "Accept": "application/json",
-                "Content-Type": "application/x-www-form-urlencoded",
-            ])
-            #expect(String(data: try #require(request.body), encoding: .utf8) == "grant_type=refresh_token&client_id=client-id&refresh_token=refresh-old")
+    @Test("an expired session runs the Grok CLI once and adopts the token it wrote")
+    func expiredSessionLetsCLIRenew() async throws {
+        let store = MemoryGrokAuthStore([officialScope: entry(token: "access-old", expiresAt: now.addingTimeInterval(30))])
+        let refresher = RecordingGrokRefresher {
+            await store.replace([self.officialScope: self.entry(token: "access-new", expiresAt: self.now.addingTimeInterval(3_600))])
         }
+        let provider = GrokOAuthSessionProvider(clock: ManualClock(now: now), store: store, refresher: refresher)
+
+        let read = try await provider.accounts(rejectedAccessTokens: [], allowsCLIRefresh: true)
+        #expect(read.ranCLIRefresh)
+        #expect(read.accounts.map(\.session?.accessToken) == ["access-new"])
+        #expect(await refresher.runs == 1)
+        #expect(await store.loads == 2)
     }
 
-    @Test("an omitted refresh token retains the previous refresh token")
-    func omittedRotationIsRetained() async throws {
-        let store = makeStore(entry(token: "access-old", expiresAt: now))
-        let network = QueueNetworkClient(results: [.success(tokenResponse(access: "access-new", expiresIn: 100))])
-        let provider = GrokOAuthSessionProvider(network: network, clock: ManualClock(now: now), store: store)
+    @Test("a session the CLI did not renew reports that running the Grok CLI renews it")
+    func unrenewedSessionAsksToRunCLI() async throws {
+        let store = MemoryGrokAuthStore([officialScope: entry(token: "access-old", expiresAt: now.addingTimeInterval(-10))])
+        let refresher = RecordingGrokRefresher()
+        let provider = GrokOAuthSessionProvider(clock: ManualClock(now: now), store: store, refresher: refresher)
 
-        _ = try await provider.session(rejectedAccessToken: nil)
+        let read = try await provider.accounts(rejectedAccessTokens: [], allowsCLIRefresh: true)
+        let failure = try #require(read.accounts.first?.failure)
+        #expect(failure.kind == .sourceUnavailable)
+        #expect(failure.recoveryAction == .runSourceCLI)
+        #expect(failure.diagnosticCode == "grok.session.expired")
 
-        #expect(await store.stringValue(for: "refresh_token") == "refresh-old")
-    }
-
-    @Test("a rejected current token renews but a newer file token does not")
-    func rejectedTokenComparison() async throws {
-        let currentStore = makeStore(entry(token: "access-old", expiresAt: now.addingTimeInterval(3_600)))
-        let currentNetwork = QueueNetworkClient(results: [.success(tokenResponse(access: "access-new", expiresIn: 3_600))])
-        let currentProvider = GrokOAuthSessionProvider(network: currentNetwork, clock: ManualClock(now: now), store: currentStore)
-        #expect(try await currentProvider.session(rejectedAccessToken: "access-old").accessToken == "access-new")
-
-        let newerStore = makeStore(entry(token: "access-newer", expiresAt: now.addingTimeInterval(3_600)))
-        let newerNetwork = QueueNetworkClient(results: [])
-        let newerProvider = GrokOAuthSessionProvider(network: newerNetwork, clock: ManualClock(now: now), store: newerStore)
-        #expect(try await newerProvider.session(rejectedAccessToken: "access-old").accessToken == "access-newer")
-        #expect(await newerNetwork.requests.isEmpty)
-    }
-
-    @Test("actor serialization coalesces concurrent renewal onto the rotated file token")
-    func singleFlight() async throws {
-        let store = makeStore(entry(token: "access-old", expiresAt: now))
-        let network = QueueNetworkClient(results: [.success(tokenResponse(access: "access-new", expiresIn: 3_600))])
-        let provider = GrokOAuthSessionProvider(network: network, clock: ManualClock(now: now), store: store)
-
-        async let first = provider.session(rejectedAccessToken: nil)
-        async let second = provider.session(rejectedAccessToken: nil)
-        let sessions = try await (first, second)
-        #expect(sessions.0.accessToken == "access-new")
-        #expect(sessions.1.accessToken == "access-new")
-        #expect(await network.requests.count == 1)
-    }
-
-    @Test("cancelling a joined observer does not abort the shared renewal")
-    func cancelledObserverDoesNotCancelRenewal() async throws {
-        let store = makeStore(entry(token: "access-old", expiresAt: now))
-        let network = GatedRefreshNetwork(
-            response: tokenResponse(access: "access-new", expiresIn: 3_600),
-            checksCancellation: true
+        let missingCLI = GrokOAuthSessionProvider(
+            clock: ManualClock(now: now),
+            store: store,
+            refresher: RecordingGrokRefresher(failure: CollectionError(
+                kind: .sourceUnavailable,
+                diagnosticCode: "grok.cli-refresh.executable-missing",
+                recoveryAction: .runSourceCLI
+            ))
         )
-        let provider = GrokOAuthSessionProvider(network: network, clock: ManualClock(now: now), store: store)
-        let owner = Task { try await provider.session(rejectedAccessToken: nil) }
-        await network.waitForFirstRequest()
-        let observer = Task { try await provider.session(rejectedAccessToken: nil) }
-        for _ in 0..<1_000 {
-            if await store.readCount >= 3 { break }
-            await Task.yield()
-        }
-        let observerLoaded = await store.readCount >= 3
-        observer.cancel()
-        await network.release()
-        #expect(try await owner.value.accessToken == "access-new")
-        do {
-            _ = try await observer.value
-            Issue.record("Expected cancelled observer")
-        } catch is CancellationError {}
-        #expect(observerLoaded)
-        #expect(await network.requestCount == 1)
-        #expect(await store.stringValue(for: "key") == "access-new")
+        let missing = try await missingCLI.accounts(rejectedAccessTokens: [], allowsCLIRefresh: true)
+        #expect(missing.accounts.first?.failure?.diagnosticCode == "grok.cli-refresh.executable-missing")
     }
 
-    @Test("fresh credentials remain usable while another caller renews a rejected token")
-    func freshSessionDoesNotJoinRenewal() async throws {
-        let store = makeStore(entry(token: "access-old", expiresAt: now.addingTimeInterval(3_600)))
-        let network = GatedRefreshNetwork(response: tokenResponse(access: "access-new", expiresIn: 3_600))
-        let provider = GrokOAuthSessionProvider(network: network, clock: ManualClock(now: now), store: store)
-        let renewal = Task { try await provider.session(rejectedAccessToken: "access-old") }
-        await network.waitForFirstRequest()
-        let lookup = Task { try await provider.session(rejectedAccessToken: nil) }
-        for _ in 0..<1_000 {
-            if await store.readCount >= 3 { break }
-            await Task.yield()
-        }
-        let lookupLoaded = await store.readCount >= 3
-        await network.release()
-        #expect(try await lookup.value.accessToken == "access-old")
-        #expect(try await renewal.value.accessToken == "access-new")
-        #expect(lookupLoaded)
+    @Test("without refresh permission an expired session is only reread")
+    func refreshNotAllowedOnlyRereads() async throws {
+        let store = MemoryGrokAuthStore([officialScope: entry(token: "access-old", expiresAt: now.addingTimeInterval(-10))])
+        let refresher = RecordingGrokRefresher()
+        let provider = GrokOAuthSessionProvider(clock: ManualClock(now: now), store: store, refresher: refresher)
+
+        let read = try await provider.accounts(rejectedAccessTokens: [], allowsCLIRefresh: false)
+        #expect(read.ranCLIRefresh == false)
+        #expect(read.accounts.first?.failure?.recoveryAction == .runSourceCLI)
+        #expect(await refresher.runs == 0)
     }
 
-    @Test("fresh tokens from unofficial issuer metadata are rejected before network access")
-    func freshUnofficialIdentityRejected() async {
-        var value = entry(token: "access-old", expiresAt: now.addingTimeInterval(3_600))
-        value["oidc_issuer"] = "https://unrelated.invalid"
-        let network = QueueNetworkClient(results: [])
+    @Test("a rejected token is renewed by the CLI, but a newer file token is used as is")
+    func rejectedTokenComparison() async throws {
+        let store = MemoryGrokAuthStore([officialScope: entry(token: "access-newer", expiresAt: now.addingTimeInterval(3_600))])
+        let refresher = RecordingGrokRefresher()
+        let provider = GrokOAuthSessionProvider(clock: ManualClock(now: now), store: store, refresher: refresher)
+        #expect(try await provider.session(rejectedAccessToken: "access-old").accessToken == "access-newer")
+        #expect(await refresher.runs == 0)
+
+        let rejected = try await provider.accounts(rejectedAccessTokens: ["access-newer"], allowsCLIRefresh: true)
+        #expect(await refresher.runs == 1)
+        #expect(rejected.accounts.first?.failure?.diagnosticCode == "grok.session.rejected")
+    }
+
+    @Test("every signed-in scope is an account, deduplicated by user_id")
+    func multipleAccounts() async throws {
+        var legacy = entry(token: "access-legacy", expiresAt: now.addingTimeInterval(3_600), userID: "user-a")
+        legacy.removeValue(forKey: "auth_mode")
+        let store = MemoryGrokAuthStore([
+            officialScope: entry(token: "access-a", expiresAt: now.addingTimeInterval(3_600), userID: "user-a"),
+            "https://auth.x.ai::other-client": entry(
+                token: "access-b",
+                expiresAt: now.addingTimeInterval(3_600),
+                userID: "user-b",
+                clientID: "other-client",
+                email: "b@example.com"
+            ),
+            "https://accounts.x.ai/sign-in": legacy,
+            "xai::api_key": ["key": "xai-not-a-session"],
+        ])
+        let provider = GrokOAuthSessionProvider(clock: ManualClock(now: now), store: store, refresher: RecordingGrokRefresher())
+
+        let read = try await provider.accounts(rejectedAccessTokens: [], allowsCLIRefresh: true)
+        #expect(read.accounts.map(\.sourceID) == ["grok.oidc.client-id", "grok.oidc.other-client"])
+        #expect(read.accounts.map(\.accountEmail) == ["owner@example.com", "b@example.com"])
+    }
+
+    @Test("the scoped capability runs the Grok CLI at most once per collection")
+    func cliRefreshOncePerCollection() async throws {
+        let store = MemoryGrokAuthStore([officialScope: entry(token: "access-old", expiresAt: now.addingTimeInterval(-10))])
+        let refresher = RecordingGrokRefresher()
+        let provider = GrokOAuthSessionProvider(clock: ManualClock(now: now), store: store, refresher: refresher)
+        let context = TestContextFactory.make(grokSession: provider)
+
+        let collection = context.scoped(to: .grok)
+        _ = try await collection.grokSession.accounts(rejectedAccessTokens: [], allowsCLIRefresh: true)
+        _ = try await collection.grokSession.accounts(rejectedAccessTokens: ["access-old"], allowsCLIRefresh: true)
+        #expect(await refresher.runs == 1)
+
+        let nextCollection = context.scoped(to: .grok)
+        _ = try await nextCollection.grokSession.accounts(rejectedAccessTokens: [], allowsCLIRefresh: true)
+        #expect(await refresher.runs == 2)
+    }
+
+    @Test("unofficial issuer metadata is rejected before any use")
+    func unofficialIssuerRejected() async throws {
+        var value = entry(token: "access-fresh", expiresAt: now.addingTimeInterval(3_600))
+        value["oidc_issuer"] = "https://attacker.example"
         let provider = GrokOAuthSessionProvider(
-            network: network, clock: ManualClock(now: now), store: makeStore(value)
+            clock: ManualClock(now: now),
+            store: MemoryGrokAuthStore([officialScope: value]),
+            refresher: RecordingGrokRefresher()
         )
         await expectError(.authenticationRejected) {
-            try await provider.session(rejectedAccessToken: nil)
-        }
-        #expect(await network.requests.isEmpty)
-    }
-
-    @Test("independent providers sharing the canonical file send one refresh")
-    func crossProviderSingleFlight() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let grok = directory.appendingPathComponent(".grok")
-        try FileManager.default.createDirectory(at: grok, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let auth = grok.appendingPathComponent("auth.json")
-        try authData(entry: entry(token: "access-old", expiresAt: now)).write(to: auth)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: auth.path)
-
-        let network = GatedRefreshNetwork(response: tokenResponse(access: "access-new", expiresIn: 3_600))
-        let firstProvider = GrokOAuthSessionProvider(
-            network: network,
-            clock: ManualClock(now: now),
-            homeDirectory: directory
-        )
-        let secondProvider = GrokOAuthSessionProvider(
-            network: network,
-            clock: ManualClock(now: now),
-            homeDirectory: directory
-        )
-        let first = Task { try await firstProvider.session(rejectedAccessToken: nil) }
-        await network.waitForFirstRequest()
-        let second = Task { try await secondProvider.session(rejectedAccessToken: nil) }
-        for _ in 0..<10 { await Task.yield() }
-        #expect(await network.requestCount == 1)
-        await network.release()
-
-        let firstSession = try await first.value
-        let secondSession = try await second.value
-        #expect(firstSession.accessToken == "access-new")
-        #expect(secondSession.accessToken == "access-new")
-        #expect(await network.requestCount == 1)
-    }
-
-    @Test("invalid_grant accepts a concurrently rotated credential instead of clobbering it")
-    func rejectedGrantRecoversExternalRotation() async throws {
-        let store = makeStore(entry(token: "access-old", expiresAt: now))
-        let network = RotatingNetwork(
-            store: store,
-            replacementJSON: entryJSON(entry(token: "access-external", expiresAt: now.addingTimeInterval(3_600)))
-        )
-        let provider = GrokOAuthSessionProvider(network: network, clock: ManualClock(now: now), store: store)
-
-        let session = try await provider.session(rejectedAccessToken: nil)
-
-        #expect(session.accessToken == "access-external")
-        #expect(await store.replaceCount == 0)
-    }
-
-    @Test("cancellation before a response never changes credentials")
-    func cancellationDoesNotClobber() async throws {
-        let store = makeStore(entry(token: "access-old", expiresAt: now))
-        let provider = GrokOAuthSessionProvider(network: CancellingNetwork(), clock: ManualClock(now: now), store: store)
-        do {
             _ = try await provider.session(rejectedAccessToken: nil)
-            Issue.record("Expected cancellation")
-        } catch is CancellationError {
-        } catch {
-            Issue.record("Unexpected error type")
-        }
-        #expect(await store.stringValue(for: "key") == "access-old")
-        #expect(await store.replaceCount == 0)
-    }
-
-    @Test("pre-cancelled work aborts before sending a refresh request")
-    func cancellationBeforeRequest() async {
-        let network = QueueNetworkClient(results: [])
-        let provider = GrokOAuthSessionProvider(
-            network: network,
-            clock: ManualClock(now: now),
-            store: makeStore(entry(token: "access-old", expiresAt: now))
-        )
-        let task = Task {
-            withUnsafeCurrentTask { $0?.cancel() }
-            return try await provider.session(rejectedAccessToken: nil)
-        }
-        do {
-            _ = try await task.value
-            Issue.record("Expected cancellation")
-        } catch is CancellationError {
-        } catch {
-            Issue.record("Unexpected error type")
-        }
-        #expect(await network.requests.isEmpty)
-    }
-
-    @Test("cancellation after rotation response persists credentials before propagating")
-    func cancellationAfterSuccessPersists() async {
-        let store = makeStore(entry(token: "access-old", expiresAt: now))
-        let network = GatedRefreshNetwork(response: tokenResponse(access: "access-new", expiresIn: 3_600))
-        let provider = GrokOAuthSessionProvider(network: network, clock: ManualClock(now: now), store: store)
-        let task = Task { try await provider.session(rejectedAccessToken: nil) }
-        await network.waitForFirstRequest()
-        task.cancel()
-        await network.release()
-
-        do {
-            _ = try await task.value
-            Issue.record("Expected cancellation after durable save")
-        } catch is CancellationError {
-        } catch {
-            Issue.record("Unexpected error type")
-        }
-        #expect(await store.stringValue(for: "key") == "access-new")
-        #expect(await store.replaceCount == 1)
-    }
-
-    @Test("malformed token responses and unofficial refresh metadata are rejected")
-    func malformedAndMetadataRejection() async throws {
-        let malformedBodies: [[String: Any]] = [
-            [:],
-            ["access_token": "access-new", "token_type": "MAC", "expires_in": 100],
-            ["access_token": "xai-management", "token_type": "Bearer", "expires_in": 100],
-            ["access_token": "access-new", "token_type": "Bearer", "expires_in": true],
-            ["access_token": "access-new", "token_type": "Bearer", "expires_in": 0],
-        ]
-        let hugeExpiryBody = try JSONSerialization.data(withJSONObject: [
-            "access_token": "access-new",
-            "token_type": "Bearer",
-            "expires_in": Double.greatestFiniteMagnitude,
-        ])
-        let hugeExpiryProvider = GrokOAuthSessionProvider(
-            network: QueueNetworkClient(results: [
-                .success(NetworkResponse(statusCode: 200, headers: [:], body: hugeExpiryBody)),
-            ]),
-            clock: ManualClock(now: now),
-            store: makeStore(entry(token: "access-old", expiresAt: now))
-        )
-        await expectError(.malformedResponse) {
-            try await hugeExpiryProvider.session(rejectedAccessToken: nil)
-        }
-        for body in malformedBodies {
-            let store = makeStore(entry(token: "access-old", expiresAt: now))
-            let data = try JSONSerialization.data(withJSONObject: body)
-            let network = QueueNetworkClient(results: [.success(NetworkResponse(statusCode: 200, headers: [:], body: data))])
-            let provider = GrokOAuthSessionProvider(network: network, clock: ManualClock(now: now), store: store)
-            await expectError(.malformedResponse) { try await provider.session(rejectedAccessToken: nil) }
-        }
-
-        for change in [["oidc_issuer": "https://evil.invalid"], ["oidc_client_id": "other-client"]] {
-            let bad = entry(token: "access-old", expiresAt: now).merging(change) { _, new in new }
-            let provider = GrokOAuthSessionProvider(
-                network: QueueNetworkClient(results: []),
-                clock: ManualClock(now: now),
-                store: makeStore(bad)
-            )
-            await expectError(.authenticationRejected) { try await provider.session(rejectedAccessToken: nil) }
         }
     }
 
-    @Test("rate limits preserve Retry-After while server and network failures remain transient")
-    func transientAndRateLimitErrors() async throws {
-        let rateStore = makeStore(entry(token: "access-old", expiresAt: now))
-        let rateNetwork = QueueNetworkClient(results: [.success(NetworkResponse(statusCode: 429, headers: ["Retry-After": "120"], body: Data()))])
-        let rateProvider = GrokOAuthSessionProvider(network: rateNetwork, clock: ManualClock(now: now), store: rateStore)
-        do {
-            _ = try await rateProvider.session(rejectedAccessToken: nil)
-            Issue.record("Expected rate limit")
-        } catch let error as CollectionError {
-            #expect(error.kind == .rateLimited)
-            #expect(error.retryAfter == now.addingTimeInterval(120))
-        }
-
-        let serverProvider = GrokOAuthSessionProvider(
-            network: QueueNetworkClient(results: [
-                .success(NetworkResponse(statusCode: 503, headers: [:], body: Data())),
-            ]),
-            clock: ManualClock(now: now),
-            store: makeStore(entry(token: "access-old", expiresAt: now))
-        )
-        await expectError(.transientNetwork) {
-            try await serverProvider.session(rejectedAccessToken: nil)
-        }
-
-        let offlineProvider = GrokOAuthSessionProvider(
-            network: QueueNetworkClient(results: [
-                .failure(CollectionError(kind: .offline, diagnosticCode: "synthetic.offline")),
-            ]),
-            clock: ManualClock(now: now),
-            store: makeStore(entry(token: "access-old", expiresAt: now))
-        )
-        await expectError(.offline) {
-            try await offlineProvider.session(rejectedAccessToken: nil)
-        }
-
-        let typedRetryAfter = now.addingTimeInterval(300)
-        let typedRateProvider = GrokOAuthSessionProvider(
-            network: QueueNetworkClient(results: [
-                .failure(CollectionError(
-                    kind: .rateLimited,
-                    diagnosticCode: "synthetic.rate-limited",
-                    retryAfter: typedRetryAfter
-                )),
-            ]),
-            clock: ManualClock(now: now),
-            store: makeStore(entry(token: "access-old", expiresAt: now))
-        )
-        do {
-            _ = try await typedRateProvider.session(rejectedAccessToken: nil)
-            Issue.record("Expected typed rate limit")
-        } catch let error as CollectionError {
-            #expect(error.kind == .rateLimited)
-            #expect(error.retryAfter == typedRetryAfter)
-        }
-    }
-
-    @Test("filesystem store enforces permissions, links, size, and atomic replacement")
-    func filesystemSafety() async throws {
+    @Test("the file store only reads: permissions and links are enforced and nothing is written")
+    func filesystemStoreIsReadOnly() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let grok = directory.appendingPathComponent(".grok")
         try FileManager.default.createDirectory(at: grok, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: grok.path)
         defer { try? FileManager.default.removeItem(at: directory) }
         let auth = grok.appendingPathComponent("auth.json")
-        try authData(entry: entry(token: "access-old", expiresAt: now)).write(to: auth)
+        let original = try JSONSerialization.data(withJSONObject: [
+            officialScope: entry(token: "access-old", expiresAt: now.addingTimeInterval(-10)),
+        ])
+        try original.write(to: auth)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: auth.path)
 
-        let store = GrokAuthFileStore(homeDirectory: directory)
-        let original = try await store.load()
-        var replacement = original.selectedEntry
-        replacement["key"] = "access-new"
-        let saved = try await store.replacingEntry(
-            in: original,
-            mutation: GrokAuthFileMutation(expectedEntry: original.selectedEntry, replacement: replacement)
+        let provider = GrokOAuthSessionProvider(
+            clock: ManualClock(now: now),
+            store: GrokAuthFileStore(homeDirectory: directory),
+            refresher: RecordingGrokRefresher()
         )
-        #expect(saved.selectedEntry["key"] as? String == "access-new")
-        let attributes = try FileManager.default.attributesOfItem(atPath: auth.path)
-        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+        _ = try await provider.accounts(rejectedAccessTokens: [], allowsCLIRefresh: true)
+        #expect(try Data(contentsOf: auth) == original)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: grok.path) == ["auth.json"])
 
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: auth.path)
-        await expectError(.unsafePath) { try await store.load() }
+        await expectError(.unsafePath) { _ = try await GrokAuthFileStore(homeDirectory: directory).load() }
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: auth.path)
 
-        let conflicting = try await store.load()
-        var externallyChanged = try JSONSerialization.jsonObject(with: conflicting.data) as! [String: Any]
-        var changedEntry = conflicting.selectedEntry
-        changedEntry["key"] = "access-external"
-        externallyChanged[conflicting.selectedKey] = changedEntry
-        try JSONSerialization.data(withJSONObject: externallyChanged).write(to: auth)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: auth.path)
-        await expectError(.sourceUnavailable) {
-            try await store.replacingEntry(
-                in: conflicting,
-                mutation: GrokAuthFileMutation(
-                    expectedEntry: conflicting.selectedEntry,
-                    replacement: replacement
-                )
-            )
-        }
-        #expect(String(data: try Data(contentsOf: auth), encoding: .utf8)?.contains("access-external") == true)
-
-        let hardLink = grok.appendingPathComponent("hard-link")
-        try FileManager.default.linkItem(at: auth, to: hardLink)
-        await expectError(.unsafePath) { try await store.load() }
-        try FileManager.default.removeItem(at: hardLink)
-
-        try Data(repeating: 1, count: 64 * 1024 + 1).write(to: auth)
-        await expectError(.unsafePath) { try await store.load() }
-
-        try FileManager.default.removeItem(at: auth)
-        try FileManager.default.createSymbolicLink(at: auth, withDestinationURL: grok)
-        await expectError(.unsafePath) { try await store.load() }
+        let link = grok.appendingPathComponent("linked.json")
+        try FileManager.default.moveItem(at: auth, to: link)
+        try FileManager.default.createSymbolicLink(at: auth, withDestinationURL: link)
+        await expectError(.unsafePath) { _ = try await GrokAuthFileStore(homeDirectory: directory).load() }
     }
 
-    private func entry(token: String, expiresAt: Date?) -> [String: Any] {
+    @Test("the Grok CLI refresher runs `grok models` from an empty directory with a clean environment")
+    func cliRefresherInvocation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let observed = directory.appendingPathComponent("observed")
+        let executable = directory.appendingPathComponent("grok")
+        let script = """
+        #!/bin/sh
+        {
+          printf 'args=%s\\n' "$*"
+          printf 'entries=%s\\n' "$(ls -A | wc -l | tr -d ' ')"
+          printf 'grok_home=%s\\n' "${GROK_HOME-unset}"
+          printf 'home=%s\\n' "$HOME"
+        } > "\(observed.path)"
+        echo "model-a"
+        """
+        try Data(script.utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        #expect(setenv("GROK_HOME", "/tmp/elsewhere", 1) == 0)
+        defer { unsetenv("GROK_HOME") }
+
+        let refresher = GrokCLIAuthRefresher(
+            executableCandidates: [directory.appendingPathComponent("missing"), executable],
+            homeDirectory: directory,
+            timeout: .seconds(5)
+        )
+        try await refresher.refresh()
+        let text = try String(contentsOf: observed, encoding: .utf8)
+        #expect(text.contains("args=models\n"))
+        #expect(text.contains("entries=0\n"))
+        #expect(text.contains("grok_home=unset\n"))
+        #expect(text.contains("home=\(directory.path)\n"))
+
+        let missing = GrokCLIAuthRefresher(
+            executableCandidates: [directory.appendingPathComponent("missing")],
+            homeDirectory: directory,
+            timeout: .seconds(5)
+        )
+        await expectError(.sourceUnavailable) { try await missing.refresh() }
+    }
+
+    @Test("the Grok CLI refresher enforces its output limit")
+    func cliRefresherOutputLimit() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("grok")
+        try Data("#!/bin/sh\nhead -c 400000 /dev/zero\n".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let refresher = GrokCLIAuthRefresher(executableCandidates: [executable], homeDirectory: directory, timeout: .seconds(5))
+        do {
+            try await refresher.refresh()
+            Issue.record("Expected the output limit to stop the CLI")
+        } catch let error as CollectionError {
+            #expect(error.diagnosticCode == "grok.cli-refresh.output-size-limit")
+        }
+    }
+
+    private func entry(
+        token: String,
+        expiresAt: Date?,
+        userID: String = "user-owner",
+        clientID: String = "client-id",
+        email: String = "owner@example.com"
+    ) -> [String: Any] {
         var value: [String: Any] = [
             "key": token,
-            "email": "synthetic@example.invalid",
             "auth_mode": "oidc",
             "oidc_issuer": "https://auth.x.ai",
-            "oidc_client_id": "client-id",
-            "refresh_token": "refresh-old",
+            "oidc_client_id": clientID,
+            "refresh_token": "refresh-owned-by-cli",
+            "user_id": userID,
+            "email": email,
         ]
-        if let expiresAt { value["expires_at"] = expiresAt.timeIntervalSince1970 }
+        if let expiresAt {
+            let formatter = ISO8601DateFormatter()
+            value["expires_at"] = formatter.string(from: expiresAt)
+        }
         return value
     }
 
-    private func tokenResponse(access: String, refresh: String? = nil, expiresIn: Double) -> NetworkResponse {
-        var body: [String: Any] = ["access_token": access, "token_type": "Bearer", "expires_in": expiresIn]
-        if let refresh { body["refresh_token"] = refresh }
-        return NetworkResponse(statusCode: 200, headers: [:], body: try! JSONSerialization.data(withJSONObject: body))
-    }
-
-    private func authData(entry: [String: Any]) throws -> Data {
-        try JSONSerialization.data(withJSONObject: ["https://auth.x.ai::client-id": entry])
-    }
-
-    /// Serializes a synthetic auth entry so only immutable `Data` crosses into test actors.
-    private func entryJSON(_ entry: [String: Any]) -> Data {
-        try! JSONSerialization.data(withJSONObject: entry)
-    }
-
-    private func makeStore(_ entry: [String: Any]) -> MemoryGrokAuthStore {
-        MemoryGrokAuthStore(entryJSON: entryJSON(entry))
-    }
-
-    private func expectError<T>(
+    private func expectError(
         _ kind: CollectionErrorKind,
-        operation: () async throws -> T
+        _ operation: () async throws -> Void
     ) async {
         do {
-            _ = try await operation()
-            Issue.record("Expected CollectionError")
+            try await operation()
+            Issue.record("Expected \(kind)")
         } catch let error as CollectionError {
             #expect(error.kind == kind)
-            let expectedRecovery: RecoveryAction
-            switch kind {
-            case .authenticationRejected, .authenticationRevoked, .externalSessionMissing:
-                expectedRecovery = .signInSourceApp
-            case .unsafePath:
-                expectedRecovery = .none
-            default:
-                expectedRecovery = .waitForNextRefresh
-            }
-            #expect(error.recoveryAction == expectedRecovery)
         } catch {
-            Issue.record("Unexpected error type")
+            Issue.record("Unexpected error: \(error)")
         }
     }
-}
-
-private struct NoOpGrokRenewalLock: GrokAuthFileRenewalLock {
-    func unlock() {}
-}
-
-private func decodeEntry(_ json: Data) -> [String: Any] {
-    try! JSONSerialization.jsonObject(with: json) as! [String: Any]
 }
 
 private actor MemoryGrokAuthStore: GrokAuthFileStoring {
-    private var entry: [String: Any]
-    private(set) var replaceCount = 0
-    private(set) var readCount = 0
+    private var root: [String: Any]
+    private(set) var loads = 0
 
-    init(entryJSON: Data) {
-        entry = decodeEntry(entryJSON)
+    init(_ root: [String: Any]) {
+        self.root = root
     }
 
-    func acquireRenewalLock() async throws -> any GrokAuthFileRenewalLock {
-        NoOpGrokRenewalLock()
+    func replace(_ root: [String: Any]) {
+        self.root = root
     }
 
-    func snapshot() -> GrokAuthFileDocument {
-        document(entry)
-    }
-
-    func stringValue(for key: String) -> String? {
-        entry[key] as? String
-    }
-
-    func load() -> GrokAuthFileDocument {
-        readCount += 1
-        return document(entry)
-    }
-
-    func replacingEntry(
-        in original: GrokAuthFileDocument,
-        mutation: GrokAuthFileMutation
-    ) throws -> GrokAuthFileDocument {
-        guard NSDictionary(dictionary: entry).isEqual(to: mutation.expectedEntry) else {
-            throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "grok.session.auth-file.conflict")
-        }
-        entry = mutation.replacement
-        replaceCount += 1
-        return document(entry)
-    }
-
-    func externallyReplace(with mutation: GrokAuthFileMutation) {
-        entry = mutation.replacement
-    }
-
-    private func document(_ entry: [String: Any]) -> GrokAuthFileDocument {
-        let root = ["https://auth.x.ai::client-id": entry]
-        return GrokAuthFileDocument(
-            data: try! JSONSerialization.data(withJSONObject: root),
-            root: root,
-            selectedKey: "https://auth.x.ai::client-id",
-            selectedEntry: entry,
-            device: 1,
-            inode: 1,
-            directoryDevice: 1,
-            directoryInode: 1
-        )
-    }
-}
-
-private actor GatedRefreshNetwork: NetworkClient {
-    private let response: NetworkResponse
-    private let checksCancellation: Bool
-    private var firstRequestWaiters: [CheckedContinuation<Void, Never>] = []
-    private var responseWaiters: [CheckedContinuation<NetworkResponse, Never>] = []
-    private var isReleased = false
-    private(set) var requestCount = 0
-
-    init(response: NetworkResponse, checksCancellation: Bool = false) {
-        self.response = response
-        self.checksCancellation = checksCancellation
-    }
-
-    func send(_ request: NetworkRequest) async throws -> NetworkResponse {
-        _ = request
-        requestCount += 1
-        let waiters = firstRequestWaiters
-        firstRequestWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume()
-        }
-        let value: NetworkResponse
-        if isReleased {
-            value = response
-        } else {
-            value = await withCheckedContinuation { continuation in
-                responseWaiters.append(continuation)
+    func load() throws -> GrokAuthFileDocument {
+        loads += 1
+        var entries: [(key: String, value: [String: Any])] = []
+        for key in root.keys.sorted() where key.hasPrefix("https://auth.x.ai::") {
+            if let value = root[key] as? [String: Any], let token = value["key"] as? String, grokAccessTokenIsSafe(token) {
+                entries.append((key, value))
             }
         }
-        if checksCancellation { try Task.checkCancellation() }
-        return value
-    }
-
-    func waitForFirstRequest() async {
-        if requestCount > 0 { return }
-        await withCheckedContinuation { continuation in
-            firstRequestWaiters.append(continuation)
+        if let value = root["https://accounts.x.ai/sign-in"] as? [String: Any],
+           let token = value["key"] as? String, grokAccessTokenIsSafe(token) {
+            entries.append(("https://accounts.x.ai/sign-in", value))
         }
-    }
-
-    func release() {
-        isReleased = true
-        let waiters = responseWaiters
-        responseWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume(returning: response)
-        }
-    }
-}
-private actor RotatingNetwork: NetworkClient {
-    let store: MemoryGrokAuthStore
-    let replacement: GrokAuthFileMutation
-
-    init(store: MemoryGrokAuthStore, replacementJSON: Data) {
-        self.store = store
-        self.replacement = GrokAuthFileMutation(expectedEntry: [:], replacement: decodeEntry(replacementJSON))
-    }
-    func send(_ request: NetworkRequest) async throws -> NetworkResponse {
-        _ = request
-        await store.externallyReplace(with: replacement)
-        return NetworkResponse(
-            statusCode: 400,
-            headers: [:],
-            body: Data(#"{"error":"invalid_grant"}"#.utf8)
+        return GrokAuthFileDocument(
+            data: (try? JSONSerialization.data(withJSONObject: root)) ?? Data(),
+            root: root,
+            entries: entries
         )
     }
 }
 
-private struct CancellingNetwork: NetworkClient {
-    func send(_ request: NetworkRequest) async throws -> NetworkResponse {
-        _ = request
-        throw CancellationError()
+private actor RecordingGrokRefresher: GrokAuthRefreshing {
+    private let failure: CollectionError?
+    private let effect: (@Sendable () async -> Void)?
+    private(set) var runs = 0
+
+    init(failure: CollectionError? = nil, effect: (@Sendable () async -> Void)? = nil) {
+        self.failure = failure
+        self.effect = effect
+    }
+
+    func refresh() async throws {
+        runs += 1
+        await effect?()
+        if let failure { throw failure }
     }
 }

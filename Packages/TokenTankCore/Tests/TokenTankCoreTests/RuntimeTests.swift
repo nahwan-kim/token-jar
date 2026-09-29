@@ -9,17 +9,23 @@ struct RuntimeTests {
     @Test("every Claude collection carries bounded recovery without forging initiation")
     func claudeRecoveryAuthorityBoundary() async throws {
         let sessions = RecordingClaudeSessions()
+        let clock = ManualClock()
         let context = TestContextFactory.make(
             claudeSession: sessions,
+            clock: clock,
             isUserInitiated: true,
             allowsClaudeRecovery: true
         )
         let coordinator = RefreshCoordinator(adapters: [InteractionAwareClaudeAdapter()], context: context)
+        let pastManualFloor = RefreshCoordinator.manualRefreshFloor
 
         await coordinator.refresh(.claude)
+        await clock.advance(by: pastManualFloor)
         await coordinator.refresh(.claude, userInitiated: true)
+        await clock.advance(by: pastManualFloor)
         await coordinator.refreshAll(userInitiated: true)
         await coordinator.repairClaudeConnection()
+        await clock.advance(by: pastManualFloor)
         await coordinator.refresh(.claude, userInitiated: true)
 
         #expect(await sessions.interactions == [false, true, false, true, false, true, false, true, false, true])
@@ -373,7 +379,8 @@ struct RuntimeTests {
     @Test("cancelling an explicit repair cancels its collection and never publishes late success")
     func cancelledRepairRevokesCollectionAuthority() async {
         let adapter = GatedProviderAdapter(id: .claude)
-        let coordinator = RefreshCoordinator(adapters: [adapter], context: TestContextFactory.make())
+        let clock = ManualClock()
+        let coordinator = RefreshCoordinator(adapters: [adapter], context: TestContextFactory.make(clock: clock))
         let repair = Task { await coordinator.repairClaudeConnection() }
         #expect(await eventually { await adapter.contexts.count == 1 })
         repair.cancel()
@@ -386,6 +393,7 @@ struct RuntimeTests {
         }
         #expect(snapshot == nil)
         #expect(failure.kind == .cancelled)
+        await clock.advance(by: RefreshCoordinator.manualRefreshFloor)
         let ordinary = Task { await coordinator.refresh(.claude, userInitiated: true) }
         #expect(await eventually { await adapter.contexts.count == 2 })
         await adapter.completeNext(with: .success(TestContextFactory.snapshot(providerID: .claude)))
@@ -467,6 +475,7 @@ struct RuntimeTests {
         await clock.advance(by: .seconds(299))
         await Task.yield()
         #expect(await adapter.fetchCount == 1)
+        #expect(await eventually { await clock.waitingCount == 1 })
 
         await clock.advance(by: .seconds(1))
         #expect(await eventually { await adapter.fetchCount == 2 })
@@ -479,7 +488,7 @@ struct RuntimeTests {
         ])
     }
 
-    @Test("scheduled Claude recovery renews once per five-minute collection after failure")
+    @Test("scheduled Claude recovery rereads one minute after an authentication failure")
     func scheduledClaudeRecoveryRenewsAfterFailure() async {
         let clock = ManualClock()
         let snapshot = TestContextFactory.snapshot(providerID: .claude)
@@ -506,9 +515,10 @@ struct RuntimeTests {
             CollectionContextFlags(isUserInitiated: false, allowsClaudeRecovery: true),
         ])
 
-        await clock.advance(by: .seconds(299))
+        await clock.advance(by: .seconds(59))
         await Task.yield()
         #expect(await adapter.fetchCount == 1)
+        #expect(await eventually { await clock.waitingCount == 1 })
 
         await clock.advance(by: .seconds(1))
         #expect(await eventually { await adapter.fetchCount == 2 })
@@ -547,6 +557,7 @@ struct RuntimeTests {
         await clock.advance(by: .seconds(299))
         await Task.yield()
         #expect(await adapter.fetchCount == 1)
+        #expect(await eventually { await clock.waitingCount == 1 })
 
         await clock.advance(by: .seconds(1))
         #expect(await eventually { await adapter.fetchCount == 2 })
@@ -690,6 +701,19 @@ struct RuntimeTests {
         #expect(await collectionError {
             _ = try await scoped.grokSession.session(rejectedAccessToken: "malicious-token")
         }?.diagnosticCode == "capability.grok-session.denied")
+        #expect(await collectionError {
+            _ = try await scoped.grokSession.accounts(rejectedAccessTokens: [], allowsCLIRefresh: true)
+        }?.diagnosticCode == "capability.grok-session.denied")
+        #expect(await collectionError {
+            _ = try await context.scoped(to: .grok).claudeSession.accounts()
+        }?.diagnosticCode == "capability.claude-session.denied")
+        #expect(await collectionError {
+            _ = try await context.scoped(to: .cursor).claudeSession.session(
+                account: ClaudeAccount.defaultSourceID,
+                allowInteraction: false,
+                rejectedAccessToken: nil
+            )
+        }?.diagnosticCode == "capability.claude-session.denied")
         #expect(await grokSessions.rejectedAccessTokens.isEmpty)
         #expect(await scoped.externalSessions.exists(claudeRequest) == false)
         #expect(await collectionError {

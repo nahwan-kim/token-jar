@@ -1,6 +1,13 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "action.run_grok_cli" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Run the Grok CLI once to renew" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Grok CLI를 한 번 실행하면 갱신됨" } }
+      }
+    },
     "codex.weekly" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -557,8 +564,8 @@
     "source.detail.grok" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Grok CLI SuperGrok credits. Token Jar automatically renews expiring sessions and securely updates ~/.grok/auth.json. Run grok login if renewal is revoked. Browser cookies are not imported." } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Grok CLI SuperGrok 크레딧입니다. 만료가 임박한 세션을 자동 갱신하고 ~/.grok/auth.json을 안전하게 갱신합니다. 갱신 권한이 해제된 경우 grok login으로 다시 로그인하세요. 브라우저 쿠키는 가져오지 않습니다." } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Grok CLI SuperGrok credits for each signed-in account. Token Jar only reads ~/.grok/auth.json; when a session expires it runs the Grok CLI once so the CLI renews it. Run grok login if the login was revoked. Browser cookies are not imported." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "로그인된 계정별 Grok CLI SuperGrok 크레딧입니다. ~/.grok/auth.json은 읽기만 하며, 세션이 만료되면 Grok CLI를 한 번 실행해 CLI가 직접 갱신하게 합니다. 로그인이 해제된 경우 grok login으로 다시 로그인하세요. 브라우저 쿠키는 가져오지 않습니다." } }
       }
     },
     "state.authentication_required" : {

@@ -1,4 +1,5 @@
 import CoreFoundation
+import CryptoKit
 import CoreGraphics
 import Dispatch
 import Foundation
@@ -25,10 +26,57 @@ public struct ClaudeSession: Sendable, Equatable {
     }
 }
 
+/// One Claude Code sign-in: the default login, or one per `CLAUDE_CONFIG_DIR`-style directory.
+public struct ClaudeAccount: Sendable, Equatable, Identifiable {
+    public static let defaultSourceID = "claude.oauth"
+    public static let `default` = ClaudeAccount(sourceID: defaultSourceID)
+
+    public let sourceID: String
+    /// `oauthAccount.accountUuid` from the directory's `.claude.json`, when present.
+    public let accountUUID: String?
+    public let email: String?
+
+    public var id: String { sourceID }
+
+    public init(sourceID: String, accountUUID: String? = nil, email: String? = nil) {
+        self.sourceID = sourceID
+        self.accountUUID = accountUUID
+        self.email = ProviderSnapshot.validatedAccountEmail(email)
+    }
+}
+
 public protocol ClaudeSessionProviding: Sendable {
     /// `false` performs a read-only lookup. `true` grants one bounded recovery attempt,
     /// used when a scheduled collection or manual retry needs to repair the session.
     func session(allowInteraction: Bool, rejectedAccessToken: String?) async throws -> ClaudeSession
+    /// Every Claude Code sign-in on this Mac, default first.
+    func accounts() async throws -> [ClaudeAccount]
+    func session(
+        account sourceID: String,
+        allowInteraction: Bool,
+        rejectedAccessToken: String?
+    ) async throws -> ClaudeSession
+}
+
+public extension ClaudeSessionProviding {
+    func accounts() async throws -> [ClaudeAccount] {
+        [.default]
+    }
+
+    func session(
+        account sourceID: String,
+        allowInteraction: Bool,
+        rejectedAccessToken: String?
+    ) async throws -> ClaudeSession {
+        guard sourceID == ClaudeAccount.defaultSourceID else {
+            throw CollectionError(
+                kind: .externalSessionMissing,
+                diagnosticCode: "claude.session.account-missing",
+                recoveryAction: .signInSourceApp
+            )
+        }
+        return try await session(allowInteraction: allowInteraction, rejectedAccessToken: rejectedAccessToken)
+    }
 }
 
 public struct NoClaudeSessionProvider: ClaudeSessionProviding {
@@ -160,18 +208,25 @@ final class ClaudeKeychainQueryGate: @unchecked Sendable {
 
 actor NativeClaudeCredentialReader: ClaudeCredentialReading {
     private static let maximumBytes = 64 * 1024
-    private static let service = "Claude Code-credentials"
+    static let defaultService = "Claude Code-credentials"
+    static let defaultCredentialsPath = ".claude/.credentials.json"
 
     private let policy: FilesystemAccessPolicy
+    private let credentialsRelativePath: String
     private let keychainLookup: @Sendable (Bool) throws -> Data?
     private let screenIsUnlocked: @Sendable () -> Bool
     private let backgroundTimeout: TimeInterval
     private let manualTimeout: TimeInterval
     private var keychainQuery: ClaudeKeychainQueryGate?
 
-    init(homeDirectory: URL) {
+    init(
+        homeDirectory: URL,
+        service: String = NativeClaudeCredentialReader.defaultService,
+        credentialsRelativePath: String = NativeClaudeCredentialReader.defaultCredentialsPath
+    ) {
         self.policy = FilesystemAccessPolicy(homeDirectory: homeDirectory)
-        self.keychainLookup = { try Self.readNativeKeychain(allowInteraction: $0) }
+        self.credentialsRelativePath = credentialsRelativePath
+        self.keychainLookup = { try Self.readNativeKeychain(allowInteraction: $0, service: service) }
         self.screenIsUnlocked = Self.consoleIsUnlocked
         self.backgroundTimeout = 5
         // Explicit macOS authorization includes human password/biometric entry.
@@ -184,9 +239,11 @@ actor NativeClaudeCredentialReader: ClaudeCredentialReading {
         screenIsUnlocked: @escaping @Sendable () -> Bool = { true },
         backgroundTimeout: TimeInterval = 5,
         manualTimeout: TimeInterval = 120,
+        credentialsRelativePath: String = NativeClaudeCredentialReader.defaultCredentialsPath,
         keychainLookup: @escaping @Sendable (Bool) throws -> Data?
     ) {
         self.policy = FilesystemAccessPolicy(homeDirectory: homeDirectory)
+        self.credentialsRelativePath = credentialsRelativePath
         self.keychainLookup = keychainLookup
         self.screenIsUnlocked = screenIsUnlocked
         self.backgroundTimeout = backgroundTimeout
@@ -197,7 +254,7 @@ actor NativeClaudeCredentialReader: ClaudeCredentialReading {
         do {
             return try await policy.read(ExternalFileRequest(
                 providerID: .claude,
-                relativePath: ".claude/.credentials.json",
+                relativePath: credentialsRelativePath,
                 maximumBytes: Self.maximumBytes
             ))
         } catch let error as CollectionError where error.kind == .externalSessionMissing {
@@ -252,6 +309,7 @@ actor NativeClaudeCredentialReader: ClaudeCredentialReading {
 
     static func readNativeKeychain(
         allowInteraction: Bool,
+        service: String = NativeClaudeCredentialReader.defaultService,
         matching: (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus = SecItemCopyMatching
     ) throws -> Data? {
         let context = LAContext()
@@ -371,7 +429,9 @@ private final class ClaudeRepairWaiters: @unchecked Sendable {
     }
 }
 
-public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
+/// Session state for one Claude Code sign-in: its credential slots, rejected-token memory,
+/// and the single in-flight repair.
+actor ClaudeAccountSessionProvider {
     private static let minimumValidity: TimeInterval = 60
 
     private let clock: any TokenTankClock
@@ -383,15 +443,6 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
     private var rejectedFileToken: String?
     private var rejectedKeychainToken: String?
 
-    public init(
-        clock: any TokenTankClock = SystemClock(),
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
-    ) {
-        self.clock = clock
-        self.credentials = NativeClaudeCredentialReader(homeDirectory: homeDirectory)
-        self.refresher = ClaudeCLIAuthRefresher(homeDirectory: homeDirectory)
-    }
-
     init(
         clock: any TokenTankClock,
         credentials: any ClaudeCredentialReading,
@@ -402,7 +453,7 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
         self.refresher = refresher
     }
 
-    public func session(
+    func session(
         allowInteraction: Bool,
         rejectedAccessToken: String?
     ) async throws -> ClaudeSession {
@@ -610,6 +661,220 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
     }
 }
 
+
+/// Every Claude Code sign-in on this Mac. The default login uses the `Claude Code-credentials`
+/// Keychain item or `~/.claude/.credentials.json`; each `CLAUDE_CONFIG_DIR` and `~/.claude-*`
+/// directory uses `Claude Code-credentials-<first 8 hex of SHA-256(directory path)>` or
+/// `<directory>/.credentials.json`. Identity comes from that directory's `.claude.json`.
+public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
+    private static let configMaximumBytes = 16 * 1024 * 1024
+
+    private let clock: any TokenTankClock
+    private let homeDirectory: URL?
+    private let environment: [String: String]
+    private let policy: FilesystemAccessPolicy?
+    private var accountProviders: [String: ClaudeAccountSessionProvider] = [:]
+
+    public init(
+        clock: any TokenTankClock = SystemClock(),
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) {
+        self.clock = clock
+        self.homeDirectory = homeDirectory
+        self.environment = environment
+        self.policy = FilesystemAccessPolicy(homeDirectory: homeDirectory)
+    }
+
+    /// A single default account backed by injected credential and repair sources.
+    init(
+        clock: any TokenTankClock,
+        credentials: any ClaudeCredentialReading,
+        refresher: any ClaudeAuthRefreshing
+    ) {
+        self.clock = clock
+        self.homeDirectory = nil
+        self.environment = [:]
+        self.policy = nil
+        self.accountProviders[ClaudeAccount.defaultSourceID] = ClaudeAccountSessionProvider(
+            clock: clock,
+            credentials: credentials,
+            refresher: refresher
+        )
+    }
+
+    public func accounts() async throws -> [ClaudeAccount] {
+        guard let homeDirectory, let policy else { return [.default] }
+        let locations = Self.locations(homeDirectory: homeDirectory, environment: environment)
+        var accounts: [ClaudeAccount] = []
+        var seenAccountUUIDs: Set<String> = []
+        for location in locations {
+            let identity = await Self.identity(in: location.configRelativePath, policy: policy)
+            // Beside other sign-ins, a default login with no account record or credentials file
+            // is not a sign-in; listing it would only add a permanent sign-in failure.
+            if location.sourceID == ClaudeAccount.defaultSourceID, locations.count > 1, identity.uuid == nil,
+               !FileManager.default.fileExists(
+                   atPath: homeDirectory.appendingPathComponent(location.credentialsRelativePath).path
+               ) {
+                continue
+            }
+            if let uuid = identity.uuid, !seenAccountUUIDs.insert(uuid).inserted { continue }
+            accounts.append(ClaudeAccount(
+                sourceID: location.sourceID,
+                accountUUID: identity.uuid,
+                email: identity.email
+            ))
+            if accountProviders[location.sourceID] == nil {
+                accountProviders[location.sourceID] = ClaudeAccountSessionProvider(
+                    clock: clock,
+                    credentials: NativeClaudeCredentialReader(
+                        homeDirectory: homeDirectory,
+                        service: location.keychainService,
+                        credentialsRelativePath: location.credentialsRelativePath
+                    ),
+                    refresher: ClaudeCLIAuthRefresher(
+                        homeDirectory: homeDirectory,
+                        configDirectory: location.configDirectory
+                    )
+                )
+            }
+        }
+        let current = Set(accounts.map(\.sourceID))
+        accountProviders = accountProviders.filter { current.contains($0.key) }
+        return accounts
+    }
+
+    public func session(
+        account sourceID: String,
+        allowInteraction: Bool,
+        rejectedAccessToken: String?
+    ) async throws -> ClaudeSession {
+        guard let provider = accountProviders[sourceID] ?? defaultProviderIfUndiscovered(sourceID) else {
+            throw CollectionError(
+                kind: .externalSessionMissing,
+                diagnosticCode: "claude.session.account-missing",
+                recoveryAction: .signInSourceApp
+            )
+        }
+        return try await provider.session(
+            allowInteraction: allowInteraction,
+            rejectedAccessToken: rejectedAccessToken
+        )
+    }
+
+    public func session(allowInteraction: Bool, rejectedAccessToken: String?) async throws -> ClaudeSession {
+        try await session(
+            account: ClaudeAccount.defaultSourceID,
+            allowInteraction: allowInteraction,
+            rejectedAccessToken: rejectedAccessToken
+        )
+    }
+
+    private func defaultProviderIfUndiscovered(_ sourceID: String) -> ClaudeAccountSessionProvider? {
+        guard sourceID == ClaudeAccount.defaultSourceID, let homeDirectory else { return nil }
+        let provider = ClaudeAccountSessionProvider(
+            clock: clock,
+            credentials: NativeClaudeCredentialReader(homeDirectory: homeDirectory),
+            refresher: ClaudeCLIAuthRefresher(homeDirectory: homeDirectory)
+        )
+        accountProviders[sourceID] = provider
+        return provider
+    }
+
+    struct Location: Equatable {
+        let sourceID: String
+        let keychainService: String
+        let credentialsRelativePath: String
+        let configRelativePath: String
+        /// The exact string hashed into `keychainService`, so a repair run with it as
+        /// `CLAUDE_CONFIG_DIR` renews the same Keychain item Token Jar reads.
+        let configDirectory: String?
+    }
+
+    /// Default login first, then `CLAUDE_CONFIG_DIR`, then `~/.claude-*` in name order.
+    /// A non-default directory counts only when it lies inside the home directory and holds a
+    /// `.claude.json` or `.credentials.json`.
+    static func locations(
+        homeDirectory: URL,
+        environment: [String: String],
+        fileManager: FileManager = .default
+    ) -> [Location] {
+        let home = homeDirectory.standardizedFileURL.path
+        var result = [Location(
+            sourceID: ClaudeAccount.defaultSourceID,
+            keychainService: NativeClaudeCredentialReader.defaultService,
+            credentialsRelativePath: NativeClaudeCredentialReader.defaultCredentialsPath,
+            configRelativePath: ".claude.json",
+            configDirectory: nil
+        )]
+        var candidates: [String] = []
+        if let configured = environment["CLAUDE_CONFIG_DIR"], configured.hasPrefix("/") {
+            candidates.append(configured)
+        }
+        let siblings = ((try? fileManager.contentsOfDirectory(atPath: home)) ?? [])
+            .filter { $0.hasPrefix(".claude-") }
+            .sorted()
+            .map { "\(home)/\($0)" }
+        candidates.append(contentsOf: siblings)
+
+        var seen: Set<String> = ["\(home)/.claude"]
+        for path in candidates {
+            let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
+            guard seen.insert(standardized).inserted,
+                  standardized.hasPrefix(home + "/")
+            else { continue }
+            let relative = String(standardized.dropFirst(home.count + 1))
+            guard !relative.isEmpty, !relative.contains("..") else { continue }
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: standardized, isDirectory: &isDirectory),
+                  isDirectory.boolValue,
+                  (try? fileManager.destinationOfSymbolicLink(atPath: standardized)) == nil,
+                  fileManager.fileExists(atPath: "\(standardized)/.claude.json")
+                    || fileManager.fileExists(atPath: "\(standardized)/.credentials.json")
+            else { continue }
+            let hash = SHA256Hex.digest(path).prefix(8)
+            result.append(Location(
+                sourceID: sourceID(forRelativeDirectory: relative, hash: String(hash)),
+                keychainService: "\(NativeClaudeCredentialReader.defaultService)-\(hash)",
+                credentialsRelativePath: "\(relative)/.credentials.json",
+                configRelativePath: "\(relative)/.claude.json",
+                configDirectory: path
+            ))
+        }
+        return result
+    }
+
+    private static func sourceID(forRelativeDirectory relative: String, hash: String) -> String {
+        let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789-_")
+        let name = relative.hasPrefix(".claude-") && !relative.contains("/")
+            ? String(relative.dropFirst(1)).lowercased()
+            : ""
+        guard !name.isEmpty, name.count <= 64, name.allSatisfy(allowed.contains) else {
+            return "\(ClaudeAccount.defaultSourceID).dir-\(hash)"
+        }
+        return "\(ClaudeAccount.defaultSourceID).\(name)"
+    }
+
+    static func identity(
+        in relativePath: String,
+        policy: FilesystemAccessPolicy
+    ) async -> (uuid: String?, email: String?) {
+        guard let data = try? await policy.read(ExternalFileRequest(
+            providerID: .claude,
+            relativePath: relativePath,
+            maximumBytes: configMaximumBytes
+        )),
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let oauth = root["oauthAccount"] as? [String: Any]
+        else { return (nil, nil) }
+        let uuid = (oauth["accountUuid"] as? String).flatMap { value -> String? in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty || trimmed.utf8.count > 128 ? nil : trimmed
+        }
+        return (uuid, oauth["emailAddress"] as? String)
+    }
+}
+
 private struct CredentialState {
     let fresh: ClaudeSession?
     let unusableTokens: Set<String>
@@ -700,4 +965,10 @@ private func authenticationRequired(_ code: String) -> CollectionError {
 
 private func malformed(_ code: String) -> CollectionError {
     CollectionError(kind: .malformedResponse, diagnosticCode: code)
+}
+
+enum SHA256Hex {
+    static func digest(_ value: String) -> String {
+        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
 }

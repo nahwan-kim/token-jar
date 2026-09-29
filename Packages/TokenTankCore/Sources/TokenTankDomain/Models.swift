@@ -29,32 +29,47 @@ public enum ProviderID: String, CaseIterable, Codable, Hashable, Identifiable, S
         }
     }
 }
-public enum CodexAccountSource: String, CaseIterable, Codable, Hashable, Identifiable, Sendable {
-    case primary = "codex.primary"
-    case secondary = "codex.secondary"
+/// One Codex sign-in, named by the `CODEX_HOME` directory it lives in. `~/.codex` is
+/// `codex.primary` and `~/.codex-secondary` keeps its historical `codex.secondary` ID.
+public struct CodexAccountSource: RawRepresentable, Codable, Hashable, Identifiable, Sendable {
+    public static let primary = CodexAccountSource(rawValue: "codex.primary")
+    public static let secondary = CodexAccountSource(rawValue: "codex.secondary")
+
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(from decoder: Decoder) throws {
+        self.rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 
     public var id: String { rawValue }
 
-    public var directoryName: String {
+    /// Default login first, then the historical secondary login, then other homes by ID.
+    public var displayRank: Int {
         switch self {
-        case .primary:
-            ".codex"
-        case .secondary:
-            ".codex-secondary"
+        case .primary: 0
+        case .secondary: 1
+        default: 2
         }
     }
 
-    public var displayName: String {
-        switch self {
-        case .primary:
-            "Default"
-        case .secondary:
-            "Secondary"
-        }
-    }
-
-    public var isOptional: Bool {
-        self == .secondary
+    /// The source for a directory directly under the home directory (".codex", ".codex-work").
+    public static func homeDirectory(named name: String) -> CodexAccountSource? {
+        if name == ".codex" { return .primary }
+        guard name.hasPrefix(".codex-") else { return nil }
+        let suffix = String(name.dropFirst(".codex-".count)).lowercased()
+        if suffix == "secondary" { return .secondary }
+        let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789-_")
+        guard !suffix.isEmpty, suffix.count <= 64, suffix.allSatisfy(allowed.contains) else { return nil }
+        return CodexAccountSource(rawValue: "codex.home.\(suffix)")
     }
 }
 
@@ -296,7 +311,7 @@ public struct ProviderSnapshot: Codable, Equatable, Sendable {
     }
 
     public func retainingAccountData(from previous: ProviderSnapshot?) -> ProviderSnapshot {
-        guard providerID == .codex, !accounts.isEmpty else { return self }
+        guard !accounts.isEmpty, accounts.contains(where: { $0.failure != nil }) else { return self }
         var previousBySourceID: [String: ProviderAccountSnapshot] = [:]
         for account in previous?.accounts ?? [] {
             previousBySourceID[account.sourceID] = account
@@ -396,6 +411,8 @@ public enum RecoveryAction: String, Codable, Equatable, Sendable {
     case waitForNextRefresh
     case signInSourceApp
     case repairClaudeConnection
+    /// The source CLI renews its own session the next time it runs.
+    case runSourceCLI
     case signInTokenTank
     case allowAccessInSystemSettings
     case none

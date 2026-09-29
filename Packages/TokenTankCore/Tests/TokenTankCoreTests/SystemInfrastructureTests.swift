@@ -607,132 +607,36 @@ struct SystemInfrastructureTests {
         #expect(redirected == nil)
     }
 
-    @Test("Grok token renewal permits only the exact bounded OAuth request")
-    func grokTokenRenewalPolicy() async throws {
+    @Test("Token Jar never sends a Grok OAuth refresh grant")
+    func grokTokenEndpointIsDenied() async throws {
         let endpoint = "https://auth.x.ai/oauth2/token"
-        let headers = [
-            "Accept": "application/json",
-            "Content-Type": "application/x-www-form-urlencoded",
-        ]
-        func request(
-            providerID: ProviderID = .grok,
-            url: String = endpoint,
-            method: HTTPMethod = .post,
-            body: Data? = Data("grant_type=refresh_token&client_id=client&refresh_token=refresh".utf8),
-            timeout: TimeInterval = 15,
-            requestHeaders: [String: String] = headers
-        ) -> NetworkRequest {
-            NetworkRequest(
+        let request = NetworkRequest(
+            providerID: .grok,
+            url: URL(string: endpoint)!,
+            method: .post,
+            headers: [
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+            ],
+            body: Data("grant_type=refresh_token&client_id=client&refresh_token=refresh".utf8),
+            timeout: 15
+        )
+        #expect(!URLSessionNetworkClient.isAllowed(request))
+        for providerID in ProviderID.allCases {
+            #expect(!URLSessionNetworkClient.isAllowed(NetworkRequest(
                 providerID: providerID,
-                url: URL(string: url)!,
-                method: method,
-                headers: requestHeaders,
-                body: body,
-                timeout: timeout
-            )
+                url: URL(string: endpoint)!,
+                method: .post,
+                body: request.body,
+                timeout: 15
+            )))
         }
-
-        #expect(URLSessionNetworkClient.isAllowed(request()))
-        #expect(URLSessionNetworkClient.isAllowed(request(url: "https://auth.x.ai:443/oauth2/token")))
-        #expect(URLSessionNetworkClient.isAllowed(request(
-            body: Data("refresh_token=%E3%83%88%E3%83%BC%E3%82%AF%E3%83%B3%2B%26%3D&client_id=client%2Fscope&grant_type=refresh_token".utf8)
-        )))
-        let boundedPrefix = "grant_type=refresh_token&client_id=client&refresh_token="
-        let exactlyBounded = boundedPrefix
-            + String(repeating: "a", count: 32 * 1024 - boundedPrefix.utf8.count)
-        #expect(URLSessionNetworkClient.isAllowed(request(body: Data(exactlyBounded.utf8))))
-
-        let oversized = "grant_type=refresh_token&client_id=client&refresh_token="
-            + String(repeating: "a", count: 32 * 1024)
-        let invalidRequests = [
-            request(providerID: .claude),
-            request(providerID: .codex),
-            request(providerID: .cursor),
-            request(providerID: .doubao),
-            request(url: "http://auth.x.ai/oauth2/token"),
-            request(url: "https://user:password@auth.x.ai/oauth2/token"),
-            request(url: "https://auth.x.ai:444/oauth2/token"),
-            request(url: endpoint + "/"),
-            request(url: endpoint + "?extra=1"),
-            request(url: endpoint + "#fragment"),
-            request(method: .get),
-            request(body: nil),
-            request(body: Data()),
-            request(body: Data("grant_type=refresh_token&client_id=client".utf8)),
-            request(body: Data("grant_type=refresh_token&client_id=client&refresh_token=".utf8)),
-            request(body: Data("grant_type=refresh_token&client_id=&refresh_token=refresh".utf8)),
-            request(body: Data("grant_type=authorization_code&client_id=client&refresh_token=refresh".utf8)),
-            request(body: Data("grant_type=refresh_token&client_id=client&refresh_token=one&refresh_token=two".utf8)),
-            request(body: Data("grant_type=refresh_token&client_id=client&refresh_token=refresh&scope=openid".utf8)),
-            request(body: Data("grant_type=refresh_token&client_id=client&refresh_token=%ZZ".utf8)),
-            request(body: Data("grant_type=refresh_token&client_id=client&refresh_token=raw=value".utf8)),
-            request(body: Data("grant_type=refresh_token&client_id=client&refresh_token=raw token".utf8)),
-            request(body: Data("grant_type=refresh_token&client_id=client&refresh_token=トークン".utf8)),
-            request(body: Data(oversized.utf8)),
-            request(timeout: 0),
-            request(timeout: 15.001),
-        ]
-        for invalid in invalidRequests {
-            #expect(!URLSessionNetworkClient.isAllowed(invalid))
+        do {
+            _ = try await URLSessionNetworkClient().send(request)
+            Issue.record("Expected the Grok token endpoint to be denied")
+        } catch let error as CollectionError {
+            #expect(error.diagnosticCode == "network.destination-not-allowlisted")
         }
-
-        BoundedResponseURLProtocol.setPayload(Data("{}".utf8))
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [BoundedResponseURLProtocol.self]
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-        let client = URLSessionNetworkClient(session: session, maximumResponseBytes: 1024)
-        _ = try await client.send(request())
-
-        let rejectedHeaders = [
-            [:],
-            ["Accept": "application/json"],
-            [
-                "Accept": "application/json",
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Authorization": "Bearer must-not-leak",
-            ],
-            [
-                "Accept": "application/json",
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Cookie": "session=must-not-leak",
-            ],
-            [
-                "Accept": "*/*",
-                "Content-Type": "application/x-www-form-urlencoded",
-            ],
-            [
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            ],
-        ]
-        for invalidHeaders in rejectedHeaders {
-            do {
-                _ = try await client.send(request(requestHeaders: invalidHeaders))
-                Issue.record("Expected Grok renewal header rejection")
-            } catch let error as CollectionError {
-                #expect(error.kind == .sourceUnavailable)
-                #expect(error.diagnosticCode == "network.header-invalid")
-                #expect(!String(describing: error).contains("must-not-leak"))
-            } catch {
-                Issue.record("Unexpected error: \(error)")
-            }
-        }
-        let redirected = URLRequest(url: URL(string: "https://attacker.invalid/capture")!)
-        let originalURL = URL(string: endpoint)!
-        let redirectResponse = try #require(HTTPURLResponse(
-            url: originalURL, statusCode: 307, httpVersion: nil,
-            headerFields: ["Location": redirected.url!.absoluteString]
-        ))
-        let redirectDecision: URLRequest? = await withCheckedContinuation { continuation in
-            NoRedirectURLSessionDelegate().urlSession(
-                session,
-                task: session.dataTask(with: originalURL),
-                willPerformHTTPRedirection: redirectResponse,
-                newRequest: redirected
-            ) { continuation.resume(returning: $0) }
-        }
-        #expect(redirectDecision == nil)
     }
 
     @Test("Grok bearer retry permits only the exact bounded read-only gRPC request")
@@ -1060,7 +964,7 @@ struct SystemInfrastructureTests {
         let reader = CodexAppServerUsageReader(
             executableCandidates: [executable],
             homeDirectory: directory,
-            accountSources: CodexAccountSource.allCases,
+            environment: [:],
             timeout: .seconds(1)
         )
         let reads = try await reader.readAccounts()
@@ -1074,12 +978,13 @@ struct SystemInfrastructureTests {
     func codexSourceEnvironmentIsIsolated() async throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        for source in CodexAccountSource.allCases {
+        for name in [".codex", ".codex-secondary"] {
             try FileManager.default.createDirectory(
-                at: directory.appendingPathComponent(source.directoryName, isDirectory: true),
+                at: directory.appendingPathComponent(name, isDirectory: true),
                 withIntermediateDirectories: true
             )
         }
+        try Data("{}".utf8).write(to: directory.appendingPathComponent(".codex-secondary/auth.json"))
 
         let executable = directory.appendingPathComponent("codex-isolated-sources")
         let script = """
@@ -1150,18 +1055,18 @@ struct SystemInfrastructureTests {
         let reader = CodexAppServerUsageReader(
             executableCandidates: [executable],
             homeDirectory: directory,
-            accountSources: CodexAccountSource.allCases,
+            environment: [:],
             timeout: .seconds(2)
         )
         let reads = try await reader.readAccounts()
-        #expect(Set(reads.map(\.sourceID)) == Set(CodexAccountSource.allCases))
+        #expect(Set(reads.map(\.sourceID)) == [.primary, .secondary])
         #expect(reads.allSatisfy { $0.failure == nil })
 
         let primaryObservation = try #require(
             String(
                 data: try Data(
                     contentsOf: directory
-                        .appendingPathComponent(CodexAccountSource.primary.directoryName)
+                        .appendingPathComponent(".codex")
                         .appendingPathComponent("observed-environment")
                 ),
                 encoding: .utf8
@@ -1171,7 +1076,7 @@ struct SystemInfrastructureTests {
             String(
                 data: try Data(
                     contentsOf: directory
-                        .appendingPathComponent(CodexAccountSource.secondary.directoryName)
+                        .appendingPathComponent(".codex-secondary")
                         .appendingPathComponent("observed-environment")
                 ),
                 encoding: .utf8
@@ -1184,6 +1089,95 @@ struct SystemInfrastructureTests {
         #expect(secondaryObservation.contains("arg2=cli_auth_credentials_store=\"file\""))
         #expect(secondaryObservation.contains("arg3=app-server"))
     }
+    @Test("Codex homes are discovered from ~/.codex, CODEX_HOME, and ~/.codex-*, deduplicated by account")
+    func codexHomeDiscovery() async throws {
+        let home = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: home) }
+        func jwt(_ claims: [String: Any]) throws -> String {
+            let payload = try JSONSerialization.data(withJSONObject: claims)
+                .base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
+            return "e30.\(payload).signature"
+        }
+        func signIn(_ directory: String, accountUserID: String) throws {
+            let url = home.appendingPathComponent(directory, isDirectory: true)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            let idToken = try jwt(["https://api.openai.com/auth": ["chatgpt_account_user_id": accountUserID]])
+            let auth = try JSONSerialization.data(withJSONObject: ["tokens": ["id_token": idToken]])
+            try auth.write(to: url.appendingPathComponent("auth.json"))
+        }
+        try signIn(".codex", accountUserID: "user-a__workspace-1")
+        try signIn(".codex-secondary", accountUserID: "user-b__workspace-1")
+        try signIn(".codex-copy", accountUserID: "user-a__workspace-1")
+        try signIn("elsewhere/codex", accountUserID: "user-c__workspace-2")
+        try FileManager.default.createDirectory(
+            at: home.appendingPathComponent(".codex-empty", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        let configured = home.appendingPathComponent("elsewhere/codex").standardizedFileURL.path
+        let environment = ["CODEX_HOME": configured]
+
+        let homes = await CodexAppServerUsageReader.discoverHomes(homeDirectory: home, environment: environment)
+        let envSource = CodexAccountSource(rawValue: "codex.env.\(SHA256Hex.digest(configured).prefix(8))")
+        #expect(homes.map(\.source) == [.primary, envSource, .secondary])
+        #expect(homes.map(\.usesFileCredentialStore) == [false, true, true])
+
+        try FileManager.default.removeItem(at: home.appendingPathComponent(".codex-secondary"))
+        let remaining = await CodexAppServerUsageReader.discoverHomes(homeDirectory: home, environment: environment)
+        #expect(remaining.map(\.source) == [.primary, envSource])
+
+        try FileManager.default.removeItem(at: home.appendingPathComponent(".codex"))
+        try signIn(".codex-work", accountUserID: "user-d__workspace-3")
+        let renamed = await CodexAppServerUsageReader.discoverHomes(homeDirectory: home, environment: [:])
+        #expect(renamed.map(\.source.rawValue) == ["codex.primary", "codex.home.copy", "codex.home.work"])
+    }
+
+    @Test("at most two Codex app-servers run at once")
+    func codexServerConcurrencyIsBounded() async throws {
+        let home = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: home) }
+        for name in [".codex", ".codex-a", ".codex-b", ".codex-c"] {
+            let url = home.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            try Data("{}".utf8).write(to: url.appendingPathComponent("auth.json"))
+        }
+        let log = home.appendingPathComponent("events.log")
+        let executable = home.appendingPathComponent("codex-overlap")
+        let script = """
+        #!/bin/sh
+        printf 'start\\n' >> "\(log.path)"
+        IFS= read -r initialize
+        printf '%s\\n' '{"id":0,"result":{}}'
+        IFS= read -r initialized
+        IFS= read -r rateLimitsRequest
+        sleep 0.2
+        printf 'end\\n' >> "\(log.path)"
+        printf '%s\\n' '{"id":1,"result":{"rate_limits":{"primary":{"used_percent":1}}}}'
+        IFS= read -r accountRequest
+        printf '%s\\n' '{"id":2,"result":{"account":{"type":"chatgpt","email":"a@example.com"}}}'
+        """
+        try Data(script.utf8).write(to: executable, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+
+        let reader = CodexAppServerUsageReader(
+            executableCandidates: [executable],
+            homeDirectory: home,
+            environment: [:],
+            timeout: .seconds(5)
+        )
+        let reads = try await reader.readAccounts()
+        #expect(reads.count == 4)
+        var active = 0
+        var maximum = 0
+        for line in try String(contentsOf: log, encoding: .utf8).split(separator: "\n") {
+            active += line == "start" ? 1 : -1
+            maximum = max(maximum, active)
+        }
+        #expect(maximum == 2)
+    }
+
     @Test("stable source IDs are deterministic and do not persist raw account identifiers")
     func stableSourceIDs() {
         let first = StableSourceID.make(

@@ -165,11 +165,16 @@ enum CodexAccountPresentation {
         }
     }
 
+    /// Accounts shown as separate cards: every Codex account, and other providers only when
+    /// more than one sign-in was found (a single sign-in keeps the provider-level layout).
+    static func cardAccounts(providerID: ProviderID, state: CollectionState) -> [ProviderAccountSnapshot] {
+        let count = state.snapshot?.accounts.count ?? 0
+        guard providerID == .codex ? count > 0 : count > 1 else { return [] }
+        return accounts(for: state)
+    }
+
     static func identity(for account: ProviderAccountSnapshot, locale: Locale) -> String {
-        let email = account.accountEmail ?? localized(
-            account.sourceID == CodexAccountSource.primary.id ? "codex.account.default" : "codex.account.secondary",
-            locale: locale
-        )
+        let email = account.accountEmail ?? fallbackLabel(for: account.sourceID, locale: locale)
         return [email, account.plan].compactMap { $0 }.joined(separator: " · ")
     }
 
@@ -181,12 +186,20 @@ enum CodexAccountPresentation {
         )
     }
 
+    private static func fallbackLabel(for sourceID: String, locale: Locale) -> String {
+        if isDefaultSource(sourceID) { return localized("codex.account.default", locale: locale) }
+        if sourceID == CodexAccountSource.secondary.id { return localized("codex.account.secondary", locale: locale) }
+        return sourceID.split(separator: ".").last.map(String.init) ?? sourceID
+    }
+
+    private static func isDefaultSource(_ sourceID: String) -> Bool {
+        sourceID == CodexAccountSource.primary.id || sourceID == ClaudeAccount.defaultSourceID
+    }
+
     private static func rank(for sourceID: String) -> Int {
-        switch CodexAccountSource(rawValue: sourceID) {
-        case .primary: 0
-        case .secondary: 1
-        case nil: 2
-        }
+        if isDefaultSource(sourceID) { return 0 }
+        if sourceID == CodexAccountSource.secondary.id { return 1 }
+        return 2
     }
 }
 
@@ -319,14 +332,18 @@ final class AppModel: ObservableObject {
                 sqlite: SQLiteExternalSessionReader(policy: filesystemPolicy),
                 codexAccount: CodexAppServerUsageReader(),
                 doubaoPlan: ArkCLIPlanUsageReader(),
-                grokSession: GrokOAuthSessionProvider(network: network, clock: clock),
+                grokSession: GrokOAuthSessionProvider(clock: clock),
                 claudeSession: ClaudeCodeSessionProvider(clock: clock),
                 clock: clock,
                 diagnostics: diagnostics
             )
             self.credentialStore = credentials
             self.preferencesStore = suppliedPreferencesStore ?? UserDefaultsPreferencesStore()
-            self.coordinator = RefreshCoordinator(adapters: adapterList, context: context)
+            self.coordinator = RefreshCoordinator(
+                adapters: adapterList,
+                context: context,
+                activity: SystemActivityMonitor()
+            )
             self.diagnostics = diagnostics
         }
         resolvedUpdater?.onCanCheckForUpdatesChanged = { [weak self] canCheckForUpdates in
@@ -462,6 +479,17 @@ final class AppModel: ObservableObject {
         startRefresh(providerID: providerID)
     }
 
+    /// The usage window or menu-bar panel became visible.
+    func usageSurfaceDidOpen() {
+        guard !isStopping, started else { return }
+        let operationID = UUID()
+        let coordinator = coordinator
+        refreshOperations[operationID] = Task { [weak self, coordinator] in
+            await coordinator.refreshStaleProviders()
+            self?.finishRefreshOperation(operationID)
+        }
+    }
+
     func repairClaudeConnection() {
         guard !isStopping, !isClaudeRepairPending else { return }
         ensureStarted()
@@ -514,9 +542,8 @@ final class AppModel: ObservableObject {
     }
 
     func menuValue(for preference: ProviderPreference) -> String {
-        if preference.providerID == .codex,
-           let primary = codexAccounts().first,
-           let quota = menuQuota(for: primary, preference: preference),
+        if let first = accounts(for: preference.providerID).first,
+           let quota = menuQuota(for: first, preference: preference),
            let remaining = QuotaDisplayFormatter.remainingPercentage(quota.percentage) {
             return "\(Self.roundedPercent(remaining))%"
         }
@@ -528,9 +555,8 @@ final class AppModel: ObservableObject {
     }
 
     func menuQuota(for preference: ProviderPreference) -> RawQuotaItem? {
-        if preference.providerID == .codex,
-           let primary = codexAccounts().first {
-            return menuQuota(for: primary, preference: preference)
+        if let first = accounts(for: preference.providerID).first {
+            return menuQuota(for: first, preference: preference)
         }
         let quotas = states[preference.providerID]?.snapshot?.quotas ?? []
         return menuQuota(in: quotas, preference: preference)
@@ -559,17 +585,29 @@ final class AppModel: ObservableObject {
         ).first
     }
 
-    func codexAccounts() -> [ProviderAccountSnapshot] {
-        CodexAccountPresentation.accounts(for: states[.codex] ?? .neverLoaded)
+    /// Per-account cards of a provider, in display order; empty for a single-sign-in provider.
+    func accounts(for providerID: ProviderID) -> [ProviderAccountSnapshot] {
+        CodexAccountPresentation.cardAccounts(providerID: providerID, state: states[providerID] ?? .neverLoaded)
     }
 
+    func codexAccounts() -> [ProviderAccountSnapshot] {
+        accounts(for: .codex)
+    }
 
     func codexMenuValues(
         for preference: ProviderPreference,
         now: Date = Date()
     ) -> [CodexAccountMenuValue] {
         guard preference.providerID == .codex else { return [] }
-        return codexAccounts().map { account in
+        return accountMenuValues(for: preference, now: now)
+    }
+
+    /// One menu value per account, each using the provider's representative-quota choice.
+    func accountMenuValues(
+        for preference: ProviderPreference,
+        now: Date = Date()
+    ) -> [CodexAccountMenuValue] {
+        accounts(for: preference.providerID).map { account in
             let quota = menuQuota(for: account, preference: preference)
             let value = quota.flatMap {
                 QuotaDisplayFormatter.remainingPercentage($0.percentage).map {
@@ -593,19 +631,17 @@ final class AppModel: ObservableObject {
     func menuSummaryText(for preference: ProviderPreference, now: Date = Date()) -> String {
         let staleLabel = CodexAccountPresentation.localized("state.stale", locale: locale)
         let resetSoonLabel = CodexAccountPresentation.localized("state.reset_soon", locale: locale)
-        if preference.providerID == .codex {
-            let values = codexMenuValues(for: preference, now: now)
-            if !values.isEmpty {
-                let accounts = values.map { value in
-                    let notes = [
-                        value.isStale ? staleLabel : nil,
-                        value.isResetImminent ? resetSoonLabel : nil,
-                    ].compactMap { $0 }
-                    let suffix = notes.isEmpty ? "" : " (\(notes.joined(separator: ", ")))"
-                    return "\(value.value)\(suffix)"
-                }.joined(separator: " · ")
-                return "\(preference.providerID.displayName) \(accounts)"
-            }
+        let values = accountMenuValues(for: preference, now: now)
+        if !values.isEmpty {
+            let accounts = values.map { value in
+                let notes = [
+                    value.isStale ? staleLabel : nil,
+                    value.isResetImminent ? resetSoonLabel : nil,
+                ].compactMap { $0 }
+                let suffix = notes.isEmpty ? "" : " (\(notes.joined(separator: ", ")))"
+                return "\(value.value)\(suffix)"
+            }.joined(separator: " · ")
+            return "\(preference.providerID.displayName) \(accounts)"
         }
 
         var value = "\(preference.providerID.displayName) \(menuValue(for: preference))"
@@ -623,8 +659,8 @@ final class AppModel: ObservableObject {
         preferences.visibleProviders.map { preference in
             let text: String
             let isResetImminent: Bool
-            if preference.providerID == .codex, !codexAccounts().isEmpty {
-                let values = codexMenuValues(for: preference, now: now)
+            let values = accountMenuValues(for: preference, now: now)
+            if !values.isEmpty {
                 text = values.map {
                     "\($0.value)\($0.isStale ? "*" : "")"
                 }.joined(separator: " · ")
@@ -747,8 +783,11 @@ final class AppModel: ObservableObject {
     func quotas(for providerID: ProviderID) -> [RawQuotaItem] {
         guard let snapshot = states[providerID]?.snapshot else { return [] }
         let quotas: [RawQuotaItem]
-        if providerID == .codex, snapshot.quotas.isEmpty, !snapshot.accounts.isEmpty {
-            quotas = CodexAccountPresentation.ordered(snapshot.accounts).flatMap(\.quotas)
+        if snapshot.quotas.isEmpty, !snapshot.accounts.isEmpty {
+            var seen: Set<RawQuotaID> = []
+            quotas = CodexAccountPresentation.ordered(snapshot.accounts)
+                .flatMap(\.quotas)
+                .filter { seen.insert($0.id).inserted }
         } else {
             quotas = snapshot.quotas
         }
