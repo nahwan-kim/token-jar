@@ -24,24 +24,24 @@ struct GrokSessionTests {
     func expiryFormats() async throws {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        // Each entry is built inside its iteration: Swift 6.0 rejects sending a `[String: Any]`
-        // whose values still belong to a non-Sendable array the loop reads again.
-        for format in 0..<3 {
-            var value = entry(token: "access-fresh", expiresAt: nil)
-            switch format {
-            case 0: value["expires_at"] = formatter.string(from: now.addingTimeInterval(3_600))
-            case 1: value["expires_at"] = String(Int(now.addingTimeInterval(3_600).timeIntervalSince1970))
-            default: value["expires_at"] = now.addingTimeInterval(3_600).timeIntervalSince1970 * 1_000
-            }
-            let refresher = RecordingGrokRefresher()
-            let provider = GrokOAuthSessionProvider(
-                clock: ManualClock(now: now),
-                store: MemoryGrokAuthStore([officialScope: value]),
-                refresher: refresher
-            )
-            #expect(try await provider.session(rejectedAccessToken: nil).accessToken == "access-fresh")
-            #expect(await refresher.runs == 0)
-        }
+        try await expectFreshSession(rawExpiry: formatter.string(from: now.addingTimeInterval(3_600)))
+        try await expectFreshSession(rawExpiry: String(Int(now.addingTimeInterval(3_600).timeIntervalSince1970)))
+        try await expectFreshSession(rawExpiry: now.addingTimeInterval(3_600).timeIntervalSince1970 * 1_000)
+    }
+
+    /// The store receives a freshly built `[String: Any]` built only from Sendable inputs;
+    /// Swift 6.0 rejects sending a mutated local dictionary to the store actor.
+    private func expectFreshSession(rawExpiry: any Sendable) async throws {
+        let refresher = RecordingGrokRefresher()
+        let provider = GrokOAuthSessionProvider(
+            clock: ManualClock(now: now),
+            store: MemoryGrokAuthStore([
+                officialScope: entry(token: "access-fresh", expiresAt: nil).merging(["expires_at": rawExpiry]) { $1 },
+            ]),
+            refresher: refresher
+        )
+        #expect(try await provider.session(rejectedAccessToken: nil).accessToken == "access-fresh")
+        #expect(await refresher.runs == 0)
     }
 
     @Test("an expired session runs the Grok CLI once and adopts the token it wrote")
