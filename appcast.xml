@@ -4,15 +4,15 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Token Jar</title>
         <item>
-            <title>0.1.16</title>
-            <pubDate>Wed, 23 Sep 2026 10:28:31 +0900</pubDate>
-            <sparkle:version>17</sparkle:version>
-            <sparkle:shortVersionString>0.1.16</sparkle:shortVersionString>
+            <title>0.1.17</title>
+            <pubDate>Tue, 29 Sep 2026 11:17:32 +0900</pubDate>
+            <sparkle:version>18</sparkle:version>
+            <sparkle:shortVersionString>0.1.17</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/nahwan-kim/token-jar/releases/download/v0.1.16/TokenJar-0.1.16.zip" length="4194474" type="application/octet-stream" sparkle:edSignature="rCzrPQZlARFkAe/jakkzoaSrnzc6dcOK4uUkNGy4YI3muUNsvrJbFCfFk8xmK9vZqfDIJbouD1z7Tt64ErfsAw=="></enclosure>
+            <enclosure url="https://github.com/nahwan-kim/token-jar/releases/download/v0.1.17/TokenJar-0.1.17.zip" length="4200581" type="application/octet-stream" sparkle:edSignature="DQzH7uzHHm7OSoMnPfIOr9HOfsVzpQVJWyWAVBHVUKvpTBJ7ACIfKZmLJUh+tH/eiuhh66XW1JD+HdBzxLKPCQ=="></enclosure>
         </item>
     </channel>
 </rss><!-- sparkle-signatures:
-edSignature: lBGnxZVYh4ixoSocrBwwTeTVQLZXy7O3ZLvGON54rmm2K1ymTXRCx1mSY8fB1CvoWaY06uT7GdS2zkTEDZKIDA==
+edSignature: 7I4ebRHKEEN80ifz1uJ7QW7QCwkDqURSpVjNvwZpkIIAaBubpTLXzL1EYsLF6Ae/XI5a5FMZQARUloQ92nn6Bg==
 length: 1050
 -->
