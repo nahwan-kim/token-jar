@@ -27,7 +27,9 @@ public struct CodexAdapter: ProviderAdapter {
     public func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
         let reads: [CodexAccountRead]
         do {
-            reads = try await context.codexAccount.readAccounts()
+            reads = try await context.codexAccount.readAccounts(
+                excluding: context.disabledAccountSourceIDs
+            )
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as CollectionError {

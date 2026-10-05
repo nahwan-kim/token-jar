@@ -154,6 +154,14 @@ public struct CodexAccountRead: Equatable, Sendable {
 
 public protocol CodexAccountUsageReader: Sendable {
     func readAccounts() async throws -> [CodexAccountRead]
+    /// Reads every account except the given source IDs, which are neither started nor read.
+    func readAccounts(excluding sourceIDs: Set<String>) async throws -> [CodexAccountRead]
+}
+
+extension CodexAccountUsageReader {
+    public func readAccounts(excluding sourceIDs: Set<String>) async throws -> [CodexAccountRead] {
+        try await readAccounts().filter { !sourceIDs.contains($0.sourceID.id) }
+    }
 }
 public protocol DoubaoPlanUsageReader: Sendable {
     func readPlanUsage() async throws -> Data
@@ -229,6 +237,8 @@ public struct CollectionContext: Sendable {
     public let correlationID: UUID
     public let isUserInitiated: Bool
     public let allowsClaudeRecovery: Bool
+    /// Accounts the user turned off; multi-account providers skip them entirely.
+    public let disabledAccountSourceIDs: Set<String>
 
     public init(
         network: any NetworkClient,
@@ -243,7 +253,8 @@ public struct CollectionContext: Sendable {
         diagnostics: any DiagnosticsSink,
         correlationID: UUID = UUID(),
         isUserInitiated: Bool = false,
-        allowsClaudeRecovery: Bool = false
+        allowsClaudeRecovery: Bool = false,
+        disabledAccountSourceIDs: Set<String> = []
     ) {
         self.network = network
         self.credentials = credentials
@@ -258,6 +269,7 @@ public struct CollectionContext: Sendable {
         self.correlationID = correlationID
         self.isUserInitiated = isUserInitiated
         self.allowsClaudeRecovery = allowsClaudeRecovery
+        self.disabledAccountSourceIDs = disabledAccountSourceIDs
     }
 }
 

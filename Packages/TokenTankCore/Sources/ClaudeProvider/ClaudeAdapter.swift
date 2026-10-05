@@ -30,7 +30,8 @@ public struct ClaudeAdapter: ProviderAdapter {
     }
 
     public func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
-        let accounts = try await context.claudeSession.accounts()
+        let discovered = try await context.claudeSession.accounts()
+        let accounts = discovered.filter { !context.disabledAccountSourceIDs.contains($0.sourceID) }
         guard !accounts.isEmpty else {
             throw CollectionError(
                 kind: .externalSessionMissing,
@@ -38,7 +39,7 @@ public struct ClaudeAdapter: ProviderAdapter {
                 recoveryAction: .signInSourceApp
             )
         }
-        await memory.retain(sourceIDs: Set(accounts.map(\.sourceID)))
+        await memory.retain(sourceIDs: Set(discovered.map(\.sourceID)))
 
         var readings: [(account: ClaudeAccount, result: Result<ProviderAccountSnapshot, CollectionError>)] = []
         var seenTokens: Set<String> = []

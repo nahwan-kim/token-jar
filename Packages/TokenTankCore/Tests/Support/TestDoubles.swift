@@ -198,15 +198,22 @@ public actor RecordingDiagnostics: DiagnosticsSink {
 public struct CollectionContextFlags: Equatable, Sendable {
     public let isUserInitiated: Bool
     public let allowsClaudeRecovery: Bool
+    public let disabledAccountSourceIDs: Set<String>
 
-    public init(isUserInitiated: Bool, allowsClaudeRecovery: Bool) {
+    public init(
+        isUserInitiated: Bool,
+        allowsClaudeRecovery: Bool,
+        disabledAccountSourceIDs: Set<String> = []
+    ) {
         self.isUserInitiated = isUserInitiated
         self.allowsClaudeRecovery = allowsClaudeRecovery
+        self.disabledAccountSourceIDs = disabledAccountSourceIDs
     }
 
     public init(context: CollectionContext) {
         self.isUserInitiated = context.isUserInitiated
         self.allowsClaudeRecovery = context.allowsClaudeRecovery
+        self.disabledAccountSourceIDs = context.disabledAccountSourceIDs
     }
 }
 
@@ -320,7 +327,8 @@ public enum TestContextFactory {
         clock: any TokenTankClock = ManualClock(),
         diagnostics: any DiagnosticsSink = RecordingDiagnostics(),
         isUserInitiated: Bool = false,
-        allowsClaudeRecovery: Bool = false
+        allowsClaudeRecovery: Bool = false,
+        disabledAccountSourceIDs: Set<String> = []
     ) -> CollectionContext {
         CollectionContext(
             network: network,
@@ -334,7 +342,8 @@ public enum TestContextFactory {
             clock: clock,
             diagnostics: diagnostics,
             isUserInitiated: isUserInitiated,
-            allowsClaudeRecovery: allowsClaudeRecovery
+            allowsClaudeRecovery: allowsClaudeRecovery,
+            disabledAccountSourceIDs: disabledAccountSourceIDs
         )
     }
 

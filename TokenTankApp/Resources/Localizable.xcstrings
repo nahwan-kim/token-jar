@@ -449,6 +449,13 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "토큰 항아리는 값을 추정하거나 조정하지 않고 Provider마다 선택한 원본 하나를 표시합니다." } }
       }
     },
+    "settings.account.toggle_help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Turned-off accounts are hidden and no longer checked. At least one account stays on." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "끈 계정은 숨기고 사용량도 조회하지 않습니다. 계정 하나는 항상 켜져 있어야 합니다." } }
+      }
+    },
     "settings.summary" : {
       "extractionState" : "manual",
       "localizations" : {

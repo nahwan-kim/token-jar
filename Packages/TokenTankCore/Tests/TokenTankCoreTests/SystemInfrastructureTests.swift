@@ -1088,6 +1088,14 @@ struct SystemInfrastructureTests {
         #expect(secondaryObservation.contains("arg1=-c"))
         #expect(secondaryObservation.contains("arg2=cli_auth_credentials_store=\"file\""))
         #expect(secondaryObservation.contains("arg3=app-server"))
+
+        let secondaryMarker = directory
+            .appendingPathComponent(".codex-secondary")
+            .appendingPathComponent("observed-environment")
+        try FileManager.default.removeItem(at: secondaryMarker)
+        let remaining = try await reader.readAccounts(excluding: [CodexAccountSource.secondary.id])
+        #expect(remaining.map(\.sourceID) == [.primary])
+        #expect(!FileManager.default.fileExists(atPath: secondaryMarker.path))
     }
     @Test("Codex homes are discovered from ~/.codex, CODEX_HOME, and ~/.codex-*, deduplicated by account")
     func codexHomeDiscovery() async throws {

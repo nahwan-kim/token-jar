@@ -49,6 +49,16 @@ struct CodexAccountMenuValue: Equatable, Identifiable, Sendable {
 
     var id: String { sourceID }
 }
+/// One account row in settings; a disabled account is skipped by collection and display.
+struct AccountToggle: Equatable, Identifiable, Sendable {
+    let sourceID: String
+    let label: String
+    let isEnabled: Bool
+    /// False for the last enabled account: the provider toggle turns a provider off.
+    let canToggle: Bool
+
+    var id: String { sourceID }
+}
 enum LaunchAtLoginStatus: Equatable, Sendable {
     case enabled
     case notRegistered
@@ -205,7 +215,10 @@ enum CodexAccountPresentation {
 
 @MainActor
 final class AppModel: ObservableObject {
+    /// Collected states without disabled accounts; `rawStates` keeps what was collected.
     @Published private(set) var states: [ProviderID: CollectionState]
+    private var rawStates: [ProviderID: CollectionState]
+    private var accountFilterUpdate: Task<Void, Never>?
     @Published private(set) var preferences = UserPreferences()
     @Published var language: AppLanguage {
         didSet { languageDefaults.set(language.rawValue, forKey: "appLanguage") }
@@ -312,7 +325,11 @@ final class AppModel: ObservableObject {
         self.sourceDescriptors = Dictionary(
             uniqueKeysWithValues: defaultAdapters.map { ($0.id, $0.sourceDescriptor) }
         )
-        self.states = Dictionary(uniqueKeysWithValues: ProviderID.allCases.map { ($0, .neverLoaded) })
+        let initialStates = Dictionary(
+            uniqueKeysWithValues: ProviderID.allCases.map { ($0, CollectionState.neverLoaded) }
+        )
+        self.states = initialStates
+        self.rawStates = initialStates
 
         if let suppliedContext {
             self.credentialStore = suppliedCredentialStore ?? suppliedContext.credentials
@@ -399,6 +416,7 @@ final class AppModel: ObservableObject {
             let loadedPreferences = await preferencesStore.load()
             if Task.isCancelled { return }
             self?.preferences = loadedPreferences
+            await coordinator.setDisabledAccountSourceIDs(loadedPreferences.disabledAccountSourceIDs)
             let stream = await coordinator.stateStream()
             await coordinator.start()
             for await nextStates in stream {
@@ -453,6 +471,7 @@ final class AppModel: ObservableObject {
         credentialErrorCodes.removeAll(keepingCapacity: false)
         await coordinator.clearProcessLifetimeSnapshots()
         states = Dictionary(uniqueKeysWithValues: ProviderID.allCases.map { ($0, .neverLoaded) })
+        rawStates = states
         isRefreshing = false
         isClaudeRepairPending = false
         lastLoggedStateCodes.removeAll(keepingCapacity: false)
@@ -703,9 +722,10 @@ final class AppModel: ObservableObject {
     }
 
     private func apply(states nextStates: [ProviderID: CollectionState]) async {
-        states = nextStates.merging(
+        rawStates = nextStates.merging(
             Dictionary(uniqueKeysWithValues: ProviderID.allCases.map { ($0, .neverLoaded) })
         ) { current, _ in current }
+        applyAccountFilter()
         isRefreshing = states.values.contains {
             if case .refreshing = $0 { return true }
             return false
@@ -722,6 +742,76 @@ final class AppModel: ObservableObject {
                     providerID: providerID
                 )
             )
+        }
+    }
+
+    private func applyAccountFilter() {
+        let disabled = preferences.disabledAccountSourceIDs
+        states = rawStates.mapValues { $0.excludingAccounts(disabled) }
+    }
+
+    /// Account rows for providers that collect several sign-ins (Codex, Claude). Empty while
+    /// only one enabled account is known and none is off: turning that off is the provider
+    /// toggle's job. A disabled account is always listed so it can be turned back on.
+    func accountToggles(for providerID: ProviderID) -> [AccountToggle] {
+        guard providerID == .codex || providerID == .claude else { return [] }
+        let disabled = preferences.disabledAccounts.filter { $0.providerID == providerID }
+        let disabledIDs = Set(disabled.map(\.sourceID))
+        let collected = (rawStates[providerID]?.snapshot?.accounts ?? [])
+            .filter { !disabledIDs.contains($0.sourceID) }
+        let placeholders = disabled.map {
+            ProviderAccountSnapshot(sourceID: $0.sourceID, quotas: [], accountEmail: $0.accountEmail)
+        }
+        let accounts = CodexAccountPresentation.ordered(collected + placeholders)
+        guard accounts.count > 1 || !disabled.isEmpty else { return [] }
+        return accounts.map { account in
+            let isEnabled = !disabledIDs.contains(account.sourceID)
+            return AccountToggle(
+                sourceID: account.sourceID,
+                label: CodexAccountPresentation.identity(for: account, locale: locale),
+                isEnabled: isEnabled,
+                canToggle: !isEnabled || collected.count > 1
+            )
+        }
+    }
+
+    /// Turns an account on or off. Off hides it at once and stops collecting it; on collects
+    /// the provider again so the account returns without waiting for the schedule.
+    func setAccountEnabled(_ enabled: Bool, providerID: ProviderID, sourceID: String) {
+        guard
+            !isStopping,
+            let toggle = accountToggles(for: providerID).first(where: { $0.sourceID == sourceID }),
+            toggle.canToggle,
+            toggle.isEnabled != enabled
+        else { return }
+        var next = preferences
+        if enabled {
+            next.disabledAccounts.removeAll { $0.sourceID == sourceID }
+        } else {
+            next.disabledAccounts.append(DisabledAccount(
+                providerID: providerID,
+                sourceID: sourceID,
+                accountEmail: rawStates[providerID]?.snapshot?.account(for: sourceID)?.accountEmail
+            ))
+        }
+        preferences = next.normalized()
+        persistPreferences()
+        applyAccountFilter()
+
+        let sourceIDs = preferences.disabledAccountSourceIDs
+        let coordinator = coordinator
+        let previousUpdate = accountFilterUpdate
+        let update = Task { [coordinator] in
+            await previousUpdate?.value
+            await coordinator.setDisabledAccountSourceIDs(sourceIDs)
+        }
+        accountFilterUpdate = update
+        guard enabled, started else { return }
+        let operationID = UUID()
+        refreshOperations[operationID] = Task { [weak self, coordinator] in
+            await update.value
+            await coordinator.recollect(providerID)
+            self?.finishRefreshOperation(operationID)
         }
     }
 
@@ -1025,7 +1115,7 @@ final class AppModel: ObservableObject {
             meaning: .remaining,
             resetsAt: nil
         )
-        states = [
+        rawStates = [
             .codex: .fresh(codex),
             .claude: claudeState,
             .grok: .authenticationActionRequired(
@@ -1046,6 +1136,7 @@ final class AppModel: ObservableObject {
             ),
             .doubao: .fresh(doubao),
         ]
+        applyAccountFilter()
         preferences.providers = preferences.providers.map { preference in
             var selected = preference
             selected.representativeQuotaID = preference.providerID == .grok

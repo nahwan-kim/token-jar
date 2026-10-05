@@ -1469,6 +1469,34 @@ struct ProviderSettingsView: View {
                         }
                         .controlSize(.small)
 
+                        let accountToggles = model.accountToggles(for: preference.providerID)
+                        if !accountToggles.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(accountToggles) { account in
+                                    Toggle(
+                                        isOn: Binding(
+                                            get: { account.isEnabled },
+                                            set: {
+                                                model.setAccountEnabled(
+                                                    $0,
+                                                    providerID: preference.providerID,
+                                                    sourceID: account.sourceID
+                                                )
+                                            }
+                                        )
+                                    ) {
+                                        Text(verbatim: account.label)
+                                    }
+                                    .toggleStyle(.checkbox)
+                                    .disabled(!account.canToggle)
+                                    .accessibilityIdentifier("settings.account.\(account.sourceID)")
+                                }
+                            }
+                            .controlSize(.small)
+                            .padding(.leading, 22)
+                            .help(Text("settings.account.toggle_help"))
+                        }
+
                         if preference.providerID != .codex {
                             Picker(
                                 "settings.representative_quota",

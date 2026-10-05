@@ -855,6 +855,10 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
     }
 
     public func readAccounts() async throws -> [CodexAccountRead] {
+        try await readAccounts(excluding: [])
+    }
+
+    public func readAccounts(excluding sourceIDs: Set<String>) async throws -> [CodexAccountRead] {
         guard let executable = executableCandidates.first(where: {
             FileManager.default.isExecutableFile(atPath: $0.path)
         }) else {
@@ -868,6 +872,7 @@ public actor CodexAppServerUsageReader: CodexAccountUsageReader {
         if let accountSources {
             homes = homes.filter { accountSources.contains($0.source) }
         }
+        homes = homes.filter { !sourceIDs.contains($0.source.id) }
         guard !homes.isEmpty else {
             throw CollectionError(
                 kind: .sourceUnavailable,

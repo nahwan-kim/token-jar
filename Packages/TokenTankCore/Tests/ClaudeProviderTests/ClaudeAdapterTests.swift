@@ -1079,6 +1079,28 @@ struct ClaudeAdapterTests {
         #expect(await network.requests.count == 6)
     }
 
+    @Test("a disabled Claude account is neither signed in nor requested")
+    func disabledAccountIsSkipped() async throws {
+        let work = ClaudeAccount(sourceID: "claude.oauth.claude-work", email: "work@example.com")
+        let sessions = AccountClaudeSessions(accounts: [.default, work], sessions: [
+            ClaudeAccount.defaultSourceID: .success(session),
+        ])
+        let network = QueueNetworkClient(results: [
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+        ])
+        let snapshot = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
+            network: network,
+            claudeSession: sessions,
+            clock: ManualClock(now: now),
+            disabledAccountSourceIDs: [work.sourceID]
+        ))
+        #expect(snapshot.accounts.map(\.sourceID) == [ClaudeAccount.defaultSourceID])
+        #expect(!snapshot.quotas.isEmpty)
+        #expect(await network.requests.count == 3)
+    }
+
     @Test("one failing Claude account is isolated; all failing accounts fail the collection")
     func accountFailuresAreIsolated() async throws {
         let work = ClaudeAccount(sourceID: "claude.oauth.claude-work", email: "work@example.com")

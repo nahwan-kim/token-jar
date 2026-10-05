@@ -80,6 +80,73 @@ struct ModelsTests {
         }
     }
 
+    @Test("disabled accounts default empty, round trip, and normalize without duplicates")
+    func disabledAccountsPreference() throws {
+        let legacy = try JSONDecoder().decode(
+            UserPreferences.self,
+            from: Data(#"{"providers":[{"providerID":"codex","isVisible":true,"order":0}]}"#.utf8)
+        )
+        #expect(legacy.disabledAccounts.isEmpty)
+
+        let secondary = DisabledAccount(
+            providerID: .codex,
+            sourceID: CodexAccountSource.secondary.id,
+            accountEmail: "secondary@example.com"
+        )
+        let preferences = UserPreferences(disabledAccounts: [secondary, secondary])
+        let decoded = try JSONDecoder().decode(
+            UserPreferences.self,
+            from: JSONEncoder().encode(preferences)
+        )
+        #expect(decoded == preferences)
+        #expect(decoded.normalized().disabledAccounts == [secondary])
+        #expect(decoded.disabledAccountSourceIDs == [CodexAccountSource.secondary.id])
+    }
+
+    @Test("excluding accounts leaves a single account as the provider quotas")
+    func excludingAccounts() {
+        let source = ProviderSourceDescriptor(
+            id: "test.codex",
+            name: "Test",
+            kind: .officialCLI,
+            credentialOwnership: .externalProvider,
+            documentationURL: nil,
+            detail: "Test"
+        )
+        let quota = RawQuotaItem(
+            id: "codex.primary",
+            originalName: "Primary",
+            used: nil,
+            remaining: nil,
+            percentage: SourcePercentage(value: 10, rawText: "10", meaning: .used),
+            resetsAt: nil
+        )
+        let snapshot = ProviderSnapshot(
+            providerID: .codex,
+            source: source,
+            accounts: [
+                ProviderAccountSnapshot(sourceID: CodexAccountSource.primary.id, quotas: [quota]),
+                ProviderAccountSnapshot(
+                    sourceID: CodexAccountSource.secondary.id,
+                    quotas: [quota],
+                    accountEmail: "secondary@example.com"
+                ),
+            ],
+            refreshedAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+        #expect(snapshot.quotas.isEmpty)
+        #expect(snapshot.excludingAccounts([]) == snapshot)
+
+        let remaining = snapshot.excludingAccounts([CodexAccountSource.secondary.id])
+        #expect(remaining.accounts.map(\.sourceID) == [CodexAccountSource.primary.id])
+        #expect(remaining.quotas == [quota])
+        #expect(remaining.accountEmail == nil)
+        #expect(
+            CollectionState.fresh(snapshot).excludingAccounts([CodexAccountSource.secondary.id])
+                == .fresh(remaining)
+        )
+    }
+
     @Test("missing menu bar percent sign defaults true without changing provider preferences")
     func missingMenuBarPercentSignDefaults() throws {
         let data = Data(

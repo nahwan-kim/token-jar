@@ -705,6 +705,122 @@ final class AppModelTests: XCTestCase {
         await model.stop()
     }
 
+    func testCodexAccountsCanBeTurnedOffAndOnInSettings() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let primary = makeSnapshot(providerID: .codex, percentage: 26)
+        let secondary = makeSnapshot(providerID: .codex, percentage: 2)
+        let snapshot = ProviderSnapshot(
+            providerID: .codex,
+            source: primary.source,
+            accounts: [
+                ProviderAccountSnapshot(
+                    sourceID: CodexAccountSource.primary.id,
+                    quotas: primary.quotas,
+                    refreshedAt: now,
+                    accountEmail: "work@example.com"
+                ),
+                ProviderAccountSnapshot(
+                    sourceID: CodexAccountSource.secondary.id,
+                    quotas: secondary.quotas,
+                    refreshedAt: now,
+                    accountEmail: "personal@example.com"
+                ),
+            ],
+            refreshedAt: now
+        )
+        let disabledSecondary = DisabledAccount(
+            providerID: .codex,
+            sourceID: CodexAccountSource.secondary.id,
+            accountEmail: "personal@example.com"
+        )
+        let preferences = MemoryPreferencesStore(UserPreferences(disabledAccounts: [disabledSecondary]))
+        let adapter = TestAppAdapter(id: .codex, results: [.success(snapshot), .success(snapshot)])
+        let credentials = InMemoryCredentialStore()
+        let model = AppModel(
+            adapters: [adapter],
+            credentialStore: credentials,
+            preferencesStore: preferences,
+            context: makeContext(credentials: credentials)
+        )
+
+        model.ensureStarted()
+        let becameFresh = await eventually {
+            if case .fresh = model.states[.codex] { return true }
+            return false
+        }
+        XCTAssertTrue(becameFresh)
+        let firstDisabled = await adapter.disabledAccountValues
+        XCTAssertEqual(firstDisabled, [[CodexAccountSource.secondary.id]])
+        let codex = model.preference(for: .codex)
+        XCTAssertEqual(model.codexMenuValues(for: codex).map(\.sourceID), [CodexAccountSource.primary.id])
+        XCTAssertEqual(
+            model.accountToggles(for: .codex),
+            [
+                AccountToggle(
+                    sourceID: CodexAccountSource.primary.id,
+                    label: "work@example.com",
+                    isEnabled: true,
+                    canToggle: false
+                ),
+                AccountToggle(
+                    sourceID: CodexAccountSource.secondary.id,
+                    label: "personal@example.com",
+                    isEnabled: false,
+                    canToggle: true
+                ),
+            ]
+        )
+        XCTAssertTrue(model.accountToggles(for: .grok).isEmpty)
+
+        model.setAccountEnabled(false, providerID: .codex, sourceID: CodexAccountSource.primary.id)
+        XCTAssertEqual(model.preferences.disabledAccounts, [disabledSecondary])
+
+        model.setAccountEnabled(true, providerID: .codex, sourceID: CodexAccountSource.secondary.id)
+        XCTAssertTrue(model.preferences.disabledAccounts.isEmpty)
+        XCTAssertEqual(model.codexMenuValues(for: codex).count, 2)
+        let refreshedWithBoth = await eventually { await adapter.fetchCount == 2 }
+        XCTAssertTrue(refreshedWithBoth)
+        let disabledValues = await adapter.disabledAccountValues
+        XCTAssertEqual(disabledValues.last, [])
+
+        model.setAccountEnabled(false, providerID: .codex, sourceID: CodexAccountSource.secondary.id)
+        XCTAssertEqual(model.codexMenuValues(for: codex).map(\.sourceID), [CodexAccountSource.primary.id])
+        await model.stop()
+        let saved = await preferences.load()
+        XCTAssertEqual(saved.disabledAccounts, [disabledSecondary])
+    }
+
+    func testDisabledAccountStaysListedWithoutCollectedAccounts() async throws {
+        let work = DisabledAccount(
+            providerID: .claude,
+            sourceID: "claude.oauth.claude-work",
+            accountEmail: "work@example.com"
+        )
+        let preferences = MemoryPreferencesStore(UserPreferences(disabledAccounts: [work]))
+        let model = AppModel(
+            adapters: [],
+            credentialStore: InMemoryCredentialStore(),
+            preferencesStore: preferences,
+            context: makeContext(credentials: InMemoryCredentialStore())
+        )
+        model.ensureStarted()
+        let loaded = await eventually { model.preferences.disabledAccounts == [work] }
+        XCTAssertTrue(loaded)
+
+        XCTAssertEqual(model.accountToggles(for: .claude), [
+            AccountToggle(
+                sourceID: work.sourceID,
+                label: "work@example.com",
+                isEnabled: false,
+                canToggle: true
+            ),
+        ])
+        model.setAccountEnabled(true, providerID: .claude, sourceID: work.sourceID)
+        XCTAssertTrue(model.preferences.disabledAccounts.isEmpty)
+        XCTAssertTrue(model.accountToggles(for: .claude).isEmpty)
+        await model.stop()
+    }
+
     func testCodexMenuDistinguishesMissingAndStaleAccountValues() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let primarySnapshot = makeSnapshot(providerID: .codex, percentage: 10)
@@ -1693,9 +1809,13 @@ final class AppModelTests: XCTestCase {
 }
 
 private actor MemoryPreferencesStore: PreferencesStore {
-    private var value = UserPreferences()
+    private var value: UserPreferences
     private(set) var loadCount = 0
     private(set) var saveCount = 0
+
+    init(_ value: UserPreferences = UserPreferences()) {
+        self.value = value
+    }
 
     func load() -> UserPreferences {
         loadCount += 1
@@ -1764,6 +1884,7 @@ private actor TestAppAdapter: ProviderAdapter {
     private(set) var fetchCount = 0
     private(set) var userInitiatedValues: [Bool] = []
     private(set) var claudeRecoveryValues: [Bool] = []
+    private(set) var disabledAccountValues: [Set<String>] = []
 
     init(id: ProviderID, results: [Result<ProviderSnapshot, CollectionError>]) {
         let descriptor = ProviderSourceDescriptor(
@@ -1789,6 +1910,7 @@ private actor TestAppAdapter: ProviderAdapter {
         fetchCount += 1
         userInitiatedValues.append(context.isUserInitiated)
         claudeRecoveryValues.append(context.allowsClaudeRecovery)
+        disabledAccountValues.append(context.disabledAccountSourceIDs)
         guard !results.isEmpty else {
             throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "test.no-result")
         }

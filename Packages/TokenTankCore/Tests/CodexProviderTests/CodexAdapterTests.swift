@@ -170,6 +170,34 @@ struct CodexAdapterTests {
         #expect(snapshot.quotas.first?.percentage.value == 12)
         #expect(snapshot.accountEmail == "codex@example.com")
     }
+    @Test("disabled Codex accounts are left out of the snapshot")
+    func disabledAccountsAreSkipped() async throws {
+        let reader = MemoryCodexAccountUsageReader(
+            results: [
+                .success([
+                    CodexAccountRead.success(
+                        sourceID: .primary,
+                        data: Self.payload(email: "primary@example.com", usedPercent: 11)
+                    ),
+                    CodexAccountRead.success(
+                        sourceID: .secondary,
+                        data: Self.payload(email: "secondary@example.com", usedPercent: 77)
+                    ),
+                ]),
+            ]
+        )
+
+        let snapshot = try await CodexAdapter().fetchSnapshot(
+            context: TestContextFactory.make(
+                codexAccount: reader,
+                disabledAccountSourceIDs: [CodexAccountSource.secondary.id]
+            )
+        )
+
+        #expect(snapshot.accounts.map(\.sourceID) == [CodexAccountSource.primary.id])
+        #expect(snapshot.quotas.first?.percentage.value == 11)
+    }
+
     @Test("keeps identical raw quota IDs separate by account source")
     func identicalQuotaIDsStaySeparate() async throws {
         let reader = MemoryCodexAccountUsageReader(

@@ -75,6 +75,48 @@ struct RuntimeTests {
         #expect(await sessions.interactions == [false, true, false, true, false, true, false, true, false, true, true, false, true])
     }
 
+    @Test("disabled accounts reach every later collection context")
+    func disabledAccountsReachCollections() async {
+        let snapshot = TestContextFactory.snapshot(providerID: .codex)
+        let adapter = QueueProviderAdapter(id: .codex, results: [.success(snapshot), .success(snapshot)])
+        let coordinator = RefreshCoordinator(adapters: [adapter], context: TestContextFactory.make())
+
+        await coordinator.setDisabledAccountSourceIDs([CodexAccountSource.secondary.id])
+        await coordinator.refresh(.codex)
+        await coordinator.setDisabledAccountSourceIDs([])
+        await coordinator.refresh(.codex)
+
+        #expect(await adapter.contexts.map(\.disabledAccountSourceIDs) == [
+            [CodexAccountSource.secondary.id],
+            [],
+        ])
+    }
+
+    @Test("recollect waits for a running collection and collects again with the new account set")
+    func recollectAfterRunningCollection() async {
+        let adapter = GatedProviderAdapter(id: .codex)
+        let coordinator = RefreshCoordinator(adapters: [adapter], context: TestContextFactory.make())
+        let snapshot = TestContextFactory.snapshot(providerID: .codex)
+
+        await coordinator.setDisabledAccountSourceIDs([CodexAccountSource.secondary.id])
+        let running = Task { await coordinator.refresh(.codex) }
+        #expect(await eventually { await adapter.contexts.count == 1 })
+        await coordinator.setDisabledAccountSourceIDs([])
+        let recollect = Task { await coordinator.recollect(.codex) }
+        await adapter.completeNext(with: .success(snapshot))
+        await running.value
+
+        #expect(await eventually { await adapter.contexts.count == 2 })
+        await adapter.completeNext(with: .success(snapshot))
+        await recollect.value
+
+        #expect(await adapter.contexts.map(\.disabledAccountSourceIDs) == [
+            [CodexAccountSource.secondary.id],
+            [],
+        ])
+        #expect(await adapter.maximumConcurrentFetches == 1)
+    }
+
     @Test("transient failure retains the process-lifetime last success as stale")
     func staleRetainsLastSuccess() async {
         let snapshot = TestContextFactory.snapshot(providerID: .codex)

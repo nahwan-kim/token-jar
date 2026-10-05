@@ -344,6 +344,18 @@ public struct ProviderSnapshot: Codable, Equatable, Sendable {
         )
     }
 
+    /// The snapshot without the given accounts; a single remaining account becomes the
+    /// provider-level quotas, as if it had been collected alone.
+    public func excludingAccounts(_ sourceIDs: Set<String>) -> ProviderSnapshot {
+        guard accounts.contains(where: { sourceIDs.contains($0.sourceID) }) else { return self }
+        return ProviderSnapshot(
+            providerID: providerID,
+            source: source,
+            accounts: accounts.filter { !sourceIDs.contains($0.sourceID) },
+            refreshedAt: refreshedAt
+        )
+    }
+
     public static func validatedAccountEmail(_ value: String?) -> String? {
         guard let value else { return nil }
         let email = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -492,6 +504,22 @@ public enum CollectionState: Equatable, Sendable {
         if case .stale = self { return true }
         return false
     }
+
+    public func excludingAccounts(_ sourceIDs: Set<String>) -> CollectionState {
+        guard !sourceIDs.isEmpty else { return self }
+        switch self {
+        case .neverLoaded:
+            return self
+        case let .refreshing(previous):
+            return .refreshing(previous: previous?.excludingAccounts(sourceIDs))
+        case let .fresh(snapshot):
+            return .fresh(snapshot.excludingAccounts(sourceIDs))
+        case let .stale(snapshot, failure, failedAt):
+            return .stale(snapshot: snapshot?.excludingAccounts(sourceIDs), failure: failure, failedAt: failedAt)
+        case let .authenticationActionRequired(snapshot, failure):
+            return .authenticationActionRequired(snapshot: snapshot?.excludingAccounts(sourceIDs), failure: failure)
+        }
+    }
 }
 
 public enum ProviderAvailability: Equatable, Sendable {
@@ -541,21 +569,43 @@ public struct ProviderPreference: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+/// An account the user turned off. The email is remembered because a disabled account is
+/// no longer collected, so the settings list can still name it.
+public struct DisabledAccount: Codable, Equatable, Sendable {
+    public let providerID: ProviderID
+    public let sourceID: String
+    public let accountEmail: String?
+
+    public init(providerID: ProviderID, sourceID: String, accountEmail: String? = nil) {
+        self.providerID = providerID
+        self.sourceID = sourceID
+        self.accountEmail = ProviderSnapshot.validatedAccountEmail(accountEmail)
+    }
+}
+
 public struct UserPreferences: Codable, Equatable, Sendable {
     public var providers: [ProviderPreference]
     public var showsMenuBarPercentSign: Bool
+    public var disabledAccounts: [DisabledAccount]
 
     public init(
         providers: [ProviderPreference] = UserPreferences.defaults,
-        showsMenuBarPercentSign: Bool = true
+        showsMenuBarPercentSign: Bool = true,
+        disabledAccounts: [DisabledAccount] = []
     ) {
         self.providers = providers
         self.showsMenuBarPercentSign = showsMenuBarPercentSign
+        self.disabledAccounts = disabledAccounts
     }
 
     private enum CodingKeys: String, CodingKey {
         case providers
         case showsMenuBarPercentSign
+        case disabledAccounts
+    }
+
+    public var disabledAccountSourceIDs: Set<String> {
+        Set(disabledAccounts.map(\.sourceID))
     }
 
     public init(from decoder: Decoder) throws {
@@ -565,7 +615,11 @@ public struct UserPreferences: Codable, Equatable, Sendable {
             showsMenuBarPercentSign: try container.decodeIfPresent(
                 Bool.self,
                 forKey: .showsMenuBarPercentSign
-            ) ?? true
+            ) ?? true,
+            disabledAccounts: try container.decodeIfPresent(
+                [DisabledAccount].self,
+                forKey: .disabledAccounts
+            ) ?? []
         )
     }
 
@@ -590,9 +644,11 @@ public struct UserPreferences: Codable, Equatable, Sendable {
                 )
             )
         }
+        var seenAccounts = Set<String>()
         return UserPreferences(
             providers: normalizedProviders,
-            showsMenuBarPercentSign: showsMenuBarPercentSign
+            showsMenuBarPercentSign: showsMenuBarPercentSign,
+            disabledAccounts: disabledAccounts.filter { seenAccounts.insert($0.sourceID).inserted }
         )
     }
 

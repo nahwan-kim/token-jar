@@ -96,6 +96,7 @@ public actor RefreshCoordinator {
     private var activityTask: Task<Void, Never>?
     private var triggeredRuns: [UUID: Task<Void, Never>] = [:]
     private var continuations: [UUID: AsyncStream<[ProviderID: CollectionState]>.Continuation] = [:]
+    private var disabledAccountSourceIDs: Set<String> = []
 
     private enum CollectionOperation: Equatable {
         case ordinary
@@ -189,6 +190,23 @@ public actor RefreshCoordinator {
 
     public func currentStates() -> [ProviderID: CollectionState] {
         states
+    }
+
+    /// Accounts excluded from every later collection; a collection already running keeps its set.
+    public func setDisabledAccountSourceIDs(_ sourceIDs: Set<String>) {
+        disabledAccountSourceIDs = sourceIDs
+    }
+
+    /// Collects the provider with the current account set. A collection already running
+    /// copied the previous set, so this waits for it and then collects again.
+    public func recollect(_ providerID: ProviderID) async {
+        guard acceptingRefreshes, adapters[providerID] != nil else { return }
+        while activeOperations[providerID] != nil {
+            await waitForOperation(providerID)
+            guard !Task.isCancelled, acceptingRefreshes else { return }
+        }
+        activeOperations[providerID] = .ordinary
+        await collectReserved(providerID, operation: .ordinary, isUserInitiated: false)
     }
 
     public func state(for providerID: ProviderID) -> CollectionState {
@@ -552,7 +570,8 @@ public actor RefreshCoordinator {
             to: providerID,
             correlationID: correlationID,
             isUserInitiated: isUserInitiated,
-            allowsClaudeRecovery: allowsClaudeRecovery
+            allowsClaudeRecovery: allowsClaudeRecovery,
+            disabledAccountSourceIDs: disabledAccountSourceIDs
         )
         let task = Task<ProviderSnapshot, Error> {
             switch await adapter.probeAvailability(context: providerContext) {
@@ -764,7 +783,8 @@ extension CollectionContext {
         to providerID: ProviderID,
         correlationID: UUID = UUID(),
         isUserInitiated: Bool = false,
-        allowsClaudeRecovery: Bool = false
+        allowsClaudeRecovery: Bool = false,
+        disabledAccountSourceIDs: Set<String> = []
     ) -> CollectionContext {
         CollectionContext(
             network: ProviderScopedNetworkClient(providerID: providerID, base: network),
@@ -783,7 +803,8 @@ extension CollectionContext {
             diagnostics: NoDiagnostics(),
             correlationID: correlationID,
             isUserInitiated: isUserInitiated,
-            allowsClaudeRecovery: allowsClaudeRecovery
+            allowsClaudeRecovery: allowsClaudeRecovery,
+            disabledAccountSourceIDs: disabledAccountSourceIDs
         )
     }
 }
@@ -985,6 +1006,16 @@ private struct ProviderScopedCodexAccountReader: CodexAccountUsageReader {
             )
         }
         return try await base.readAccounts()
+    }
+
+    func readAccounts(excluding sourceIDs: Set<String>) async throws -> [CodexAccountRead] {
+        guard providerID == .codex else {
+            throw CollectionError(
+                kind: .sourceUnavailable,
+                diagnosticCode: "capability.codex-account.denied"
+            )
+        }
+        return try await base.readAccounts(excluding: sourceIDs)
     }
 }
 private struct ProviderScopedDoubaoPlanReader: DoubaoPlanUsageReader {
