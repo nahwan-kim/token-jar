@@ -895,7 +895,10 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.preferences.removedAccountSourceIDs.isEmpty)
         model.removeAccount(providerID: .codex, sourceID: "codex.home.work")
         XCTAssertEqual(model.preferences.removedAccountSourceIDs, ["codex.home.work"])
-        XCTAssertTrue(model.accountToggles(for: .codex).isEmpty)
+        let remaining = model.accountToggles(for: .codex)
+        XCTAssertEqual(remaining.map(\.sourceID), [CodexAccountSource.primary.id])
+        XCTAssertEqual(remaining.map(\.canToggle), [false])
+        XCTAssertEqual(remaining.map(\.canRemove), [false])
         XCTAssertEqual(model.codexAccounts().map(\.sourceID), [CodexAccountSource.primary.id])
 
         let invalidName = await model.addAccount(providerID: .codex, name: "Work!")
@@ -925,7 +928,18 @@ final class AppModelTests: XCTestCase {
         signIn.finishSignIn()
         let signedIn = await eventually { await adapter.fetchCount == 3 }
         XCTAssertTrue(signedIn)
-        XCTAssertTrue(model.pendingSignIns.isEmpty)
+        let flagged = await eventually {
+            model.pendingSignIns.isEmpty && model.duplicateSignIns.map(\.sourceID) == ["codex.home.new"]
+        }
+        XCTAssertTrue(flagged, "a sign-in the collection did not list is the same account as a listed one")
+
+        signIn.setState(.signedIn)
+        let again = await model.addAccount(providerID: .codex, name: "new")
+        XCTAssertEqual(again, .signInStarted, "an unlisted signed-in folder can be signed in again")
+        XCTAssertEqual(signIn.startedSourceIDs, ["codex.home.new", "codex.home.new"])
+        XCTAssertTrue(model.duplicateSignIns.isEmpty)
+        model.cancelSignIn(sourceID: "codex.home.new")
+        signIn.setState(.missing)
 
         let later = await model.addAccount(providerID: .codex, name: "later")
         XCTAssertEqual(later, .signInStarted)
@@ -1978,7 +1992,7 @@ private final class TestAccountSignInService: AccountSignInServicing, @unchecked
         }
     }
 
-    func waitForSignIn(_ directory: AccountDirectory) async -> Bool {
+    func waitForSignIn(_ directory: AccountDirectory, since: Date) async -> Bool {
         for await signedIn in signIns.stream { return signedIn }
         return false
     }

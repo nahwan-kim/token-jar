@@ -491,6 +491,13 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "터미널에서 로그인 대기 중 (%@)" } }
       }
     },
+    "settings.account.add.duplicate %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "%@ signed in to an account that is already listed, so it is shown once. To use another account, sign out in the browser first, then add the same name again." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "%@는 이미 표시 중인 계정으로 로그인되어 한 번만 표시합니다. 다른 계정을 쓰려면 브라우저에서 먼저 로그아웃한 뒤 같은 이름으로 다시 추가하세요." } }
+      }
+    },
     "settings.account.add.title %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -524,6 +531,13 @@
       "localizations" : {
         "en" : { "stringUnit" : { "state" : "translated", "value" : "Cancel" } },
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "취소" } }
+      }
+    },
+    "action.dismiss" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Dismiss" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "닫기" } }
       }
     },
     "settings.account.add.sign_in" : {

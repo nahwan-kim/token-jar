@@ -141,8 +141,10 @@ enum AddAccountResult: Equatable, Sendable {
 protocol AccountSignInServicing: Sendable {
     func folderState(of directory: AccountDirectory) -> AccountFolderState
     func startSignIn(_ directory: AccountDirectory, locale: Locale) async throws
-    /// `true` once the folder holds a sign-in; `false` on cancellation or after giving up.
-    func waitForSignIn(_ directory: AccountDirectory) async -> Bool
+    /// `true` once the folder holds a sign-in written at or after `since`, so signing an
+    /// already signed-in folder in again waits for the new sign-in; `false` on cancellation
+    /// or after giving up.
+    func waitForSignIn(_ directory: AccountDirectory, since: Date) async -> Bool
 }
 
 /// Runs `codex login` or `claude auth login` for the folder in a new Terminal window.
@@ -196,7 +198,7 @@ struct TerminalAccountSignInService: AccountSignInServicing {
         }
     }
 
-    func waitForSignIn(_ directory: AccountDirectory) async -> Bool {
+    func waitForSignIn(_ directory: AccountDirectory, since: Date) async -> Bool {
         let deadline = Date().addingTimeInterval(Self.signInTimeout)
         while Date() < deadline {
             do {
@@ -204,7 +206,9 @@ struct TerminalAccountSignInService: AccountSignInServicing {
             } catch {
                 return false
             }
-            if isSignedIn(directory) { return true }
+            if isSignedIn(directory), let written = signInWrittenAt(directory), written >= since {
+                return true
+            }
         }
         return false
     }
@@ -229,6 +233,19 @@ struct TerminalAccountSignInService: AccountSignInServicing {
         case .grok, .cursor, .doubao:
             return false
         }
+    }
+
+    /// When the newest sign-in file of the folder was last written.
+    private func signInWrittenAt(_ directory: AccountDirectory) -> Date? {
+        let path = path(of: directory)
+        let names = switch directory.providerID {
+        case .codex: ["auth.json"]
+        default: [".credentials.json", ".claude.json"]
+        }
+        return names.compactMap {
+            try? URL(fileURLWithPath: "\(path)/\($0)").resourceValues(forKeys: [.contentModificationDateKey])
+                .contentModificationDate
+        }.max()
     }
 
     private func signInScript(for directory: AccountDirectory, locale: Locale) -> String {
@@ -496,6 +513,9 @@ final class AppModel: ObservableObject {
     private let accountSignInService: any AccountSignInServicing
     /// Folders whose official CLI sign-in is open in Terminal, oldest first.
     @Published private(set) var pendingSignIns: [AccountDirectory] = []
+    /// Folders whose finished sign-in is not listed because it is the same account as one
+    /// already shown; discovery lists each account once.
+    @Published private(set) var duplicateSignIns: [AccountDirectory] = []
     private var signInWatches: [String: Task<Void, Never>] = [:]
 
     init(
@@ -688,6 +708,7 @@ final class AppModel: ObservableObject {
         let pendingSignInWatches = Array(signInWatches.values)
         signInWatches.removeAll(keepingCapacity: false)
         pendingSignIns.removeAll(keepingCapacity: false)
+        duplicateSignIns.removeAll(keepingCapacity: false)
         for watch in pendingSignInWatches {
             watch.cancel()
         }
@@ -994,10 +1015,11 @@ final class AppModel: ObservableObject {
         states = rawStates.mapValues { $0.excludingAccounts(excluded) }
     }
 
-    /// Account rows for providers that collect several sign-ins (Codex, Claude). Empty while
-    /// only one enabled account is known and none is off: turning that off is the provider
-    /// toggle's job. A disabled account is always listed so it can be turned back on; a
-    /// removed account is never listed.
+    /// Account rows for providers that collect several sign-ins (Codex, Claude): every known
+    /// account, so removing one leaves the others listed. The last enabled account cannot be
+    /// turned off or removed; turning the provider off is the provider toggle's job. A
+    /// disabled account is always listed so it can be turned back on; a removed account is
+    /// never listed.
     func accountToggles(for providerID: ProviderID) -> [AccountToggle] {
         guard AccountDirectory.providers.contains(providerID) else { return [] }
         let removed = preferences.removedAccountSourceIDs
@@ -1009,7 +1031,6 @@ final class AppModel: ObservableObject {
             ProviderAccountSnapshot(sourceID: $0.sourceID, quotas: [], accountEmail: $0.accountEmail)
         }
         let accounts = CodexAccountPresentation.ordered(collected + placeholders)
-        guard accounts.count > 1 || !disabled.isEmpty else { return [] }
         return accounts.map { account in
             let isEnabled = !disabledIDs.contains(account.sourceID)
             let canToggle = !isEnabled || collected.count > 1
@@ -1060,6 +1081,7 @@ final class AppModel: ObservableObject {
         else { return }
         signInWatches.removeValue(forKey: sourceID)?.cancel()
         pendingSignIns.removeAll { $0.sourceID == sourceID }
+        duplicateSignIns.removeAll { $0.sourceID == sourceID }
         var next = preferences
         next.disabledAccounts.removeAll { $0.sourceID == sourceID }
         next.removedAccountSourceIDs.insert(sourceID)
@@ -1070,30 +1092,40 @@ final class AppModel: ObservableObject {
     }
 
     /// Adds `~/.codex-<name>` or `~/.claude-<name>`. A removed account that is still signed in
-    /// is listed again; a missing or empty folder gets the official CLI sign-in in Terminal,
-    /// and the provider is collected again as soon as that sign-in lands.
+    /// is listed again. A missing or empty folder, or a signed-in folder that is not listed
+    /// because it duplicated another account, gets the official CLI sign-in in Terminal; the
+    /// provider is collected again as soon as that sign-in lands.
     func addAccount(providerID: ProviderID, name: String) async -> AddAccountResult {
         guard !isStopping, let directory = AccountDirectory(providerID: providerID, name: name) else {
             return .invalidName
         }
         switch accountSignInService.folderState(of: directory) {
-        case .signedIn:
-            guard preferences.removedAccountSourceIDs.contains(directory.sourceID) else { return .alreadyAdded }
+        case .signedIn where preferences.removedAccountSourceIDs.contains(directory.sourceID):
+            duplicateSignIns.removeAll { $0.sourceID == directory.sourceID }
             restoreRemovedAccount(directory, recollect: true)
             return .restored
+        case .signedIn where isListed(directory):
+            return .alreadyAdded
         case .inUse:
             return .folderInUse
-        case .missing, .empty:
+        case .signedIn, .missing, .empty:
+            let signInStart = Date()
             do {
                 try await accountSignInService.startSignIn(directory, locale: locale)
             } catch {
                 return .signInFailed
             }
             guard !isStopping else { return .signInFailed }
+            duplicateSignIns.removeAll { $0.sourceID == directory.sourceID }
             restoreRemovedAccount(directory, recollect: false)
-            watchSignIn(directory)
+            watchSignIn(directory, since: signInStart)
             return .signInStarted
         }
+    }
+
+    private func isListed(_ directory: AccountDirectory) -> Bool {
+        rawStates[directory.providerID]?.snapshot?.account(for: directory.sourceID) != nil
+            || preferences.disabledAccounts.contains { $0.sourceID == directory.sourceID }
     }
 
     private func restoreRemovedAccount(_ directory: AccountDirectory, recollect: Bool) {
@@ -1112,23 +1144,41 @@ final class AppModel: ObservableObject {
         pendingSignIns.removeAll { $0.sourceID == sourceID }
     }
 
-    private func watchSignIn(_ directory: AccountDirectory) {
+    func dismissDuplicateSignIn(sourceID: String) {
+        duplicateSignIns.removeAll { $0.sourceID == sourceID }
+    }
+
+    /// Waits for the Terminal sign-in, collects the provider, and flags the folder when that
+    /// collection succeeded without it: discovery shows an account signed in twice only once.
+    private func watchSignIn(_ directory: AccountDirectory, since started: Date) {
         signInWatches.removeValue(forKey: directory.sourceID)?.cancel()
         pendingSignIns.removeAll { $0.sourceID == directory.sourceID }
         pendingSignIns.append(directory)
         let service = accountSignInService
-        signInWatches[directory.sourceID] = Task { [weak self, service] in
-            let signedIn = await service.waitForSignIn(directory)
+        let coordinator = coordinator
+        signInWatches[directory.sourceID] = Task { [weak self, service, coordinator] in
+            let signedIn = await service.waitForSignIn(directory, since: started)
             guard !Task.isCancelled, let self else { return }
+            if signedIn {
+                await self.updateCollectionFilters(recollect: directory.providerID)?.value
+                guard !Task.isCancelled else { return }
+                let state = await coordinator.state(for: directory.providerID)
+                guard !Task.isCancelled else { return }
+                if case .fresh(let snapshot) = state, snapshot.account(for: directory.sourceID) == nil {
+                    self.duplicateSignIns.removeAll { $0.sourceID == directory.sourceID }
+                    self.duplicateSignIns.append(directory)
+                }
+            }
             self.signInWatches.removeValue(forKey: directory.sourceID)
             self.pendingSignIns.removeAll { $0.sourceID == directory.sourceID }
-            if signedIn { self.updateCollectionFilters(recollect: directory.providerID) }
         }
     }
 
     /// Hands hidden providers and excluded accounts to the coordinator in call order, then
     /// collects `providerID` again so a provider or account turned back on shows at once.
-    private func updateCollectionFilters(recollect providerID: ProviderID? = nil) {
+    /// Returns that collection, if one was started.
+    @discardableResult
+    private func updateCollectionFilters(recollect providerID: ProviderID? = nil) -> Task<Void, Never>? {
         let excludedAccounts = preferences.excludedAccountSourceIDs
         let hiddenProviders = preferences.hiddenProviderIDs
         let coordinator = coordinator
@@ -1139,13 +1189,15 @@ final class AppModel: ObservableObject {
             await coordinator.setDisabledProviders(hiddenProviders)
         }
         collectionFilterUpdate = update
-        guard let providerID, started else { return }
+        guard let providerID, started else { return nil }
         let operationID = UUID()
-        refreshOperations[operationID] = Task { [weak self, coordinator] in
+        let collection = Task { [weak self, coordinator] in
             await update.value
             await coordinator.recollect(providerID)
             self?.finishRefreshOperation(operationID)
         }
+        refreshOperations[operationID] = collection
+        return collection
     }
 
     private func diagnosticStateCode(_ state: CollectionState) -> String {

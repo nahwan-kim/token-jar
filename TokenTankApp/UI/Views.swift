@@ -1570,6 +1570,24 @@ struct ProviderSettingsView: View {
                                     .accessibilityElement(children: .contain)
                                     .accessibilityIdentifier("settings.account.pending.\(directory.sourceID)")
                                 }
+                                ForEach(model.duplicateSignIns.filter { $0.providerID == preference.providerID }, id: \.sourceID) { directory in
+                                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                        Image(systemName: "exclamationmark.triangle")
+                                            .foregroundStyle(.orange)
+                                        Text("settings.account.add.duplicate \("~/\(directory.directoryName)")")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                        Button("action.dismiss") {
+                                            model.dismissDuplicateSignIn(sourceID: directory.sourceID)
+                                        }
+                                        .buttonStyle(.link)
+                                        .font(.caption)
+                                        .accessibilityIdentifier("settings.account.duplicate.dismiss.\(directory.sourceID)")
+                                    }
+                                    .accessibilityElement(children: .contain)
+                                    .accessibilityIdentifier("settings.account.duplicate.\(directory.sourceID)")
+                                }
                                 Button("settings.account.add") {
                                     addingAccountProvider = preference.providerID
                                 }
