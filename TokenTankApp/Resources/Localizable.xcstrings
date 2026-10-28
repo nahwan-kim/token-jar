@@ -456,11 +456,151 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "끈 계정은 숨기고 사용량도 조회하지 않습니다. 계정 하나는 항상 켜져 있어야 합니다." } }
       }
     },
+    "settings.account.remove" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Remove Account" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "계정 삭제" } }
+      }
+    },
+    "settings.account.remove.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Remove this account from Token Jar?" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "이 계정을 토큰 항아리에서 삭제할까요?" } }
+      }
+    },
+    "settings.account.remove.message %@ %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "%1$@ is no longer listed or checked. Its sign-in in %2$@ stays untouched; add the same name again to list it again." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "%1$@ 계정을 목록에서 빼고 더 이상 조회하지 않습니다. %2$@의 로그인은 그대로 남으며, 같은 이름으로 계정을 추가하면 다시 표시됩니다." } }
+      }
+    },
+    "settings.account.add" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Add Account…" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "계정 추가…" } }
+      }
+    },
+    "settings.account.add.pending %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Waiting for sign-in in Terminal (%@)" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "터미널에서 로그인 대기 중 (%@)" } }
+      }
+    },
+    "settings.account.add.title %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Add %@ Account" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "%@ 계정 추가" } }
+      }
+    },
+    "settings.account.add.explanation.codex" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Token Jar opens `codex login` in Terminal for a new ~/.codex-<name> folder. The account appears here once you finish signing in. Token Jar does not handle your password or tokens." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "새 ~/.codex-<이름> 폴더로 터미널에서 `codex login`을 엽니다. 로그인을 마치면 계정이 여기에 나타납니다. 토큰 항아리는 비밀번호나 토큰을 다루지 않습니다." } }
+      }
+    },
+    "settings.account.add.explanation.claude" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Token Jar opens `claude auth login` in Terminal for a new ~/.claude-<name> folder. The account appears here once you finish signing in. Token Jar does not handle your password or tokens." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "새 ~/.claude-<이름> 폴더로 터미널에서 `claude auth login`을 엽니다. 로그인을 마치면 계정이 여기에 나타납니다. 토큰 항아리는 비밀번호나 토큰을 다루지 않습니다." } }
+      }
+    },
+    "settings.account.add.name" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Name (e.g. work)" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "이름 (예: work)" } }
+      }
+    },
+    "action.cancel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Cancel" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "취소" } }
+      }
+    },
+    "settings.account.add.sign_in" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign In in Terminal" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "터미널에서 로그인" } }
+      }
+    },
+    "settings.account.add.error.invalid_name" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Use lowercase letters, digits, - and _ only." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "영문 소문자, 숫자, -, _만 사용할 수 있습니다." } }
+      }
+    },
+    "settings.account.add.error.already_added" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "This folder already holds a listed sign-in." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "이 폴더의 로그인은 이미 목록에 있습니다." } }
+      }
+    },
+    "settings.account.add.error.folder_in_use" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "This folder already holds other files. Choose another name." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "이 폴더에 다른 파일이 있습니다. 다른 이름을 고르세요." } }
+      }
+    },
+    "settings.account.add.error.sign_in_failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Could not open the sign-in in Terminal." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "터미널에서 로그인을 열 수 없습니다." } }
+      }
+    },
+    "settings.account.add.terminal_title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Token Jar: %1$@ sign-in for %2$@" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "토큰 항아리: %2$@ 폴더의 %1$@ 로그인" } }
+      }
+    },
+    "settings.account.add.terminal_done" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Signed in. Token Jar will show the account shortly; you can close this window." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "로그인했습니다. 곧 토큰 항아리에 계정이 나타납니다. 이 창은 닫아도 됩니다." } }
+      }
+    },
+    "settings.account.add.terminal_failed" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sign-in did not finish. Try again from Token Jar Settings." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "로그인이 끝나지 않았습니다. 토큰 항아리 설정에서 다시 시도하세요." } }
+      }
+    },
+    "settings.summary.visibility_help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Unchecked Providers are hidden from the menu bar and the usage window and are no longer checked." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "체크를 끈 Provider는 메뉴 막대와 사용량 창에서 숨기고 사용량도 조회하지 않습니다." } }
+      }
+    },
+    "detail.empty" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "No Providers are shown. Turn one on in Settings." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "표시 중인 Provider가 없습니다. 설정에서 켜세요." } }
+      }
+    },
     "settings.summary" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Menu bar summary" } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "메뉴바 요약" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Providers and accounts" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Provider와 계정" } }
       }
     },
     "settings.summary.percent_sign" : {

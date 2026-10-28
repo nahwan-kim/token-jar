@@ -72,7 +72,7 @@ struct DetailPopoverView: View {
             TimelineView(.periodic(from: .now, by: 60)) { context in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        ForEach(ProviderID.allCases) { providerID in
+                        ForEach(model.visibleProviderIDs) { providerID in
                             ProviderDetailView(
                                 providerID: providerID,
                                 state: model.states[providerID] ?? .neverLoaded,
@@ -82,6 +82,20 @@ struct DetailPopoverView: View {
                                 isClaudeRepairPending: providerID == .claude && model.isClaudeRepairPending,
                                 configure: { showSettings() }
                             )
+                        }
+                        if model.visibleProviderIDs.isEmpty {
+                            VStack(spacing: 10) {
+                                Text("detail.empty")
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
+                                Button("settings.title") { showSettings() }
+                                    .controlSize(.small)
+                                    .accessibilityIdentifier("detail.empty.settings")
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 40)
+                            .accessibilityElement(children: .contain)
+                            .accessibilityIdentifier("detail.empty")
                         }
                     }
                     .padding(14)
@@ -184,8 +198,8 @@ struct DetailPopoverView: View {
 
         var hasStale = false
         var hasRefreshing = false
-        var hasUnavailable = false
-        for providerID in ProviderID.allCases {
+        var hasUnavailable = model.visibleProviderIDs.isEmpty
+        for providerID in model.visibleProviderIDs {
             let accounts = model.accounts(for: providerID)
             if accounts.contains(where: { $0.failure?.kind.requiresAuthenticationAction == true }) {
                 return StatusPresentation(title: "state.authentication_required", tint: .red)
@@ -1371,6 +1385,14 @@ enum QuotaDisplayFormatter {
 struct ProviderSettingsView: View {
     @ObservedObject var model: AppModel
     @Environment(\.locale) private var locale
+    @State private var addingAccountProvider: ProviderID?
+    @State private var accountPendingRemoval: AccountRemoval?
+
+    private struct AccountRemoval: Identifiable {
+        let providerID: ProviderID
+        let account: AccountToggle
+        var id: String { account.sourceID }
+    }
 
     var body: some View {
         TabView {
@@ -1420,6 +1442,12 @@ struct ProviderSettingsView: View {
                 .toggleStyle(.checkbox)
                 .help(Text("settings.summary.percent_sign_help"))
                 .accessibilityIdentifier("settings.summary.percent-sign")
+
+                Text("settings.summary.visibility_help")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("settings.summary.visibility-help")
 
                 ForEach(model.orderedPreferences) { preference in
                     VStack(alignment: .leading, spacing: 8) {
@@ -1473,28 +1501,83 @@ struct ProviderSettingsView: View {
                         if !accountToggles.isEmpty {
                             VStack(alignment: .leading, spacing: 4) {
                                 ForEach(accountToggles) { account in
-                                    Toggle(
-                                        isOn: Binding(
-                                            get: { account.isEnabled },
-                                            set: {
-                                                model.setAccountEnabled(
-                                                    $0,
+                                    HStack(spacing: 6) {
+                                        Toggle(
+                                            isOn: Binding(
+                                                get: { account.isEnabled },
+                                                set: {
+                                                    model.setAccountEnabled(
+                                                        $0,
+                                                        providerID: preference.providerID,
+                                                        sourceID: account.sourceID
+                                                    )
+                                                }
+                                            )
+                                        ) {
+                                            Text(verbatim: account.label)
+                                        }
+                                        .toggleStyle(.checkbox)
+                                        .disabled(!account.canToggle)
+                                        .help(Text("settings.account.toggle_help"))
+                                        .accessibilityIdentifier("settings.account.\(account.sourceID)")
+
+                                        if let directoryName = account.directoryName {
+                                            Text(verbatim: "~/\(directoryName)")
+                                                .font(.caption)
+                                                .foregroundStyle(preference.isVisible ? .secondary : .tertiary)
+                                        }
+                                        Spacer(minLength: 0)
+                                        if account.canRemove {
+                                            Button {
+                                                accountPendingRemoval = AccountRemoval(
                                                     providerID: preference.providerID,
-                                                    sourceID: account.sourceID
+                                                    account: account
                                                 )
+                                            } label: {
+                                                Image(systemName: "minus.circle")
+                                                    .frame(width: 20, height: 20)
+                                                    .contentShape(Rectangle())
                                             }
-                                        )
-                                    ) {
-                                        Text(verbatim: account.label)
+                                            .buttonStyle(.borderless)
+                                            .accessibilityLabel(Text("settings.account.remove"))
+                                            .accessibilityIdentifier("settings.account.remove.\(account.sourceID)")
+                                            .help(Text("settings.account.remove"))
+                                        }
                                     }
-                                    .toggleStyle(.checkbox)
-                                    .disabled(!account.canToggle)
-                                    .accessibilityIdentifier("settings.account.\(account.sourceID)")
                                 }
                             }
                             .controlSize(.small)
                             .padding(.leading, 22)
-                            .help(Text("settings.account.toggle_help"))
+                            .disabled(!preference.isVisible)
+                        }
+
+                        if AccountDirectory.providers.contains(preference.providerID) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(model.pendingSignIns.filter { $0.providerID == preference.providerID }, id: \.sourceID) { directory in
+                                    HStack(spacing: 6) {
+                                        ProgressView()
+                                            .controlSize(.mini)
+                                        Text("settings.account.add.pending \("~/\(directory.directoryName)")")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Button("action.cancel") {
+                                            model.cancelSignIn(sourceID: directory.sourceID)
+                                        }
+                                        .buttonStyle(.link)
+                                        .font(.caption)
+                                        .accessibilityIdentifier("settings.account.pending.cancel.\(directory.sourceID)")
+                                    }
+                                    .accessibilityElement(children: .contain)
+                                    .accessibilityIdentifier("settings.account.pending.\(directory.sourceID)")
+                                }
+                                Button("settings.account.add") {
+                                    addingAccountProvider = preference.providerID
+                                }
+                                .accessibilityIdentifier("settings.account.add.\(preference.providerID.rawValue)")
+                            }
+                            .controlSize(.small)
+                            .padding(.leading, 22)
+                            .disabled(!preference.isVisible)
                         }
 
                         if preference.providerID != .codex {
@@ -1538,6 +1621,26 @@ struct ProviderSettingsView: View {
         .formStyle(.grouped)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings.providers.content")
+        .sheet(item: $addingAccountProvider) { providerID in
+            AddAccountSheet(model: model, providerID: providerID)
+                .environment(\.locale, model.locale)
+        }
+        .confirmationDialog(
+            Text("settings.account.remove.title"),
+            isPresented: Binding(
+                get: { accountPendingRemoval != nil },
+                set: { if !$0 { accountPendingRemoval = nil } }
+            ),
+            presenting: accountPendingRemoval
+        ) { removal in
+            Button("settings.account.remove", role: .destructive) {
+                model.removeAccount(providerID: removal.providerID, sourceID: removal.account.sourceID)
+            }
+            .accessibilityIdentifier("settings.account.remove.confirm")
+            Button("action.cancel", role: .cancel) {}
+        } message: { removal in
+            Text("settings.account.remove.message \(removal.account.label) \("~/\(removal.account.directoryName ?? "")")")
+        }
     }
 
     private var launchAtLoginSettings: some View {
@@ -1742,5 +1845,91 @@ struct ProviderSettingsView: View {
                 model.updatePreference(updated)
             }
         )
+    }
+}
+
+/// Names a new `~/.codex-<name>` or `~/.claude-<name>` sign-in and opens the official CLI login.
+private struct AddAccountSheet: View {
+    @ObservedObject var model: AppModel
+    let providerID: ProviderID
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var failure: AddAccountResult?
+    @State private var isWorking = false
+
+    private var directory: AccountDirectory? {
+        AccountDirectory(providerID: providerID, name: name)
+    }
+
+    private var explanationKey: LocalizedStringKey {
+        providerID == .codex ? "settings.account.add.explanation.codex" : "settings.account.add.explanation.claude"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("settings.account.add.title \(providerID.displayName)")
+                .font(.headline)
+            Text(explanationKey)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            TextField("settings.account.add.name", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(submit)
+                .onChange(of: name) { failure = nil }
+                .accessibilityIdentifier("settings.account.add.name")
+            if let directory {
+                Text(verbatim: "~/\(directory.directoryName)")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("settings.account.add.folder")
+            }
+            if let message = failureMessage {
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("settings.account.add.error")
+            }
+            HStack {
+                Spacer()
+                Button("action.cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("settings.account.add.sign_in", action: submit)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(directory == nil || isWorking)
+                    .accessibilityIdentifier("settings.account.add.submit")
+            }
+        }
+        .padding(20)
+        .frame(width: 440)
+    }
+
+    private var failureMessage: LocalizedStringKey? {
+        if !name.trimmingCharacters(in: .whitespaces).isEmpty, directory == nil {
+            return "settings.account.add.error.invalid_name"
+        }
+        switch failure {
+        case .invalidName: return "settings.account.add.error.invalid_name"
+        case .alreadyAdded: return "settings.account.add.error.already_added"
+        case .folderInUse: return "settings.account.add.error.folder_in_use"
+        case .signInFailed: return "settings.account.add.error.sign_in_failed"
+        case .restored, .signInStarted, nil: return nil
+        }
+    }
+
+    private func submit() {
+        guard directory != nil, !isWorking else { return }
+        isWorking = true
+        Task {
+            let result = await model.addAccount(providerID: providerID, name: name)
+            isWorking = false
+            switch result {
+            case .restored, .signInStarted:
+                dismiss()
+            case .invalidName, .alreadyAdded, .folderInUse, .signInFailed:
+                failure = result
+            }
+        }
     }
 }

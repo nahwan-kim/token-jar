@@ -92,6 +92,29 @@ struct RuntimeTests {
         ])
     }
 
+    @Test("disabled providers are skipped by every collection path until turned back on")
+    func disabledProvidersAreNotCollected() async {
+        let codexSnapshot = TestContextFactory.snapshot(providerID: .codex)
+        let claudeSnapshot = TestContextFactory.snapshot(providerID: .claude)
+        let codex = QueueProviderAdapter(id: .codex, results: Array(repeating: .success(codexSnapshot), count: 4))
+        let claude = QueueProviderAdapter(id: .claude, results: Array(repeating: .success(claudeSnapshot), count: 4))
+        let coordinator = RefreshCoordinator(adapters: [codex, claude], context: TestContextFactory.make())
+
+        await coordinator.setDisabledProviders([.claude])
+        await coordinator.refreshAll()
+        await coordinator.refreshDue()
+        await coordinator.refresh(.claude)
+        await coordinator.recollect(.claude)
+        await coordinator.repairClaudeConnection()
+        #expect(await codex.fetchCount == 1)
+        #expect(await claude.fetchCount == 0)
+        #expect(await coordinator.state(for: .claude) == .neverLoaded)
+
+        await coordinator.setDisabledProviders([])
+        await coordinator.recollect(.claude)
+        #expect(await claude.fetchCount == 1)
+    }
+
     @Test("recollect waits for a running collection and collects again with the new account set")
     func recollectAfterRunningCollection() async {
         let adapter = GatedProviderAdapter(id: .codex)

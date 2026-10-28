@@ -237,7 +237,7 @@ public struct CollectionContext: Sendable {
     public let correlationID: UUID
     public let isUserInitiated: Bool
     public let allowsClaudeRecovery: Bool
-    /// Accounts the user turned off; multi-account providers skip them entirely.
+    /// Accounts the user turned off or removed; multi-account providers skip them entirely.
     public let disabledAccountSourceIDs: Set<String>
 
     public init(

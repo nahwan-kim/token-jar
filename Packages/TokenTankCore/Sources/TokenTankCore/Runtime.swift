@@ -97,6 +97,12 @@ public actor RefreshCoordinator {
     private var triggeredRuns: [UUID: Task<Void, Never>] = [:]
     private var continuations: [UUID: AsyncStream<[ProviderID: CollectionState]>.Continuation] = [:]
     private var disabledAccountSourceIDs: Set<String> = []
+    private var disabledProviderIDs: Set<ProviderID> = []
+
+    /// Providers the scheduler, refresh-all and stale-surface refresh may collect.
+    private var collectedProviders: [ProviderID] {
+        providerOrder.filter { !disabledProviderIDs.contains($0) }
+    }
 
     private enum CollectionOperation: Equatable {
         case ordinary
@@ -197,10 +203,15 @@ public actor RefreshCoordinator {
         disabledAccountSourceIDs = sourceIDs
     }
 
+    /// Providers that are never collected while disabled; a collection already running finishes.
+    public func setDisabledProviders(_ providerIDs: Set<ProviderID>) {
+        disabledProviderIDs = providerIDs
+    }
+
     /// Collects the provider with the current account set. A collection already running
     /// copied the previous set, so this waits for it and then collects again.
     public func recollect(_ providerID: ProviderID) async {
-        guard acceptingRefreshes, adapters[providerID] != nil else { return }
+        guard acceptingRefreshes, adapters[providerID] != nil, !disabledProviderIDs.contains(providerID) else { return }
         while activeOperations[providerID] != nil {
             await waitForOperation(providerID)
             guard !Task.isCancelled, acceptingRefreshes else { return }
@@ -240,7 +251,7 @@ public actor RefreshCoordinator {
             guard now >= deadline else { return }
             wakeGateDeadline = nil
         }
-        let due = providerOrder.filter { providerID in
+        let due = collectedProviders.filter { providerID in
             activeOperations[providerID] == nil
                 && !queued.contains(providerID)
                 && (nextDueAt[providerID] ?? .distantPast) <= now
@@ -260,7 +271,7 @@ public actor RefreshCoordinator {
         guard acceptingRefreshes else { return }
         let now = await context.clock.now()
         guard acceptingRefreshes else { return }
-        for providerID in providerOrder where activeOperations[providerID] == nil && !queued.contains(providerID) {
+        for providerID in collectedProviders where activeOperations[providerID] == nil && !queued.contains(providerID) {
             if let succeeded = lastSucceededAt[providerID], now.timeIntervalSince(succeeded) <= age.seconds {
                 continue
             }
@@ -292,7 +303,7 @@ public actor RefreshCoordinator {
             wakeGateDeadline = nil
             if restored {
                 networkRestoredAt = now
-                for providerID in providerOrder where stateFailedTransiently(providerID) {
+                for providerID in collectedProviders where stateFailedTransiently(providerID) {
                     nextDueAt[providerID] = now
                 }
             }
@@ -306,7 +317,7 @@ public actor RefreshCoordinator {
         guard acceptingRefreshes else { return }
         let now = await context.clock.now()
         guard acceptingRefreshes else { return }
-        let providerIDs = providerOrder.filter { providerID in
+        let providerIDs = collectedProviders.filter { providerID in
             guard !queued.contains(providerID) else { return false }
             guard userInitiated, activeOperations[providerID] == nil else { return true }
             return !isWithinManualFloor(providerID, now: now)
@@ -315,7 +326,7 @@ public actor RefreshCoordinator {
     }
 
     public func repairClaudeConnection() async {
-        guard acceptingRefreshes, adapters[.claude] != nil else { return }
+        guard acceptingRefreshes, adapters[.claude] != nil, !disabledProviderIDs.contains(.claude) else { return }
         let requestGeneration = generation
         var waitedForOrdinaryCollection = false
 
@@ -346,7 +357,7 @@ public actor RefreshCoordinator {
     }
 
     private func refresh(_ providerID: ProviderID, userInitiated: Bool, enforcesManualFloor: Bool) async {
-        guard acceptingRefreshes, adapters[providerID] != nil else { return }
+        guard acceptingRefreshes, adapters[providerID] != nil, !disabledProviderIDs.contains(providerID) else { return }
         if activeOperations[providerID] != nil {
             await waitForOperation(providerID)
             return
@@ -446,7 +457,7 @@ public actor RefreshCoordinator {
 
     private func nextTickDelay() async -> Duration {
         let now = await context.clock.now()
-        let earliest = providerOrder
+        let earliest = collectedProviders
             .filter { activeOperations[$0] == nil && !queued.contains($0) }
             .map { nextDueAt[$0] ?? .distantPast }
             .min()

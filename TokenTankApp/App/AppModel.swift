@@ -56,8 +56,235 @@ struct AccountToggle: Equatable, Identifiable, Sendable {
     let isEnabled: Bool
     /// False for the last enabled account: the provider toggle turns a provider off.
     let canToggle: Bool
+    /// True for a `~/.codex-<name>` or `~/.claude-<name>` account that is not the last enabled one.
+    var canRemove = false
+    /// The home-directory folder of a removable account, e.g. ".codex-work".
+    var directoryName: String?
 
     var id: String { sourceID }
+}
+
+/// A sign-in folder Token Jar can add or remove: `~/.codex-<name>` or `~/.claude-<name>`.
+/// The default sign-ins and `CODEX_HOME`/`CLAUDE_CONFIG_DIR` locations are not managed.
+struct AccountDirectory: Equatable, Sendable {
+    static let providers: [ProviderID] = [.codex, .claude]
+
+    let providerID: ProviderID
+    let name: String
+    let sourceID: String
+
+    /// `nil` unless the provider supports added accounts and the lowercased name uses only
+    /// `a-z 0-9 - _` within the provider's length limit.
+    init?(providerID: ProviderID, name rawName: String) {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !name.isEmpty else { return nil }
+        let sourceID: String?
+        switch providerID {
+        case .codex:
+            sourceID = CodexAccountSource.homeDirectory(named: ".codex-\(name)")?.id
+        case .claude:
+            sourceID = ClaudeAccount.homeDirectorySourceID(named: ".claude-\(name)")
+        case .grok, .cursor, .doubao:
+            sourceID = nil
+        }
+        guard let sourceID else { return nil }
+        self.providerID = providerID
+        self.name = name
+        self.sourceID = sourceID
+    }
+
+    /// The managed folder behind a collected account, or `nil` for default and other locations.
+    init?(providerID: ProviderID, sourceID: String) {
+        let name: String
+        switch providerID {
+        case .codex where sourceID == CodexAccountSource.secondary.id:
+            name = "secondary"
+        case .codex where sourceID.hasPrefix("codex.home."):
+            name = String(sourceID.dropFirst("codex.home.".count))
+        case .claude where sourceID.hasPrefix("\(ClaudeAccount.defaultSourceID).claude-"):
+            name = String(sourceID.dropFirst("\(ClaudeAccount.defaultSourceID).claude-".count))
+        default:
+            return nil
+        }
+        guard let directory = AccountDirectory(providerID: providerID, name: name),
+              directory.sourceID == sourceID
+        else { return nil }
+        self = directory
+    }
+
+    /// The folder name under the home directory, e.g. ".codex-work".
+    var directoryName: String {
+        providerID == .codex ? ".codex-\(name)" : ".claude-\(name)"
+    }
+}
+
+enum AccountFolderState: Equatable, Sendable {
+    case missing
+    case empty
+    case signedIn
+    /// Holds other files but no sign-in, so another tool may own it.
+    case inUse
+}
+
+enum AddAccountResult: Equatable, Sendable {
+    /// A removed account whose sign-in is still there was listed again.
+    case restored
+    /// The official CLI sign-in was opened in Terminal; the account appears once it finishes.
+    case signInStarted
+    case invalidName
+    case alreadyAdded
+    case folderInUse
+    case signInFailed
+}
+
+/// Creates sign-ins with the official CLIs; Token Jar itself never writes credentials.
+protocol AccountSignInServicing: Sendable {
+    func folderState(of directory: AccountDirectory) -> AccountFolderState
+    func startSignIn(_ directory: AccountDirectory, locale: Locale) async throws
+    /// `true` once the folder holds a sign-in; `false` on cancellation or after giving up.
+    func waitForSignIn(_ directory: AccountDirectory) async -> Bool
+}
+
+/// Runs `codex login` or `claude auth login` for the folder in a new Terminal window.
+struct TerminalAccountSignInService: AccountSignInServicing {
+    private static let pollInterval: Duration = .seconds(2)
+    private static let signInTimeout: TimeInterval = 15 * 60
+    private static let configMaximumBytes = 16 * 1024 * 1024
+
+    let homeDirectory: URL
+
+    init(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) {
+        self.homeDirectory = homeDirectory
+    }
+
+    /// The exact path the account discovery hashes for Claude's Keychain item name.
+    func path(of directory: AccountDirectory) -> String {
+        "\(homeDirectory.standardizedFileURL.path)/\(directory.directoryName)"
+    }
+
+    func folderState(of directory: AccountDirectory) -> AccountFolderState {
+        let path = path(of: directory)
+        let fileManager = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory) else { return .missing }
+        guard isDirectory.boolValue, (try? fileManager.destinationOfSymbolicLink(atPath: path)) == nil else {
+            return .inUse
+        }
+        if isSignedIn(directory) { return .signedIn }
+        return ((try? fileManager.contentsOfDirectory(atPath: path)) ?? [""]).isEmpty ? .empty : .inUse
+    }
+
+    func startSignIn(_ directory: AccountDirectory, locale: Locale) async throws {
+        let script = signInScript(for: directory, locale: locale)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TokenJar-SignIn-\(UUID().uuidString).command")
+        try Data(script.utf8).write(to: url, options: .withoutOverwriting)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+        guard let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") else {
+            try? FileManager.default.removeItem(at: url)
+            throw CocoaError(.fileNoSuchFile)
+        }
+        do {
+            _ = try await NSWorkspace.shared.open(
+                [url],
+                withApplicationAt: terminal,
+                configuration: NSWorkspace.OpenConfiguration()
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
+    }
+
+    func waitForSignIn(_ directory: AccountDirectory) async -> Bool {
+        let deadline = Date().addingTimeInterval(Self.signInTimeout)
+        while Date() < deadline {
+            do {
+                try await Task.sleep(for: Self.pollInterval)
+            } catch {
+                return false
+            }
+            if isSignedIn(directory) { return true }
+        }
+        return false
+    }
+
+    /// Codex: `auth.json` from the file credential store. Claude: `.credentials.json`, or an
+    /// `oauthAccount` record in `.claude.json`; that file alone appears before sign-in finishes.
+    private func isSignedIn(_ directory: AccountDirectory) -> Bool {
+        let path = path(of: directory)
+        switch directory.providerID {
+        case .codex:
+            return FileManager.default.fileExists(atPath: "\(path)/auth.json")
+        case .claude:
+            if FileManager.default.fileExists(atPath: "\(path)/.credentials.json") { return true }
+            let configURL = URL(fileURLWithPath: "\(path)/.claude.json")
+            guard
+                let size = (try? configURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
+                size <= Self.configMaximumBytes,
+                let data = try? Data(contentsOf: configURL),
+                let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return false }
+            return root["oauthAccount"] is [String: Any]
+        case .grok, .cursor, .doubao:
+            return false
+        }
+    }
+
+    private func signInScript(for directory: AccountDirectory, locale: Locale) -> String {
+        let path = Self.shellQuoted(path(of: directory))
+        let variable: String
+        let command: String
+        switch directory.providerID {
+        case .codex:
+            variable = "CODEX_HOME"
+            command = "\(executable(CodexAppServerUsageReader.defaultExecutableCandidates, fallback: "codex")) "
+                + "login -c 'cli_auth_credentials_store=\"file\"'"
+        default:
+            variable = "CLAUDE_CONFIG_DIR"
+            command = "\(executable(ClaudeCLIAuthRefresher.defaultExecutableCandidates(homeDirectory: homeDirectory), fallback: "claude")) "
+                + "auth login"
+        }
+        let strings = Self.strings(for: locale)
+        let title = Self.shellQuoted(String(
+            format: strings.localizedString(forKey: "settings.account.add.terminal_title", value: nil, table: nil),
+            directory.providerID.displayName,
+            "~/\(directory.directoryName)"
+        ))
+        let done = Self.shellQuoted(strings.localizedString(forKey: "settings.account.add.terminal_done", value: nil, table: nil))
+        let failed = Self.shellQuoted(strings.localizedString(forKey: "settings.account.add.terminal_failed", value: nil, table: nil))
+        return """
+        #!/bin/zsh
+        rm -f -- "$0"
+        echo \(title)
+        echo
+        export \(variable)=\(path)
+        mkdir -p -m 700 -- "$\(variable)" || exit 1
+        if \(command); then
+          echo; echo \(done)
+        else
+          echo; echo \(failed)
+        fi
+
+        """
+    }
+
+    /// The app bundle's localization for the language chosen in Settings, not the system one.
+    private static func strings(for locale: Locale) -> Bundle {
+        let bundle = Bundle(for: AppModel.self)
+        let language = locale.language.languageCode?.identifier ?? "en"
+        return bundle.path(forResource: language, ofType: "lproj").flatMap(Bundle.init(path:)) ?? bundle
+    }
+
+    private func executable(_ candidates: [URL], fallback: String) -> String {
+        candidates
+            .first { FileManager.default.isExecutableFile(atPath: $0.path) }
+            .map { Self.shellQuoted($0.path) } ?? fallback
+    }
+
+    static func shellQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
 }
 enum LaunchAtLoginStatus: Equatable, Sendable {
     case enabled
@@ -218,7 +445,7 @@ final class AppModel: ObservableObject {
     /// Collected states without disabled accounts; `rawStates` keeps what was collected.
     @Published private(set) var states: [ProviderID: CollectionState]
     private var rawStates: [ProviderID: CollectionState]
-    private var accountFilterUpdate: Task<Void, Never>?
+    private var collectionFilterUpdate: Task<Void, Never>?
     @Published private(set) var preferences = UserPreferences()
     @Published var language: AppLanguage {
         didSet { languageDefaults.set(language.rawValue, forKey: "appLanguage") }
@@ -266,6 +493,10 @@ final class AppModel: ObservableObject {
     private var updaterStartAttempted = false
     private let launchAtLoginService: any LaunchAtLoginServicing
     private var applicationActivationObserver: AnyCancellable?
+    private let accountSignInService: any AccountSignInServicing
+    /// Folders whose official CLI sign-in is open in Terminal, oldest first.
+    @Published private(set) var pendingSignIns: [AccountDirectory] = []
+    private var signInWatches: [String: Task<Void, Never>] = [:]
 
     init(
         adapters suppliedAdapters: [any ProviderAdapter]? = nil,
@@ -274,9 +505,11 @@ final class AppModel: ObservableObject {
         context suppliedContext: CollectionContext? = nil,
         languageDefaults: UserDefaults = .standard,
         updater suppliedUpdater: (any AppUpdating)? = nil,
-        launchAtLoginService suppliedLaunchAtLoginService: (any LaunchAtLoginServicing)? = nil
+        launchAtLoginService suppliedLaunchAtLoginService: (any LaunchAtLoginServicing)? = nil,
+        accountSignInService: any AccountSignInServicing = TerminalAccountSignInService()
     ) {
         self.languageDefaults = languageDefaults
+        self.accountSignInService = accountSignInService
         let resolvedLaunchAtLoginService: any LaunchAtLoginServicing = {
             if let suppliedLaunchAtLoginService { return suppliedLaunchAtLoginService }
             #if UITEST
@@ -381,6 +614,7 @@ final class AppModel: ObservableObject {
         preferenceSaveTask?.cancel()
         for operation in credentialOperations.values { operation.task.cancel() }
         for task in refreshOperations.values { task.cancel() }
+        for task in signInWatches.values { task.cancel() }
     }
 
     func ensureStarted() {
@@ -416,7 +650,8 @@ final class AppModel: ObservableObject {
             let loadedPreferences = await preferencesStore.load()
             if Task.isCancelled { return }
             self?.preferences = loadedPreferences
-            await coordinator.setDisabledAccountSourceIDs(loadedPreferences.disabledAccountSourceIDs)
+            await coordinator.setDisabledAccountSourceIDs(loadedPreferences.excludedAccountSourceIDs)
+            await coordinator.setDisabledProviders(loadedPreferences.hiddenProviderIDs)
             let stream = await coordinator.stateStream()
             await coordinator.start()
             for await nextStates in stream {
@@ -450,6 +685,12 @@ final class AppModel: ObservableObject {
         for operation in pendingCredentialOperations {
             operation.task.cancel()
         }
+        let pendingSignInWatches = Array(signInWatches.values)
+        signInWatches.removeAll(keepingCapacity: false)
+        pendingSignIns.removeAll(keepingCapacity: false)
+        for watch in pendingSignInWatches {
+            watch.cancel()
+        }
 
         await runningStreamTask?.value
         await pendingPreferenceTask?.value
@@ -458,6 +699,9 @@ final class AppModel: ObservableObject {
         }
         for operation in pendingCredentialOperations {
             await operation.task.value
+        }
+        for watch in pendingSignInWatches {
+            await watch.value
         }
 
         if started {
@@ -746,19 +990,21 @@ final class AppModel: ObservableObject {
     }
 
     private func applyAccountFilter() {
-        let disabled = preferences.disabledAccountSourceIDs
-        states = rawStates.mapValues { $0.excludingAccounts(disabled) }
+        let excluded = preferences.excludedAccountSourceIDs
+        states = rawStates.mapValues { $0.excludingAccounts(excluded) }
     }
 
     /// Account rows for providers that collect several sign-ins (Codex, Claude). Empty while
     /// only one enabled account is known and none is off: turning that off is the provider
-    /// toggle's job. A disabled account is always listed so it can be turned back on.
+    /// toggle's job. A disabled account is always listed so it can be turned back on; a
+    /// removed account is never listed.
     func accountToggles(for providerID: ProviderID) -> [AccountToggle] {
-        guard providerID == .codex || providerID == .claude else { return [] }
+        guard AccountDirectory.providers.contains(providerID) else { return [] }
+        let removed = preferences.removedAccountSourceIDs
         let disabled = preferences.disabledAccounts.filter { $0.providerID == providerID }
         let disabledIDs = Set(disabled.map(\.sourceID))
         let collected = (rawStates[providerID]?.snapshot?.accounts ?? [])
-            .filter { !disabledIDs.contains($0.sourceID) }
+            .filter { !disabledIDs.contains($0.sourceID) && !removed.contains($0.sourceID) }
         let placeholders = disabled.map {
             ProviderAccountSnapshot(sourceID: $0.sourceID, quotas: [], accountEmail: $0.accountEmail)
         }
@@ -766,11 +1012,15 @@ final class AppModel: ObservableObject {
         guard accounts.count > 1 || !disabled.isEmpty else { return [] }
         return accounts.map { account in
             let isEnabled = !disabledIDs.contains(account.sourceID)
+            let canToggle = !isEnabled || collected.count > 1
+            let directory = AccountDirectory(providerID: providerID, sourceID: account.sourceID)
             return AccountToggle(
                 sourceID: account.sourceID,
                 label: CodexAccountPresentation.identity(for: account, locale: locale),
                 isEnabled: isEnabled,
-                canToggle: !isEnabled || collected.count > 1
+                canToggle: canToggle,
+                canRemove: directory != nil && canToggle,
+                directoryName: directory?.directoryName
             )
         }
     }
@@ -797,16 +1047,99 @@ final class AppModel: ObservableObject {
         preferences = next.normalized()
         persistPreferences()
         applyAccountFilter()
+        updateCollectionFilters(recollect: enabled ? providerID : nil)
+    }
 
-        let sourceIDs = preferences.disabledAccountSourceIDs
+    /// Removes a `~/.codex-<name>` or `~/.claude-<name>` account from the list. Its sign-in
+    /// files stay untouched; adding the same name again lists it again.
+    func removeAccount(providerID: ProviderID, sourceID: String) {
+        guard
+            !isStopping,
+            let toggle = accountToggles(for: providerID).first(where: { $0.sourceID == sourceID }),
+            toggle.canRemove
+        else { return }
+        signInWatches.removeValue(forKey: sourceID)?.cancel()
+        pendingSignIns.removeAll { $0.sourceID == sourceID }
+        var next = preferences
+        next.disabledAccounts.removeAll { $0.sourceID == sourceID }
+        next.removedAccountSourceIDs.insert(sourceID)
+        preferences = next.normalized()
+        persistPreferences()
+        applyAccountFilter()
+        updateCollectionFilters()
+    }
+
+    /// Adds `~/.codex-<name>` or `~/.claude-<name>`. A removed account that is still signed in
+    /// is listed again; a missing or empty folder gets the official CLI sign-in in Terminal,
+    /// and the provider is collected again as soon as that sign-in lands.
+    func addAccount(providerID: ProviderID, name: String) async -> AddAccountResult {
+        guard !isStopping, let directory = AccountDirectory(providerID: providerID, name: name) else {
+            return .invalidName
+        }
+        switch accountSignInService.folderState(of: directory) {
+        case .signedIn:
+            guard preferences.removedAccountSourceIDs.contains(directory.sourceID) else { return .alreadyAdded }
+            restoreRemovedAccount(directory, recollect: true)
+            return .restored
+        case .inUse:
+            return .folderInUse
+        case .missing, .empty:
+            do {
+                try await accountSignInService.startSignIn(directory, locale: locale)
+            } catch {
+                return .signInFailed
+            }
+            guard !isStopping else { return .signInFailed }
+            restoreRemovedAccount(directory, recollect: false)
+            watchSignIn(directory)
+            return .signInStarted
+        }
+    }
+
+    private func restoreRemovedAccount(_ directory: AccountDirectory, recollect: Bool) {
+        guard preferences.removedAccountSourceIDs.contains(directory.sourceID) else { return }
+        var next = preferences
+        next.removedAccountSourceIDs.remove(directory.sourceID)
+        preferences = next.normalized()
+        persistPreferences()
+        applyAccountFilter()
+        updateCollectionFilters(recollect: recollect ? directory.providerID : nil)
+    }
+
+    /// Stops waiting for a Terminal sign-in; the Terminal window and any finished sign-in stay.
+    func cancelSignIn(sourceID: String) {
+        signInWatches.removeValue(forKey: sourceID)?.cancel()
+        pendingSignIns.removeAll { $0.sourceID == sourceID }
+    }
+
+    private func watchSignIn(_ directory: AccountDirectory) {
+        signInWatches.removeValue(forKey: directory.sourceID)?.cancel()
+        pendingSignIns.removeAll { $0.sourceID == directory.sourceID }
+        pendingSignIns.append(directory)
+        let service = accountSignInService
+        signInWatches[directory.sourceID] = Task { [weak self, service] in
+            let signedIn = await service.waitForSignIn(directory)
+            guard !Task.isCancelled, let self else { return }
+            self.signInWatches.removeValue(forKey: directory.sourceID)
+            self.pendingSignIns.removeAll { $0.sourceID == directory.sourceID }
+            if signedIn { self.updateCollectionFilters(recollect: directory.providerID) }
+        }
+    }
+
+    /// Hands hidden providers and excluded accounts to the coordinator in call order, then
+    /// collects `providerID` again so a provider or account turned back on shows at once.
+    private func updateCollectionFilters(recollect providerID: ProviderID? = nil) {
+        let excludedAccounts = preferences.excludedAccountSourceIDs
+        let hiddenProviders = preferences.hiddenProviderIDs
         let coordinator = coordinator
-        let previousUpdate = accountFilterUpdate
+        let previousUpdate = collectionFilterUpdate
         let update = Task { [coordinator] in
             await previousUpdate?.value
-            await coordinator.setDisabledAccountSourceIDs(sourceIDs)
+            await coordinator.setDisabledAccountSourceIDs(excludedAccounts)
+            await coordinator.setDisabledProviders(hiddenProviders)
         }
-        accountFilterUpdate = update
-        guard enabled, started else { return }
+        collectionFilterUpdate = update
+        guard let providerID, started else { return }
         let operationID = UUID()
         refreshOperations[operationID] = Task { [weak self, coordinator] in
             await update.value
@@ -831,6 +1164,7 @@ final class AppModel: ObservableObject {
 
     func updatePreference(_ preference: ProviderPreference) {
         guard !isStopping else { return }
+        let wasVisible = preferences.preference(for: preference.providerID).isVisible
         var next = preferences
         if let index = next.providers.firstIndex(where: { $0.providerID == preference.providerID }) {
             next.providers[index] = preference
@@ -839,6 +1173,13 @@ final class AppModel: ObservableObject {
         }
         preferences = next.normalized()
         persistPreferences()
+        guard preference.isVisible != wasVisible else { return }
+        updateCollectionFilters(recollect: preference.isVisible ? preference.providerID : nil)
+    }
+
+    /// Providers shown in the usage window, in their fixed order; hidden ones are left out.
+    var visibleProviderIDs: [ProviderID] {
+        ProviderID.allCases.filter { preferences.preference(for: $0).isVisible }
     }
 
     func setShowsMenuBarPercentSign(_ value: Bool) {

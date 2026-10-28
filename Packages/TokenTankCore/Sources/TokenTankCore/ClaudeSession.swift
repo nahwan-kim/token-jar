@@ -43,6 +43,16 @@ public struct ClaudeAccount: Sendable, Equatable, Identifiable {
         self.accountUUID = accountUUID
         self.email = ProviderSnapshot.validatedAccountEmail(email)
     }
+
+    /// The source for a directory directly under the home directory (".claude-work"); `nil`
+    /// for other names, which are identified by a path hash instead.
+    public static func homeDirectorySourceID(named name: String) -> String? {
+        guard name.hasPrefix(".claude-") else { return nil }
+        let directory = String(name.dropFirst()).lowercased()
+        let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789-_")
+        guard directory.count <= 64, directory.allSatisfy(allowed.contains) else { return nil }
+        return "\(defaultSourceID).\(directory)"
+    }
 }
 
 public protocol ClaudeSessionProviding: Sendable {
@@ -845,14 +855,10 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
     }
 
     private static func sourceID(forRelativeDirectory relative: String, hash: String) -> String {
-        let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789-_")
-        let name = relative.hasPrefix(".claude-") && !relative.contains("/")
-            ? String(relative.dropFirst(1)).lowercased()
-            : ""
-        guard !name.isEmpty, name.count <= 64, name.allSatisfy(allowed.contains) else {
+        guard !relative.contains("/"), let sourceID = ClaudeAccount.homeDirectorySourceID(named: relative) else {
             return "\(ClaudeAccount.defaultSourceID).dir-\(hash)"
         }
-        return "\(ClaudeAccount.defaultSourceID).\(name)"
+        return sourceID
     }
 
     static func identity(

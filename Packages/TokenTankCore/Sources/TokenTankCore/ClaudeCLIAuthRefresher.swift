@@ -68,16 +68,20 @@ public actor ClaudeCLIAuthRefresher: ClaudeAuthRefreshing {
         configDirectory: String? = nil
     ) {
         self.configDirectory = configDirectory
-        self.executableCandidates = [
-            homeDirectory.appendingPathComponent(".local/bin/claude"),
-            URL(fileURLWithPath: "/opt/homebrew/bin/claude"),
-            URL(fileURLWithPath: "/usr/local/bin/claude"),
-        ]
+        self.executableCandidates = Self.defaultExecutableCandidates(homeDirectory: homeDirectory)
         self.workingDirectory = nil
         self.timeout = Self.maximumTimeout
         self.homeDirectory = homeDirectory
         self.fileManager = .default
         self.screenIsUnlocked = Self.consoleIsUnlocked
+    }
+
+    public static func defaultExecutableCandidates(homeDirectory: URL) -> [URL] {
+        [
+            homeDirectory.appendingPathComponent(".local/bin/claude"),
+            URL(fileURLWithPath: "/opt/homebrew/bin/claude"),
+            URL(fileURLWithPath: "/usr/local/bin/claude"),
+        ]
     }
 
     init(

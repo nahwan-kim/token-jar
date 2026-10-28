@@ -587,25 +587,41 @@ public struct UserPreferences: Codable, Equatable, Sendable {
     public var providers: [ProviderPreference]
     public var showsMenuBarPercentSign: Bool
     public var disabledAccounts: [DisabledAccount]
+    /// Accounts the user removed from the list. Their sign-in stays where the official tool
+    /// keeps it; Token Jar neither collects nor lists them until they are added again.
+    public var removedAccountSourceIDs: Set<String>
 
     public init(
         providers: [ProviderPreference] = UserPreferences.defaults,
         showsMenuBarPercentSign: Bool = true,
-        disabledAccounts: [DisabledAccount] = []
+        disabledAccounts: [DisabledAccount] = [],
+        removedAccountSourceIDs: Set<String> = []
     ) {
         self.providers = providers
         self.showsMenuBarPercentSign = showsMenuBarPercentSign
         self.disabledAccounts = disabledAccounts
+        self.removedAccountSourceIDs = removedAccountSourceIDs
     }
 
     private enum CodingKeys: String, CodingKey {
         case providers
         case showsMenuBarPercentSign
         case disabledAccounts
+        case removedAccountSourceIDs
     }
 
     public var disabledAccountSourceIDs: Set<String> {
         Set(disabledAccounts.map(\.sourceID))
+    }
+
+    /// Accounts that are neither collected nor displayed: turned off or removed.
+    public var excludedAccountSourceIDs: Set<String> {
+        disabledAccountSourceIDs.union(removedAccountSourceIDs)
+    }
+
+    /// Providers the user hid; they are neither displayed nor collected.
+    public var hiddenProviderIDs: Set<ProviderID> {
+        Set(providers.filter { !$0.isVisible }.map(\.providerID))
     }
 
     public init(from decoder: Decoder) throws {
@@ -619,6 +635,10 @@ public struct UserPreferences: Codable, Equatable, Sendable {
             disabledAccounts: try container.decodeIfPresent(
                 [DisabledAccount].self,
                 forKey: .disabledAccounts
+            ) ?? [],
+            removedAccountSourceIDs: try container.decodeIfPresent(
+                Set<String>.self,
+                forKey: .removedAccountSourceIDs
             ) ?? []
         )
     }
@@ -648,7 +668,10 @@ public struct UserPreferences: Codable, Equatable, Sendable {
         return UserPreferences(
             providers: normalizedProviders,
             showsMenuBarPercentSign: showsMenuBarPercentSign,
-            disabledAccounts: disabledAccounts.filter { seenAccounts.insert($0.sourceID).inserted }
+            disabledAccounts: disabledAccounts.filter {
+                !removedAccountSourceIDs.contains($0.sourceID) && seenAccounts.insert($0.sourceID).inserted
+            },
+            removedAccountSourceIDs: removedAccountSourceIDs
         )
     }
 

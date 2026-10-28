@@ -766,7 +766,9 @@ final class AppModelTests: XCTestCase {
                     sourceID: CodexAccountSource.secondary.id,
                     label: "personal@example.com",
                     isEnabled: false,
-                    canToggle: true
+                    canToggle: true,
+                    canRemove: true,
+                    directoryName: ".codex-secondary"
                 ),
             ]
         )
@@ -812,13 +814,149 @@ final class AppModelTests: XCTestCase {
                 sourceID: work.sourceID,
                 label: "work@example.com",
                 isEnabled: false,
-                canToggle: true
+                canToggle: true,
+                canRemove: true,
+                directoryName: ".claude-work"
             ),
         ])
         model.setAccountEnabled(true, providerID: .claude, sourceID: work.sourceID)
         XCTAssertTrue(model.preferences.disabledAccounts.isEmpty)
         XCTAssertTrue(model.accountToggles(for: .claude).isEmpty)
         await model.stop()
+    }
+
+    func testHiddenProviderLeavesUsageWindowAndCollectionUntilShownAgain() async throws {
+        var hiddenClaude = UserPreferences()
+        hiddenClaude.providers = hiddenClaude.providers.map {
+            var preference = $0
+            preference.isVisible = $0.providerID != .claude
+            return preference
+        }
+        let codex = TestAppAdapter(id: .codex, results: [.success(makeSnapshot(providerID: .codex, percentage: 10))])
+        let claude = TestAppAdapter(id: .claude, results: [.success(makeSnapshot(providerID: .claude, percentage: 20))])
+        let credentials = InMemoryCredentialStore()
+        let model = AppModel(
+            adapters: [codex, claude],
+            credentialStore: credentials,
+            preferencesStore: MemoryPreferencesStore(hiddenClaude),
+            context: makeContext(credentials: credentials)
+        )
+
+        model.ensureStarted()
+        let codexFetched = await eventually { await codex.fetchCount == 1 }
+        XCTAssertTrue(codexFetched)
+        XCTAssertFalse(model.visibleProviderIDs.contains(.claude))
+        model.refresh(.claude)
+        model.refreshAll()
+        for _ in 0..<50 { await Task.yield() }
+        let hiddenFetches = await claude.fetchCount
+        XCTAssertEqual(hiddenFetches, 0)
+
+        var shown = model.preference(for: .claude)
+        shown.isVisible = true
+        model.updatePreference(shown)
+        XCTAssertTrue(model.visibleProviderIDs.contains(.claude))
+        let claudeFetched = await eventually { await claude.fetchCount == 1 }
+        XCTAssertTrue(claudeFetched)
+        await model.stop()
+    }
+
+    func testManagedAccountsCanBeRemovedRestoredAndSignedIn() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let quotas = makeSnapshot(providerID: .codex, percentage: 10).quotas
+        let snapshot = ProviderSnapshot(
+            providerID: .codex,
+            source: makeSnapshot(providerID: .codex).source,
+            accounts: [
+                ProviderAccountSnapshot(sourceID: CodexAccountSource.primary.id, quotas: quotas, refreshedAt: now, accountEmail: "main@example.com"),
+                ProviderAccountSnapshot(sourceID: "codex.home.work", quotas: quotas, refreshedAt: now, accountEmail: "work@example.com"),
+            ],
+            refreshedAt: now
+        )
+        let adapter = TestAppAdapter(id: .codex, results: Array(repeating: .success(snapshot), count: 4))
+        let signIn = TestAccountSignInService()
+        let preferences = MemoryPreferencesStore()
+        let credentials = InMemoryCredentialStore()
+        let model = AppModel(
+            adapters: [adapter],
+            credentialStore: credentials,
+            preferencesStore: preferences,
+            context: makeContext(credentials: credentials),
+            accountSignInService: signIn
+        )
+        model.ensureStarted()
+        let loaded = await eventually { model.accountToggles(for: .codex).count == 2 }
+        XCTAssertTrue(loaded)
+        let toggles = model.accountToggles(for: .codex)
+        XCTAssertEqual(toggles.map(\.canRemove), [false, true])
+        XCTAssertEqual(toggles.map(\.directoryName), [nil, ".codex-work"])
+
+        model.removeAccount(providerID: .codex, sourceID: CodexAccountSource.primary.id)
+        XCTAssertTrue(model.preferences.removedAccountSourceIDs.isEmpty)
+        model.removeAccount(providerID: .codex, sourceID: "codex.home.work")
+        XCTAssertEqual(model.preferences.removedAccountSourceIDs, ["codex.home.work"])
+        XCTAssertTrue(model.accountToggles(for: .codex).isEmpty)
+        XCTAssertEqual(model.codexAccounts().map(\.sourceID), [CodexAccountSource.primary.id])
+
+        let invalidName = await model.addAccount(providerID: .codex, name: "Work!")
+        XCTAssertEqual(invalidName, .invalidName)
+        let unsupported = await model.addAccount(providerID: .grok, name: "work")
+        XCTAssertEqual(unsupported, .invalidName)
+        signIn.setState(.inUse)
+        let inUse = await model.addAccount(providerID: .codex, name: "work")
+        XCTAssertEqual(inUse, .folderInUse)
+
+        signIn.setState(.signedIn)
+        let restored = await model.addAccount(providerID: .codex, name: " WORK ")
+        XCTAssertEqual(restored, .restored)
+        XCTAssertTrue(model.preferences.removedAccountSourceIDs.isEmpty)
+        let recollected = await eventually { await adapter.fetchCount == 2 }
+        XCTAssertTrue(recollected)
+        let lastExcluded = await adapter.disabledAccountValues.last
+        XCTAssertEqual(lastExcluded, [])
+        let alreadyAdded = await model.addAccount(providerID: .codex, name: "work")
+        XCTAssertEqual(alreadyAdded, .alreadyAdded)
+
+        signIn.setState(.missing)
+        let started = await model.addAccount(providerID: .codex, name: "new")
+        XCTAssertEqual(started, .signInStarted)
+        XCTAssertEqual(signIn.startedSourceIDs, ["codex.home.new"])
+        XCTAssertEqual(model.pendingSignIns.map(\.sourceID), ["codex.home.new"])
+        signIn.finishSignIn()
+        let signedIn = await eventually { await adapter.fetchCount == 3 }
+        XCTAssertTrue(signedIn)
+        XCTAssertTrue(model.pendingSignIns.isEmpty)
+
+        let later = await model.addAccount(providerID: .codex, name: "later")
+        XCTAssertEqual(later, .signInStarted)
+        model.cancelSignIn(sourceID: "codex.home.later")
+        XCTAssertTrue(model.pendingSignIns.isEmpty)
+        signIn.finishSignIn()
+        for _ in 0..<50 { await Task.yield() }
+        let fetchesAfterCancel = await adapter.fetchCount
+        XCTAssertEqual(fetchesAfterCancel, 3)
+
+        signIn.failsToStart = true
+        let failed = await model.addAccount(providerID: .codex, name: "other")
+        XCTAssertEqual(failed, .signInFailed)
+        await model.stop()
+        let saved = await preferences.load()
+        XCTAssertTrue(saved.removedAccountSourceIDs.isEmpty)
+    }
+
+    func testAccountDirectoriesMatchDiscoveredSourceIDs() {
+        XCTAssertEqual(AccountDirectory(providerID: .codex, name: "secondary")?.sourceID, CodexAccountSource.secondary.id)
+        XCTAssertEqual(AccountDirectory(providerID: .claude, name: "Work")?.sourceID, "claude.oauth.claude-work")
+        XCTAssertEqual(AccountDirectory(providerID: .claude, name: "work")?.directoryName, ".claude-work")
+        XCTAssertNil(AccountDirectory(providerID: .claude, name: String(repeating: "a", count: 58)))
+        XCTAssertNotNil(AccountDirectory(providerID: .codex, name: String(repeating: "a", count: 58)))
+        XCTAssertNil(AccountDirectory(providerID: .codex, name: "a/b"))
+        XCTAssertNil(AccountDirectory(providerID: .codex, sourceID: CodexAccountSource.primary.id))
+        XCTAssertNil(AccountDirectory(providerID: .codex, sourceID: "codex.env.1234abcd"))
+        XCTAssertNil(AccountDirectory(providerID: .claude, sourceID: ClaudeAccount.defaultSourceID))
+        XCTAssertNil(AccountDirectory(providerID: .claude, sourceID: "claude.oauth.dir-1234abcd"))
+        XCTAssertEqual(AccountDirectory(providerID: .claude, sourceID: "claude.oauth.claude-work")?.name, "work")
+        XCTAssertEqual(TerminalAccountSignInService.shellQuoted("it's"), #"'it'\''s'"#)
     }
 
     func testCodexMenuDistinguishesMissingAndStaleAccountValues() async throws {
@@ -1804,6 +1942,44 @@ final class AppModelTests: XCTestCase {
             if await condition() { return true }
             await Task.yield()
         }
+        return false
+    }
+}
+
+private final class TestAccountSignInService: AccountSignInServicing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var state: AccountFolderState = .missing
+    private var started: [String] = []
+    private var shouldFail = false
+    private let signIns = AsyncStream<Bool>.makeStream()
+
+    var startedSourceIDs: [String] { lock.withLock { started } }
+    var failsToStart: Bool {
+        get { lock.withLock { shouldFail } }
+        set { lock.withLock { shouldFail = newValue } }
+    }
+
+    func setState(_ value: AccountFolderState) {
+        lock.withLock { state = value }
+    }
+
+    func finishSignIn() {
+        signIns.continuation.yield(true)
+    }
+
+    func folderState(of directory: AccountDirectory) -> AccountFolderState {
+        lock.withLock { state }
+    }
+
+    func startSignIn(_ directory: AccountDirectory, locale: Locale) async throws {
+        try lock.withLock {
+            if shouldFail { throw CocoaError(.fileWriteUnknown) }
+            started.append(directory.sourceID)
+        }
+    }
+
+    func waitForSignIn(_ directory: AccountDirectory) async -> Bool {
+        for await signedIn in signIns.stream { return signedIn }
         return false
     }
 }

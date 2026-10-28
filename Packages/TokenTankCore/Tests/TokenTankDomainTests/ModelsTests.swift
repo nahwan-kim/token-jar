@@ -103,6 +103,29 @@ struct ModelsTests {
         #expect(decoded.disabledAccountSourceIDs == [CodexAccountSource.secondary.id])
     }
 
+    @Test("removed accounts default empty, round trip, override disabled, and join the exclusion set")
+    func removedAccountsPreference() throws {
+        let legacy = try JSONDecoder().decode(
+            UserPreferences.self,
+            from: Data(#"{"providers":[{"providerID":"claude","isVisible":false,"order":0}]}"#.utf8)
+        )
+        #expect(legacy.removedAccountSourceIDs.isEmpty)
+        #expect(legacy.normalized().hiddenProviderIDs == [.claude])
+
+        let work = DisabledAccount(providerID: .codex, sourceID: "codex.home.work")
+        let secondary = DisabledAccount(providerID: .codex, sourceID: CodexAccountSource.secondary.id)
+        let preferences = UserPreferences(
+            disabledAccounts: [work, secondary],
+            removedAccountSourceIDs: ["codex.home.work", "claude.oauth.claude-old"]
+        )
+        let decoded = try JSONDecoder().decode(UserPreferences.self, from: JSONEncoder().encode(preferences))
+        #expect(decoded == preferences)
+        #expect(decoded.normalized().disabledAccounts == [secondary])
+        #expect(decoded.excludedAccountSourceIDs == [
+            "codex.home.work", CodexAccountSource.secondary.id, "claude.oauth.claude-old",
+        ])
+    }
+
     @Test("excluding accounts leaves a single account as the provider quotas")
     func excludingAccounts() {
         let source = ProviderSourceDescriptor(
