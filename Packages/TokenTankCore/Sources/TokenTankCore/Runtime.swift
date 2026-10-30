@@ -98,6 +98,7 @@ public actor RefreshCoordinator {
     private var continuations: [UUID: AsyncStream<[ProviderID: CollectionState]>.Continuation] = [:]
     private var disabledAccountSourceIDs: Set<String> = []
     private var disabledProviderIDs: Set<ProviderID> = []
+    private let claudePromptGate = ClaudeKeychainPromptGate()
 
     /// Providers the scheduler, refresh-all and stale-surface refresh may collect.
     private var collectedProviders: [ProviderID] {
@@ -566,6 +567,12 @@ public actor RefreshCoordinator {
         let startedAt = await context.clock.monotonicNow()
         let correlationID = UUID()
 
+        // Background collections may still renew a readable session through Claude Code, but only a
+        // user action may show the Keychain dialog: Repair for every account that needs it, a manual
+        // refresh at most once and never for an account the user denied in the last six hours.
+        let allowsClaudeRecovery = providerID == .claude
+        let allowsClaudeKeychainPrompt = providerID == .claude
+            && (operation == .claudeRepair || isUserInitiated)
         let previous: ProviderSnapshot?
         if let current = states[providerID]?.snapshot {
             previous = current
@@ -576,12 +583,14 @@ public actor RefreshCoordinator {
         states[providerID] = .refreshing(previous: previous)
         emitStates()
 
-        let allowsClaudeRecovery = providerID == .claude
         let providerContext = self.context.scoped(
             to: providerID,
             correlationID: correlationID,
             isUserInitiated: isUserInitiated,
             allowsClaudeRecovery: allowsClaudeRecovery,
+            allowsClaudeKeychainPrompt: allowsClaudeKeychainPrompt,
+            appliesClaudePromptCooldown: operation != .claudeRepair,
+            claudePromptGate: claudePromptGate,
             disabledAccountSourceIDs: disabledAccountSourceIDs
         )
         let task = Task<ProviderSnapshot, Error> {
@@ -795,6 +804,9 @@ extension CollectionContext {
         correlationID: UUID = UUID(),
         isUserInitiated: Bool = false,
         allowsClaudeRecovery: Bool = false,
+        allowsClaudeKeychainPrompt: Bool = false,
+        appliesClaudePromptCooldown: Bool = true,
+        claudePromptGate: ClaudeKeychainPromptGate = ClaudeKeychainPromptGate(),
         disabledAccountSourceIDs: Set<String> = []
     ) -> CollectionContext {
         CollectionContext(
@@ -808,13 +820,22 @@ extension CollectionContext {
             claudeSession: ProviderScopedClaudeSessionProvider(
                 providerID: providerID,
                 base: claudeSession,
-                allowsClaudeRecovery: allowsClaudeRecovery
+                allowsClaudeRecovery: allowsClaudeRecovery,
+                allowsClaudeKeychainPrompt: allowsClaudeKeychainPrompt,
+                appliesPromptCooldown: appliesClaudePromptCooldown,
+                promptGate: claudePromptGate,
+                clock: clock
+            ),
+            antigravitySession: ProviderScopedAntigravitySessionProvider(
+                providerID: providerID,
+                base: antigravitySession
             ),
             clock: clock,
             diagnostics: NoDiagnostics(),
             correlationID: correlationID,
             isUserInitiated: isUserInitiated,
             allowsClaudeRecovery: allowsClaudeRecovery,
+            allowsClaudeKeychainPrompt: allowsClaudeKeychainPrompt,
             disabledAccountSourceIDs: disabledAccountSourceIDs
         )
     }
@@ -866,21 +887,69 @@ private actor ProviderScopedGrokSessionProvider: GrokSessionProviding {
     }
 }
 
+private struct ProviderScopedAntigravitySessionProvider: AntigravitySessionProviding {
+    let providerID: ProviderID
+    let base: any AntigravitySessionProviding
+
+    func accounts() async throws -> [AntigravityAccountRead] {
+        guard providerID == .antigravity else {
+            throw CollectionError(
+                kind: .sourceUnavailable,
+                diagnosticCode: "capability.antigravity-session.denied"
+            )
+        }
+        return try await base.accounts()
+    }
+}
+
+/// Remembers, per Claude account, a denied Keychain authorization so ordinary manual refreshes stop
+/// asking for that account for a while. Repair Claude Connection always asks.
+public actor ClaudeKeychainPromptGate {
+    public static let deniedDiagnosticCode = "claude.session.keychain.denied"
+    public static let cooldown: TimeInterval = 6 * 60 * 60
+
+    private var deniedUntil: [String: Date] = [:]
+
+    public init() {}
+
+    func allowsPrompt(account sourceID: String, now: Date) -> Bool {
+        deniedUntil[sourceID].map { now >= $0 } ?? true
+    }
+
+    func recordDenial(account sourceID: String, at now: Date) {
+        deniedUntil[sourceID] = now.addingTimeInterval(Self.cooldown)
+    }
+}
+
 private actor ProviderScopedClaudeSessionProvider: ClaudeSessionProviding {
     let providerID: ProviderID
     let base: any ClaudeSessionProviding
     let allowsClaudeRecovery: Bool
-    /// One interactive recovery (Keychain approval or Claude Code repair) per account per collection.
+    let allowsClaudeKeychainPrompt: Bool
+    /// Ordinary manual refreshes: one dialog per collection, none for a recently denied account.
+    let appliesPromptCooldown: Bool
+    let promptGate: ClaudeKeychainPromptGate
+    let clock: any TokenTankClock
+    /// One recovery (quiet owner refresh, or Keychain approval plus owner refresh) per account per collection.
     private var spentInteractionAccounts: Set<String> = []
+    private var promptOffered = false
 
     init(
         providerID: ProviderID,
         base: any ClaudeSessionProviding,
-        allowsClaudeRecovery: Bool
+        allowsClaudeRecovery: Bool,
+        allowsClaudeKeychainPrompt: Bool,
+        appliesPromptCooldown: Bool,
+        promptGate: ClaudeKeychainPromptGate,
+        clock: any TokenTankClock
     ) {
         self.providerID = providerID
         self.base = base
         self.allowsClaudeRecovery = allowsClaudeRecovery
+        self.allowsClaudeKeychainPrompt = allowsClaudeKeychainPrompt
+        self.appliesPromptCooldown = appliesPromptCooldown
+        self.promptGate = promptGate
+        self.clock = clock
     }
 
     func session(allowInteraction: Bool, rejectedAccessToken: String?) async throws -> ClaudeSession {
@@ -902,16 +971,39 @@ private actor ProviderScopedClaudeSessionProvider: ClaudeSessionProviding {
         rejectedAccessToken: String?
     ) async throws -> ClaudeSession {
         guard providerID == .claude else { throw deniedError }
-        if allowInteraction {
-            guard allowsClaudeRecovery, spentInteractionAccounts.insert(sourceID).inserted else {
-                throw deniedError
+        guard allowInteraction else {
+            return try await base.session(account: sourceID, allowInteraction: false, rejectedAccessToken: rejectedAccessToken)
+        }
+        guard allowsClaudeRecovery, allowsClaudeKeychainPrompt, spentInteractionAccounts.insert(sourceID).inserted else {
+            throw deniedError
+        }
+        if appliesPromptCooldown {
+            // Claimed before the gate check so concurrent accounts cannot both take the one dialog.
+            guard !promptOffered else {
+                return try await base.quietRecoverySession(account: sourceID, rejectedAccessToken: rejectedAccessToken)
+            }
+            promptOffered = true
+            guard await promptGate.allowsPrompt(account: sourceID, now: await clock.now()) else {
+                promptOffered = false
+                return try await base.quietRecoverySession(account: sourceID, rejectedAccessToken: rejectedAccessToken)
             }
         }
-        return try await base.session(
-            account: sourceID,
-            allowInteraction: allowInteraction,
-            rejectedAccessToken: rejectedAccessToken
-        )
+        do {
+            return try await base.session(
+                account: sourceID,
+                allowInteraction: true,
+                rejectedAccessToken: rejectedAccessToken
+            )
+        } catch let error as CollectionError where error.diagnosticCode == ClaudeKeychainPromptGate.deniedDiagnosticCode {
+            await promptGate.recordDenial(account: sourceID, at: await clock.now())
+            throw error
+        }
+    }
+
+    func quietRecoverySession(account sourceID: String, rejectedAccessToken: String?) async throws -> ClaudeSession {
+        guard providerID == .claude else { throw deniedError }
+        guard allowsClaudeRecovery, spentInteractionAccounts.insert(sourceID).inserted else { throw deniedError }
+        return try await base.quietRecoverySession(account: sourceID, rejectedAccessToken: rejectedAccessToken)
     }
 
     private var deniedError: CollectionError {
@@ -952,7 +1044,7 @@ private struct ProviderScopedCredentialStore: AppCredentialStore {
 
     private static func allowedNames(for providerID: ProviderID) -> Set<String> {
         switch providerID {
-        case .codex, .claude, .grok, .cursor, .doubao: []
+        case .codex, .claude, .grok, .cursor, .doubao, .antigravity: []
         }
     }
 }

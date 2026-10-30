@@ -120,7 +120,7 @@ jobs:
           entries = sources.get("providers")
           if not isinstance(entries, list):
               raise SystemExit("invalid ProviderSources providers list")
-          expected = {"codex", "claude", "grok", "cursor", "doubao"}
+          expected = {"codex", "claude", "grok", "cursor", "doubao", "antigravity"}
           actual = {entry.get("provider") for entry in entries}
           if actual != expected or len(entries) != len(expected):
               raise SystemExit(f"invalid ProviderSources provider set: {sorted(actual)}")
@@ -138,10 +138,11 @@ jobs:
               "grok": "watch",
               "cursor": "watch",
               "doubao": "watch",
+              "antigravity": "watch",
           }
           if statuses != expected_statuses:
               raise SystemExit(f"unexpected source statuses: {statuses}")
-          print("validated five-provider source decisions and production composition")
+          print("validated six-provider source decisions and production composition")
           privacy = plistlib.loads(Path("TokenTankApp/Supporting/PrivacyInfo.xcprivacy").read_bytes())
           accessed_types = privacy.get("NSPrivacyAccessedAPITypes")
           expected_accessed_types = [

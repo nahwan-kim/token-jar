@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "GrokProvider", targets: ["GrokProvider"]),
         .library(name: "CursorProvider", targets: ["CursorProvider"]),
         .library(name: "DoubaoProvider", targets: ["DoubaoProvider"]),
+        .library(name: "AntigravityProvider", targets: ["AntigravityProvider"]),
         .library(name: "TokenTankProviders", targets: ["TokenTankProviders"]),
     ],
     targets: [
@@ -30,6 +31,7 @@ let package = Package(
         .target(name: "GrokProvider", dependencies: ["TokenTankDomain", "TokenTankCore"]),
         .target(name: "CursorProvider", dependencies: ["TokenTankDomain", "TokenTankCore"]),
         .target(name: "DoubaoProvider", dependencies: ["TokenTankDomain", "TokenTankCore"]),
+        .target(name: "AntigravityProvider", dependencies: ["TokenTankDomain", "TokenTankCore"]),
         .target(
             name: "TokenTankProviders",
             dependencies: [
@@ -40,6 +42,7 @@ let package = Package(
                 "GrokProvider",
                 "CursorProvider",
                 "DoubaoProvider",
+                "AntigravityProvider",
             ]
         ),
         .target(
@@ -54,6 +57,7 @@ let package = Package(
         .testTarget(name: "GrokProviderTests", dependencies: ["GrokProvider", "TokenTankCore", "TokenTankDomain", "TokenTankTestSupport"]),
         .testTarget(name: "CursorProviderTests", dependencies: ["CursorProvider", "TokenTankCore", "TokenTankDomain", "TokenTankTestSupport"]),
         .testTarget(name: "DoubaoProviderTests", dependencies: ["DoubaoProvider", "TokenTankCore", "TokenTankDomain", "TokenTankTestSupport"]),
+        .testTarget(name: "AntigravityProviderTests", dependencies: ["AntigravityProvider", "TokenTankCore", "TokenTankDomain", "TokenTankTestSupport"]),
         .testTarget(name: "TokenTankProvidersTests", dependencies: ["TokenTankProviders", "TokenTankCore", "TokenTankDomain", "TokenTankTestSupport"]),
     ],
     swiftLanguageModes: [.v6]

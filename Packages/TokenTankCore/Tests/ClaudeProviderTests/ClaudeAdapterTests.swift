@@ -332,31 +332,36 @@ struct ClaudeAdapterTests {
         }
     }
 
-    @Test("explicit repair grants one attempt only when a read-only lookup needs it")
+    @Test("one recovery per collection: user actions may prompt, background collections stay quiet")
     func explicitRepairAfterReadOnlyFailure() async throws {
-        for rejectedByUsage in [false, true] {
-            let failure = CollectionError(kind: .authenticationRejected, diagnosticCode: "test.repair-required",
-                                          recoveryAction: .repairClaudeConnection)
-            let renewed = ClaudeSession(accessToken: "repaired-token", expiresAt: now.addingTimeInterval(3600))
-            var sessionResults: [Result<ClaudeSession, CollectionError>] = [.failure(failure), .success(renewed)]
-            var responses: [Result<NetworkResponse, CollectionError>] = [
-                .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
-                .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
-                .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
-            ]
-            if rejectedByUsage {
-                sessionResults.insert(.success(session), at: 0)
-                responses.insert(.success(NetworkResponse(statusCode: 401, headers: [:], body: Data())), at: 0)
+        for allowsPrompt in [false, true] {
+            for rejectedByUsage in [false, true] {
+                let failure = CollectionError(kind: .authenticationRejected, diagnosticCode: "test.repair-required",
+                                              recoveryAction: .repairClaudeConnection)
+                let renewed = ClaudeSession(accessToken: "repaired-token", expiresAt: now.addingTimeInterval(3600))
+                var sessionResults: [Result<ClaudeSession, CollectionError>] = [.failure(failure), .success(renewed)]
+                var responses: [Result<NetworkResponse, CollectionError>] = [
+                    .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+                    .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+                    .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+                ]
+                if rejectedByUsage {
+                    sessionResults.insert(.success(session), at: 0)
+                    responses.insert(.success(NetworkResponse(statusCode: 401, headers: [:], body: Data())), at: 0)
+                }
+                let sessions = MemoryClaudeSessionProvider(results: sessionResults)
+                let network = QueueNetworkClient(results: responses)
+                let snapshot = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
+                    network: network, claudeSession: sessions, isUserInitiated: true, allowsClaudeRecovery: true,
+                    allowsClaudeKeychainPrompt: allowsPrompt
+                ))
+                #expect(snapshot.quotas.first?.percentage.value == 24)
+                let reads: [Bool] = rejectedByUsage ? [false, false] : [false]
+                #expect(await sessions.allowInteractionRequests == (allowsPrompt ? reads + [true] : reads))
+                #expect(await sessions.quietRecoveryCount == (allowsPrompt ? 0 : 1))
+                #expect(await sessions.rejectedAccessTokens == (rejectedByUsage
+                    ? [nil, session.accessToken, session.accessToken] : [nil, nil]))
             }
-            let sessions = MemoryClaudeSessionProvider(results: sessionResults)
-            let network = QueueNetworkClient(results: responses)
-            let snapshot = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
-                network: network, claudeSession: sessions, isUserInitiated: true, allowsClaudeRecovery: true
-            ))
-            #expect(snapshot.quotas.first?.percentage.value == 24)
-            #expect(await sessions.allowInteractionRequests == (rejectedByUsage ? [false, false, true] : [false, true]))
-            #expect(await sessions.rejectedAccessTokens == (rejectedByUsage
-                ? [nil, session.accessToken, session.accessToken] : [nil, nil]))
         }
     }
 
@@ -370,7 +375,8 @@ struct ClaudeAdapterTests {
         ])
         do {
             _ = try await ClaudeAdapter().fetchSnapshot(context: TestContextFactory.make(
-                network: network, claudeSession: sessions, isUserInitiated: true, allowsClaudeRecovery: true
+                network: network, claudeSession: sessions, isUserInitiated: true, allowsClaudeRecovery: true,
+                allowsClaudeKeychainPrompt: true
             ))
             Issue.record("Expected exhausted repair budget")
         } catch let error as CollectionError {
@@ -403,7 +409,7 @@ struct ClaudeAdapterTests {
         }
     }
 
-    @Test("denied repair retains usage and the next background collection retries recovery")
+    @Test("denied repair retains usage and the next background collection recovers without prompting")
     func deniedRepairRetainsLastGoodUsage() async {
         let failure = CollectionError(kind: .keychainUnavailable, diagnosticCode: "test.keychain.denied",
                                       recoveryAction: .repairClaudeConnection)
@@ -432,7 +438,8 @@ struct ClaudeAdapterTests {
         #expect(previous == captured)
         #expect(error == failure)
         await coordinator.refresh(.claude)
-        #expect(await sessions.allowInteractionRequests == [false, false, true, false, true])
+        #expect(await sessions.allowInteractionRequests == [false, false, true, false])
+        #expect(await sessions.quietRecoveryCount == 1)
         // Profile and reset tickets are cached for the unchanged token.
         #expect(await network.requests.count == 4)
         guard case let .fresh(recovered) = await coordinator.state(for: .claude) else {
@@ -443,8 +450,8 @@ struct ClaudeAdapterTests {
         #expect(recovered.refreshedAt == now)
     }
 
-    @Test("background collection repairs an inaccessible native Keychain session before fetching usage")
-    func backgroundCollectionAuthorizesNativeKeychain() async throws {
+    @Test("background collection never shows the Keychain dialog; Repair asks once and recovers")
+    func backgroundCollectionWaitsForKeychainRepair() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -455,7 +462,9 @@ struct ClaudeAdapterTests {
                 "scopes": ["user:profile"],
             ]
         ])
+        let lookups = KeychainLookupLog()
         let reader = NativeClaudeCredentialReader(homeDirectory: root, keychainLookup: { allowed in
+            lookups.append(allowed)
             guard allowed else {
                 throw CollectionError(kind: .keychainUnavailable,
                                       diagnosticCode: "claude.session.keychain.unavailable")
@@ -475,14 +484,31 @@ struct ClaudeAdapterTests {
         ))
 
         await coordinator.refresh(.claude)
+        guard case let .stale(_, failure, _) = await coordinator.state(for: .claude) else {
+            Issue.record("Expected a background collection to wait for Repair instead of prompting")
+            return
+        }
+        #expect(failure.kind == .keychainUnavailable)
+        #expect(failure.recoveryAction == .repairClaudeConnection)
+        #expect(lookups.values.allSatisfy { !$0 })
+        #expect(await network.requests.isEmpty)
 
+        await coordinator.repairClaudeConnection()
         guard case let .fresh(snapshot) = await coordinator.state(for: .claude) else {
-            Issue.record("Expected automatic Keychain authorization instead of a stuck repair-required state")
+            Issue.record("Expected Repair to approve the Keychain read")
             return
         }
         #expect(snapshot.quotas.first?.percentage.value == 24)
+        #expect(lookups.values.filter { $0 } == [true])
         #expect(await network.requests.count == 3)
         #expect(await refresher.count == 0)
+    }
+
+    private final class KeychainLookupLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: [Bool] = []
+        var values: [Bool] { lock.withLock { storage } }
+        func append(_ allowed: Bool) { lock.withLock { storage.append(allowed) } }
     }
 
     private actor CountingAuthRefresher: ClaudeAuthRefreshing {
@@ -529,7 +555,8 @@ struct ClaudeAdapterTests {
             }
             #expect(snapshot.quotas.first?.percentage.value == 24)
             #expect(await owner.refreshCount == 1)
-            #expect(await owner.interactionFlags == [false, true, false])
+            // Background renewal runs the owner but never asks for Keychain approval.
+            #expect(await owner.interactionFlags == [false, false, false])
             #expect(await network.requests.map { $0.headers["Authorization"] } == (
                 rejectedByHTTP
                     ? ["Bearer old-token", "Bearer new-token", "Bearer new-token", "Bearer new-token"]
@@ -1144,7 +1171,8 @@ struct ClaudeAdapterTests {
         let work = ClaudeAccount(sourceID: "claude.oauth.claude-work")
         let base = AccountClaudeSessions(accounts: [.default, work], sessions: [:])
         let scoped = TestContextFactory.make(claudeSession: base).scoped(
-            to: .claude, isUserInitiated: false, allowsClaudeRecovery: true
+            to: .claude, isUserInitiated: true, allowsClaudeRecovery: true, allowsClaudeKeychainPrompt: true,
+            appliesClaudePromptCooldown: false
         )
         _ = try? await scoped.claudeSession.session(account: ClaudeAccount.defaultSourceID, allowInteraction: true, rejectedAccessToken: nil)
         _ = try? await scoped.claudeSession.session(account: work.sourceID, allowInteraction: true, rejectedAccessToken: nil)

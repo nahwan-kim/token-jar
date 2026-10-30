@@ -253,6 +253,7 @@ struct ClaudeSessionTests {
 
         let first = Task { try await reader.readKeychain(allowInteraction: false) }
         await lookup.waitForCalls(1)
+        // A prompt-capable read never joins the silent one; while it is stuck, nothing new starts.
         let duplicate = Task { try await reader.readKeychain(allowInteraction: true) }
 
         await expectError(
@@ -264,7 +265,7 @@ struct ClaudeSessionTests {
         }
         await expectError(
             .keychainUnavailable,
-            code: "claude.session.keychain.timeout",
+            code: "claude.session.keychain.query-in-flight",
             recoveryAction: .retry
         ) {
             try await duplicate.value
@@ -288,6 +289,53 @@ struct ClaudeSessionTests {
         #expect(recovered == Data("recovered".utf8))
         #expect(lookup.callCount == 2)
         #expect(lookup.interactionFlags == [false, false])
+    }
+
+    @Test("a prompt-capable Keychain read waits for an in-flight silent read, then asks itself")
+    func promptCapableReadDoesNotJoinSilentRead() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lookup = GatedNativeKeychainLookup(late: nil, recovered: Data("approved".utf8))
+        let reader = NativeClaudeCredentialReader(
+            homeDirectory: root,
+            backgroundTimeout: 2,
+            manualTimeout: 2,
+            keychainLookup: { allowInteraction in
+                lookup.read(allowInteraction: allowInteraction)
+            }
+        )
+
+        let silent = Task { try await reader.readKeychain(allowInteraction: false) }
+        await lookup.waitForCalls(1)
+        let prompt = Task { try await reader.readKeychain(allowInteraction: true) }
+        try await Task.sleep(for: .milliseconds(50))
+        lookup.releaseFirst()
+
+        #expect(try await silent.value == nil)
+        #expect(try await prompt.value == Data("approved".utf8))
+        #expect(lookup.interactionFlags == [false, true])
+    }
+
+    @Test("a Repair that may prompt does not join a quiet recovery already in flight")
+    func promptCapableRepairDoesNotJoinQuietRecovery() async throws {
+        let reader = SilentBlockedReader(data: credentials(token: "approved-token", expiry: now.addingTimeInterval(3_600)))
+        let sessions = provider(reader: reader)
+
+        let quiet = Task {
+            try await sessions.quietRecoverySession(account: ClaudeAccount.defaultSourceID, rejectedAccessToken: nil)
+        }
+        await reader.waitUntilSilentStarted()
+        let repair = Task {
+            try await sessions.session(account: ClaudeAccount.defaultSourceID, allowInteraction: true, rejectedAccessToken: nil)
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        await reader.releaseSilent()
+
+        await expectError(.keychainUnavailable, code: "test.keychain.locked") {
+            try await quiet.value
+        }
+        #expect(try await repair.value.accessToken == "approved-token")
+        #expect(await reader.interactionFlags == [false, true])
     }
 
     @Test("cancelled Keychain waiter returns promptly without starting a replacement query")
@@ -1334,6 +1382,43 @@ private struct AdvancingClaudeCredentialReader: ClaudeCredentialReading {
     func readKeychain(allowInteraction: Bool) async throws -> Data? {
         await clock.advance(by: .seconds(2))
         return data
+    }
+}
+
+/// No file; the silent Keychain read blocks until released and then fails, a prompting read succeeds.
+private actor SilentBlockedReader: ClaudeCredentialReading {
+    private let data: Data
+    private var released = false
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var interactionFlags: [Bool] = []
+
+    init(data: Data) {
+        self.data = data
+    }
+
+    func readFile() async throws -> Data? { nil }
+
+    func readKeychain(allowInteraction: Bool) async throws -> Data? {
+        interactionFlags.append(allowInteraction)
+        guard !allowInteraction else { return data }
+        startWaiters.forEach { $0.resume() }
+        startWaiters.removeAll()
+        if !released {
+            await withCheckedContinuation { releaseWaiters.append($0) }
+        }
+        throw CollectionError(kind: .keychainUnavailable, diagnosticCode: "test.keychain.locked")
+    }
+
+    func waitUntilSilentStarted() async {
+        if interactionFlags.contains(false) { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func releaseSilent() {
+        released = true
+        releaseWaiters.forEach { $0.resume() }
+        releaseWaiters.removeAll()
     }
 }
 

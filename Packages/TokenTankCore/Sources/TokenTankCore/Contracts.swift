@@ -232,11 +232,14 @@ public struct CollectionContext: Sendable {
     public let doubaoPlan: any DoubaoPlanUsageReader
     public let grokSession: any GrokSessionProviding
     public let claudeSession: any ClaudeSessionProviding
+    public let antigravitySession: any AntigravitySessionProviding
     public let clock: any TokenTankClock
     public let diagnostics: any DiagnosticsSink
     public let correlationID: UUID
     public let isUserInitiated: Bool
     public let allowsClaudeRecovery: Bool
+    /// Whether Claude recovery may show the macOS Keychain authorization dialog; only user actions.
+    public let allowsClaudeKeychainPrompt: Bool
     /// Accounts the user turned off or removed; multi-account providers skip them entirely.
     public let disabledAccountSourceIDs: Set<String>
 
@@ -249,11 +252,13 @@ public struct CollectionContext: Sendable {
         doubaoPlan: any DoubaoPlanUsageReader,
         grokSession: any GrokSessionProviding,
         claudeSession: any ClaudeSessionProviding,
+        antigravitySession: any AntigravitySessionProviding = NoAntigravitySessionProvider(),
         clock: any TokenTankClock,
         diagnostics: any DiagnosticsSink,
         correlationID: UUID = UUID(),
         isUserInitiated: Bool = false,
         allowsClaudeRecovery: Bool = false,
+        allowsClaudeKeychainPrompt: Bool = false,
         disabledAccountSourceIDs: Set<String> = []
     ) {
         self.network = network
@@ -264,11 +269,13 @@ public struct CollectionContext: Sendable {
         self.doubaoPlan = doubaoPlan
         self.grokSession = grokSession
         self.claudeSession = claudeSession
+        self.antigravitySession = antigravitySession
         self.clock = clock
         self.diagnostics = diagnostics
         self.correlationID = correlationID
         self.isUserInitiated = isUserInitiated
         self.allowsClaudeRecovery = allowsClaudeRecovery
+        self.allowsClaudeKeychainPrompt = allowsClaudeKeychainPrompt
         self.disabledAccountSourceIDs = disabledAccountSourceIDs
     }
 }

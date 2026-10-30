@@ -775,9 +775,14 @@ private struct FailureView: View {
         case .retry: "action.retry"
         case .repairClaudeConnection: "action.repair_claude_connection"
         case .waitForNextRefresh: "action.wait"
-        case .runSourceCLI: "action.run_grok_cli"
+        case .runSourceCLI:
+            providerID == .antigravity ? "action.run_cli_proxy" : "action.run_grok_cli"
         case .signInSourceApp:
-            providerID == .claude ? "action.sign_in_claude" : "action.sign_in_source"
+            switch providerID {
+            case .claude: "action.sign_in_claude"
+            case .antigravity: "action.sign_in_cli_proxy"
+            default: "action.sign_in_source"
+            }
         case .signInTokenTank: "action.sign_in_token_tank"
         case .allowAccessInSystemSettings: "action.allow_system_settings"
         case .none: "action.none"
@@ -803,6 +808,7 @@ struct QuotaValueView: View {
                 Text(verbatim: QuotaDisplayFormatter.name(for: quota, locale: locale))
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                     .help(QuotaDisplayFormatter.name(for: quota, locale: locale))
 
                 if let reset = quota.resetsAt {
@@ -935,6 +941,8 @@ enum QuotaDisplayFormatter {
             filtered = quotas.filter(isCursorPopupQuota)
         case .doubao:
             filtered = quotas.filter(isDoubaoPopupQuota)
+        case .antigravity:
+            filtered = quotas
         }
         return filtered.isEmpty ? quotas : filtered
     }
@@ -981,6 +989,8 @@ enum QuotaDisplayFormatter {
                 return nil
             }
             return readableName(normalized, locale: locale)
+        case .antigravity:
+            return quotas.lazy.compactMap { $0.sourceFields["plan"] }.first
         case .claude, .grok:
             return nil
         }
@@ -1251,6 +1261,17 @@ enum QuotaDisplayFormatter {
             case nil: window = korean ? "사용량" : "Usage"
             }
             return window
+        }
+        if let group = quota.sourceFields["antigravityGroup"] {
+            let window: String
+            if quota.originalName.hasSuffix(".5h") {
+                window = korean ? "5시간" : "5-hour"
+            } else if quota.originalName.hasSuffix(".weekly") {
+                window = korean ? "주간" : "Weekly"
+            } else {
+                window = readableName(quota.sourceFields["window"] ?? "", locale: locale)
+            }
+            return "\(group) \(window)"
         }
         switch quota.originalName {
         case "session", "five_hour", "5h":
@@ -1848,6 +1869,7 @@ struct ProviderSettingsView: View {
         case .grok: "source.detail.grok"
         case .cursor: "source.detail.cursor"
         case .doubao: "source.detail.doubao"
+        case .antigravity: "source.detail.antigravity"
         }
     }
 

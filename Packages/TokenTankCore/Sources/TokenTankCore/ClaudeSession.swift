@@ -56,8 +56,8 @@ public struct ClaudeAccount: Sendable, Equatable, Identifiable {
 }
 
 public protocol ClaudeSessionProviding: Sendable {
-    /// `false` performs a read-only lookup. `true` grants one bounded recovery attempt,
-    /// used when a scheduled collection or manual retry needs to repair the session.
+    /// `false` performs a read-only lookup. `true` grants one bounded recovery attempt that may
+    /// show the macOS Keychain authorization dialog; only a user action asks for it.
     func session(allowInteraction: Bool, rejectedAccessToken: String?) async throws -> ClaudeSession
     /// Every Claude Code sign-in on this Mac, default first.
     func accounts() async throws -> [ClaudeAccount]
@@ -66,6 +66,10 @@ public protocol ClaudeSessionProviding: Sendable {
         allowInteraction: Bool,
         rejectedAccessToken: String?
     ) async throws -> ClaudeSession
+    /// One bounded recovery that never shows the Keychain authorization dialog: silent rereads and,
+    /// for an expired or rejected token Token Jar can still read, one Claude Code owner refresh.
+    /// Background collections use it, so a lost Keychain grant waits for the user instead of prompting.
+    func quietRecoverySession(account sourceID: String, rejectedAccessToken: String?) async throws -> ClaudeSession
 }
 
 public extension ClaudeSessionProviding {
@@ -86,6 +90,11 @@ public extension ClaudeSessionProviding {
             )
         }
         return try await session(allowInteraction: allowInteraction, rejectedAccessToken: rejectedAccessToken)
+    }
+
+    /// Sources without an owner refresh only reread silently.
+    func quietRecoverySession(account sourceID: String, rejectedAccessToken: String?) async throws -> ClaudeSession {
+        try await session(account: sourceID, allowInteraction: false, rejectedAccessToken: rejectedAccessToken)
     }
 }
 
@@ -207,7 +216,7 @@ final class ClaudeKeychainQueryGate: @unchecked Sendable {
         )
     }
 
-    private static func inFlightError() -> CollectionError {
+    static func inFlightError() -> CollectionError {
         CollectionError(
             kind: .keychainUnavailable,
             diagnosticCode: "claude.session.keychain.query-in-flight",
@@ -228,6 +237,7 @@ actor NativeClaudeCredentialReader: ClaudeCredentialReading {
     private let backgroundTimeout: TimeInterval
     private let manualTimeout: TimeInterval
     private var keychainQuery: ClaudeKeychainQueryGate?
+    private var keychainQueryAllowsInteraction = false
 
     init(
         homeDirectory: URL,
@@ -285,6 +295,15 @@ actor NativeClaudeCredentialReader: ClaudeCredentialReading {
         if keychainQuery?.isCompleted == true {
             keychainQuery = nil
         }
+        if allowInteraction, let pending = keychainQuery, !keychainQueryAllowsInteraction {
+            // A no-UI lookup cannot show the dialog: let it finish, then ask in a lookup of our own.
+            _ = try? await wait(for: pending, timeout: backgroundTimeout)
+            try Task.checkCancellation()
+            if keychainQuery === pending {
+                guard pending.isCompleted else { throw ClaudeKeychainQueryGate.inFlightError() }
+                keychainQuery = nil
+            }
+        }
         let gate: ClaudeKeychainQueryGate
         if let keychainQuery {
             gate = keychainQuery
@@ -292,6 +311,7 @@ actor NativeClaudeCredentialReader: ClaudeCredentialReading {
             let lookup = keychainLookup
             let newGate = ClaudeKeychainQueryGate()
             keychainQuery = newGate
+            keychainQueryAllowsInteraction = allowInteraction
             gate = newGate
             DispatchQueue.global(qos: .utility).async {
                 newGate.complete(Result { try lookup(allowInteraction) })
@@ -348,6 +368,13 @@ actor NativeClaudeCredentialReader: ClaudeCredentialReading {
             return data
         case errSecItemNotFound:
             return nil
+        case errSecUserCanceled where allowInteraction, errSecAuthFailed where allowInteraction:
+            // The user dismissed or denied the authorization dialog.
+            throw CollectionError(
+                kind: .keychainUnavailable,
+                diagnosticCode: ClaudeKeychainPromptGate.deniedDiagnosticCode,
+                recoveryAction: .repairClaudeConnection
+            )
         default:
             throw CollectionError(
                 kind: .keychainUnavailable,
@@ -450,6 +477,7 @@ actor ClaudeAccountSessionProvider {
     private var repairTask: Task<ClaudeSession, Error>?
     private var repairID: UUID?
     private var repairWaiters: ClaudeRepairWaiters?
+    private var repairAllowsKeychainPrompt = false
     private var rejectedFileToken: String?
     private var rejectedKeychainToken: String?
 
@@ -465,6 +493,7 @@ actor ClaudeAccountSessionProvider {
 
     func session(
         allowInteraction: Bool,
+        allowsKeychainPrompt: Bool = true,
         rejectedAccessToken: String?
     ) async throws -> ClaudeSession {
         try Task.checkCancellation()
@@ -482,7 +511,14 @@ actor ClaudeAccountSessionProvider {
             throw repairRequired()
         }
 
-        if let repairTask, let repairWaiters {
+        while let repairTask, let repairWaiters {
+            if allowsKeychainPrompt, !repairAllowsKeychainPrompt {
+                // A quiet repair cannot show the Keychain dialog this request may need: let it
+                // finish, then start a repair of our own.
+                _ = try? await repairTask.value
+                try Task.checkCancellation()
+                continue
+            }
             return try await waitForRepair(
                 repairTask,
                 waiters: repairWaiters,
@@ -496,9 +532,13 @@ actor ClaudeAccountSessionProvider {
         waiters.insert(waiterID)
         repairID = id
         repairWaiters = waiters
+        repairAllowsKeychainPrompt = allowsKeychainPrompt
         let task = Task {
             do {
-                let session = try await self.repair(rejectedAccessToken: rejectedAccessToken)
+                let session = try await self.repair(
+                    rejectedAccessToken: rejectedAccessToken,
+                    allowsKeychainPrompt: allowsKeychainPrompt
+                )
                 self.settleRepair(id: id)
                 return session
             } catch {
@@ -544,9 +584,9 @@ actor ClaudeAccountSessionProvider {
         }
     }
 
-    private func repair(rejectedAccessToken: String?) async throws -> ClaudeSession {
+    private func repair(rejectedAccessToken: String?, allowsKeychainPrompt: Bool) async throws -> ClaudeSession {
         let initialState = try await credentialState(
-            allowInteraction: true,
+            allowInteraction: allowsKeychainPrompt,
             rejectedAccessToken: rejectedAccessToken
         )
         try Task.checkCancellation()
@@ -768,6 +808,21 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
         }
         return try await provider.session(
             allowInteraction: allowInteraction,
+            rejectedAccessToken: rejectedAccessToken
+        )
+    }
+
+    public func quietRecoverySession(account sourceID: String, rejectedAccessToken: String?) async throws -> ClaudeSession {
+        guard let provider = accountProviders[sourceID] ?? defaultProviderIfUndiscovered(sourceID) else {
+            throw CollectionError(
+                kind: .externalSessionMissing,
+                diagnosticCode: "claude.session.account-missing",
+                recoveryAction: .signInSourceApp
+            )
+        }
+        return try await provider.session(
+            allowInteraction: true,
+            allowsKeychainPrompt: false,
             rejectedAccessToken: rejectedAccessToken
         )
     }

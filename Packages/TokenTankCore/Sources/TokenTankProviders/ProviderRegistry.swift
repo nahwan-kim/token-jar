@@ -1,3 +1,4 @@
+import AntigravityProvider
 import ClaudeProvider
 import CodexProvider
 import CursorProvider
@@ -6,7 +7,7 @@ import GrokProvider
 import TokenTankCore
 
 public enum TokenTankProviderRegistry {
-    /// Returns the five reviewed v1 sources in the fixed Provider order.
+    /// Returns the reviewed sources in the fixed Provider order.
     public static func defaultAdapters() -> [any ProviderAdapter] {
         [
             CodexAdapter(),
@@ -14,6 +15,7 @@ public enum TokenTankProviderRegistry {
             GrokAdapter(),
             CursorAdapter(),
             DoubaoAdapter(),
+            AntigravityAdapter(),
         ]
     }
 }

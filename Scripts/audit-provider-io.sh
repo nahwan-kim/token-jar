@@ -8,7 +8,7 @@ readonly SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd 
 readonly REPOSITORY_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)"
 readonly SOURCES_ROOT="$REPOSITORY_ROOT/Packages/TokenTankCore/Sources"
 readonly REPORT_FILE="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/tokentank-provider-io.XXXXXX")"
-readonly TARGETS=(CodexProvider ClaudeProvider GrokProvider CursorProvider DoubaoProvider)
+readonly TARGETS=(CodexProvider ClaudeProvider GrokProvider CursorProvider DoubaoProvider AntigravityProvider)
 
 failed=0
 scanned_files=0
@@ -200,4 +200,4 @@ if (( failed != 0 )); then
   exit 1
 fi
 
-printf 'Provider I/O audit: PASS (%d Swift file(s) scanned; five fixed targets only)\n' "$scanned_files"
+printf 'Provider I/O audit: PASS (%d Swift file(s) scanned; six fixed targets only)\n' "$scanned_files"

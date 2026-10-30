@@ -84,7 +84,7 @@ struct AccountDirectory: Equatable, Sendable {
             sourceID = CodexAccountSource.homeDirectory(named: ".codex-\(name)")?.id
         case .claude:
             sourceID = ClaudeAccount.homeDirectorySourceID(named: ".claude-\(name)")
-        case .grok, .cursor, .doubao:
+        case .grok, .cursor, .doubao, .antigravity:
             sourceID = nil
         }
         guard let sourceID else { return nil }
@@ -230,7 +230,7 @@ struct TerminalAccountSignInService: AccountSignInServicing {
                 let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { return false }
             return root["oauthAccount"] is [String: Any]
-        case .grok, .cursor, .doubao:
+        case .grok, .cursor, .doubao, .antigravity:
             return false
         }
     }
@@ -604,6 +604,7 @@ final class AppModel: ObservableObject {
                 doubaoPlan: ArkCLIPlanUsageReader(),
                 grokSession: GrokOAuthSessionProvider(clock: clock),
                 claudeSession: ClaudeCodeSessionProvider(clock: clock),
+                antigravitySession: CLIProxyAntigravitySessionProvider(clock: clock),
                 clock: clock,
                 diagnostics: diagnostics
             )

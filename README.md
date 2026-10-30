@@ -4,7 +4,7 @@
 
 <p align="center">
   <strong>AI 사용량은 한곳에. 집중은 하던 일에.</strong><br>
-  Codex · Claude · Grok · Cursor · Doubao를 위한 가벼운 macOS 메뉴 막대 앱
+  Codex · Claude · Grok · Cursor · Doubao · Antigravity를 위한 가벼운 macOS 메뉴 막대 앱
 </p>
 
 <p align="center">
@@ -31,7 +31,7 @@
 - **서비스가 제공한 값 그대로** — 사용량·잔여량의 방향을 구분하고, 제공되지 않은 값은 추정하지 않습니다.
 - **계정별 확인** — Codex(`~/.codex`, `CODEX_HOME`, `~/.codex-*`), Claude(기본 로그인, `CLAUDE_CONFIG_DIR`, `~/.claude-*`), Grok(`~/.grok/auth.json`의 로그인 항목마다)에 로그인된 계정을 찾아 이메일로 구분해 따로 표시합니다. 같은 계정이 두 곳에 있으면 한 번만 보여 주고, 사라진 계정은 다음 확인에서 빠집니다. 메뉴 막대의 표시·순서·대표 한도 설정은 계정마다 적용됩니다. Codex·Claude 계정이 둘 이상이면 설정에서 계정마다 끌 수 있고, 끈 계정은 표시하지 않으며 사용량도 조회하지 않습니다(마지막으로 켜진 계정 하나는 끌 수 없음).
 - **계정 추가·삭제** — 설정의 Codex·Claude 아래 ‘계정 추가…’에 이름(영문 소문자·숫자·`-`·`_`)을 넣으면 `~/.codex-<이름>` 또는 `~/.claude-<이름>` 폴더로 터미널에서 공식 CLI 로그인(`codex login`을 파일 저장소로, `claude auth login`)을 엽니다. 로그인이 끝나면 계정이 자동으로 나타나며, Token Jar는 비밀번호나 토큰을 다루지 않습니다. 브라우저에 이미 로그인된 계정으로 진행돼 목록에 있는 계정과 같아지면 한 번만 표시하고 그 사실을 설정에 알려 줍니다. 다른 계정을 쓰려면 브라우저에서 로그아웃한 뒤 같은 이름으로 다시 추가하면 로그인을 다시 엽니다. 이렇게 이름 붙은 폴더의 계정은 ‘계정 삭제’로 목록에서 뺄 수 있습니다. 삭제는 로그인 파일·키체인을 건드리지 않고 표시와 조회만 멈추며, 같은 이름으로 다시 추가하면 로그인 없이 바로 돌아옵니다. 남은 계정은 하나여도 목록에 그대로 보입니다. 기본 로그인과 `CODEX_HOME`·`CLAUDE_CONFIG_DIR` 계정, 마지막으로 켜진 계정은 삭제할 수 없습니다.
-- **결과에 맞춘 자동 확인** — 서비스마다 다음 확인 시각을 따로 잡습니다. 성공하면 5분 뒤, 일시 오류면 60초 뒤(연속 실패 시 5분까지 두 배씩), 429면 `Retry-After`와 60초 중 늦은 시각, 인증 조치가 필요하면 60초마다 조용히 다시 읽습니다. Mac이 잠자는 동안에는 확인하지 않고, 깨어나면 네트워크가 연결될 때까지(최대 30초) 기다립니다. 네트워크가 끊겼다 돌아오면 그 때문에 오래된 서비스를 바로 다시 확인합니다. 사용량 창이나 메뉴를 열면 마지막 성공이 1분보다 오래된 서비스를 확인합니다. 수동 새로고침은 서비스별로 마지막 확인 시작 후 30초 안이면 현재 상태를 그대로 씁니다(**Claude 연결 복구**는 예외). 동시에 두 서비스까지 확인하며 하나가 끝나면 바로 다음을 시작합니다. Claude는 매 수집을 원본 자격 증명의 조용한 재읽기로 시작하고, 필요한 경우 그 수집 안에서만 네이티브 키체인 승인과 제한된 Claude Code 복구를 각각 최대 한 번 시도합니다. 진행 상태를 화면에 표시하며, 실패하면 앱 실행 중 마지막 성공 값과 오류 상태를 구분합니다.
+- **결과에 맞춘 자동 확인** — 서비스마다 다음 확인 시각을 따로 잡습니다. 성공하면 5분 뒤, 일시 오류면 60초 뒤(연속 실패 시 5분까지 두 배씩), 429면 `Retry-After`와 60초 중 늦은 시각, 인증 조치가 필요하면 60초마다 조용히 다시 읽습니다. Mac이 잠자는 동안에는 확인하지 않고, 깨어나면 네트워크가 연결될 때까지(최대 30초) 기다립니다. 네트워크가 끊겼다 돌아오면 그 때문에 오래된 서비스를 바로 다시 확인합니다. 사용량 창이나 메뉴를 열면 마지막 성공이 1분보다 오래된 서비스를 확인합니다. 수동 새로고침은 서비스별로 마지막 확인 시작 후 30초 안이면 현재 상태를 그대로 씁니다(**Claude 연결 복구**는 예외). 동시에 두 서비스까지 확인하며 하나가 끝나면 바로 다음을 시작합니다. Claude는 매 수집을 원본 자격 증명의 조용한 재읽기로 시작하고, 필요한 경우 그 수집 안에서만 제한된 Claude Code 복구를 최대 한 번 시도합니다. macOS 키체인 승인창은 사용자가 누른 새로고침이나 **Claude 연결 복구**에서만 뜹니다. 진행 상태를 화면에 표시하며, 실패하면 앱 실행 중 마지막 성공 값과 오류 상태를 구분합니다.
 - **한국어와 English** — 설정에서 바로 전환합니다.
 - **로그인 시 자동 실행 선택** — 설정에서 ‘로그인 시 실행’을 직접 켜거나 끌 수 있습니다. macOS 승인이 필요하면 시스템 설정에서 허용하며, 기본값은 꺼짐입니다.
 - **네이티브 macOS 앱** — SwiftUI 기반. Dock 아이콘과 내장 브라우저 없이 동작하며, Sparkle 업데이트 창에서 새 버전을 내려받아 설치·재시작할 수 있습니다.
@@ -55,7 +55,7 @@ Gatekeeper 전체 비활성화나 quarantine 속성 제거는 필요하지 않�
 3. 설정에서 표시할 서비스와 대표 한도를 선택합니다.
 4. 필요하면 설정의 ‘로그인 시 실행’을 켜고 macOS 시스템 설정에서 승인을 완료합니다. 이 옵션은 기본으로 꺼져 있습니다.
 
-Token Jar 자체 계정은 필요하지 않습니다. Claude의 자동 확인과 일반 수동 새로고침은 먼저 원본 저장소를 승인창 없이 다시 읽습니다. 세션 복구가 필요하면 화면 잠금이 해제된 상태에서 해당 수집에 한해 macOS 키체인 승인을 최대 한 번 요청하고, 만료되거나 거부된 자격 증명은 Claude Code CLI `/usage`를 최대 한 번 제한적으로 실행해 소유자 갱신을 시도합니다. 승인 거부는 현재 시도를 끝내며 추가 CLI나 반복 승인창을 열지 않고, 다음 주기에서 다시 시도할 수 있습니다. **Claude 연결 복구**는 다음 주기를 기다리지 않는 즉시 수동 재시도입니다. 로그인이 없거나 폐기된 경우에는 `claude auth login`으로 Claude Code CLI에 다시 로그인해야 하며, 웹이나 Claude Desktop 로그인으로 대체되지 않습니다. Grok은 승인된 범위에서 만료 직전 OAuth 세션을 자동 갱신합니다.
+Token Jar 자체 계정은 필요하지 않습니다. Claude의 자동 확인과 일반 수동 새로고침은 먼저 원본 저장소를 승인창 없이 다시 읽습니다. 세션 복구가 필요하면 해당 수집에 한해, 만료되거나 거부된 자격 증명은 Claude Code CLI `/usage`를 최대 한 번 제한적으로 실행해 소유자 갱신을 시도합니다. **자동 확인은 macOS 키체인 승인창을 절대 띄우지 않습니다.** Claude Code는 토큰을 갱신할 때마다 키체인 항목을 다시 써서 이전에 준 승인이 풀리는데, 이때 자동 확인은 **Claude 연결 복구** 버튼을 표시하고 기다립니다. 승인창은 화면 잠금이 해제된 상태에서 사용자가 누른 **Claude 연결 복구**(필요한 계정마다)나 수동 새로고침(한 번에 최대 하나)에서만 뜹니다. 어떤 계정의 승인을 거부하면 그 계정은 6시간 동안 수동 새로고침에서 승인창 없이 조용히 시도하고, **Claude 연결 복구**는 언제든 다시 묻습니다. 로그인이 없거나 폐기된 경우에는 `claude auth login`으로 Claude Code CLI에 다시 로그인해야 하며, 웹이나 Claude Desktop 로그인으로 대체되지 않습니다. Grok은 승인된 범위에서 만료 직전 OAuth 세션을 자동 갱신합니다.
 
 ## 지원하는 서비스
 
@@ -66,16 +66,17 @@ Token Jar 자체 계정은 필요하지 않습니다. Claude의 자동 확인과
 | **Grok** | Grok CLI 세션으로 조회한 SuperGrok 크레딧 (세션 만료 시 설치된 Grok CLI가 스스로 갱신하도록 `grok models`를 수집당 한 번 실행, 프록시 우선, 사용량 누락 시 동일 세션 bearer의 제한된 billing fallback) | Grok CLI 설치·로그인 및 `~/.grok/auth.json` |
 | **Cursor** | Cursor 로컬 세션으로 조회한 계정 사용량 요약 | Cursor 앱 로그인 |
 | **Doubao** | 공식 `arkcli usage plan --format json`의 플랜 한도 | `arkcli` 설치 및 유효한 SSO 로그인 |
+| **Antigravity** | Google Code Assist 할당량 요약의 Gemini·Claude/GPT 5시간·주간 한도와 플랜 이름 | [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)의 Antigravity 로그인(`~/.cli-proxy-api/auths/antigravity-*.json` 또는 `~/.cli-proxy-api/antigravity-*.json`)과 실행 중인 CLIProxyAPI |
 
 Claude는 웹·데스크톱 앱과 별개인 **Claude Code 로그인**을 사용합니다. 로그인이 여러 개면(`CLAUDE_CONFIG_DIR`, `~/.claude-*`) 각 디렉터리의 `Claude Code-credentials-<디렉터리 경로 SHA-256 앞 8자리>` 키체인 항목 또는 `<디렉터리>/.credentials.json`을 계정으로 보고, 이메일은 그 디렉터리의 `.claude.json`에서 가져옵니다. 아래의 복구 한도(승인·CLI 실행 각 1회)는 계정마다 따로 적용되며, 해당 계정의 복구에는 `CLAUDE_CONFIG_DIR`을 넘겨 그 로그인만 갱신하게 합니다. 모든 Claude 수집은 정확한 원본 파일·키체인 계정을 비대화형으로 다시 읽는 것으로 시작합니다. 바뀐 유효 토큰이 있으면 채택하고, 토큰 만료가 60초 이내이거나 사용량 API가 HTTP 401을 반환하는 등 복구가 필요한 경우 해당 수집에 한 번뿐인 복구 기회를 사용합니다. HTTP 403은 복구를 시작하지 않습니다. 복구 실패 시 마지막 성공 값을 오래된 상태로 유지하고 **Claude 연결 복구** 동작을 표시합니다.
 
-자동 확인과 일반 수동 새로고침 모두 Claude 복구 권한을 가지며, `isUserInitiated`는 실제 시작 원인을 그대로 나타낼 뿐 복구 권한을 결정하지 않습니다. 한 수집에서 화면 잠금 해제 가드 뒤의 네이티브 키체인 승인은 최대 한 번, 만료·거부된 자격 증명을 위한 제한된 Claude Code `/usage` 소유자 실행도 최대 한 번뿐입니다. 승인 거부나 실패는 현재 시도를 즉시 중단하고 추가 CLI·승인창 반복을 만들지 않으며, 다음 자동 확인에서 다시 시도할 수 있습니다. 현지화된 **Claude 연결 복구** 버튼은 같은 경계를 지키면서 즉시 수동 재시도를 시작합니다. UI는 갱신·수동 복구 진행 표시와 키체인 승인 안내를 제공하며, 복구 진행 중에는 중복 버튼을 숨깁니다. 세부 내부 단계를 추정해 표시하지는 않습니다.
+자동 확인과 일반 수동 새로고침 모두 Claude 복구 권한(`allowsClaudeRecovery`)을 갖지만, 키체인 승인창 권한(`allowsClaudeKeychainPrompt`)은 사용자 동작에만 있습니다. **Claude 연결 복구**는 승인이 필요한 계정마다 묻고, 수동 새로고침은 한 번에 승인창을 최대 하나만 띄우며 최근 6시간 안에 승인을 거부한 계정은 건너뜁니다(계정별 기록, 메모리에만 보관). 승인창을 띄우지 않는 복구는 조용한 재읽기와 Claude Code `/usage` 소유자 실행만 쓰며, 키체인을 읽을 수 없으면 그대로 멈추고 **Claude 연결 복구**를 표시합니다. 승인창을 띄울 복구는 진행 중인 조용한 복구나 조용한 키체인 조회에 합류하지 않고, 그것이 끝난 뒤 따로 시작합니다. 한 수집에서 화면 잠금 해제 가드 뒤의 네이티브 키체인 승인은 계정당 최대 한 번, 만료·거부된 자격 증명을 위한 제한된 Claude Code `/usage` 소유자 실행도 최대 한 번뿐입니다. 승인 거부나 실패는 현재 시도를 즉시 중단하고 추가 CLI·승인창 반복을 만들지 않습니다. UI는 갱신·수동 복구 진행 표시와 키체인 승인 안내를 제공하며, 복구 진행 중에는 중복 버튼을 숨깁니다. 세부 내부 단계를 추정해 표시하지는 않습니다.
 
 Token Jar는 정확한 Claude Code 파일·현재 macOS 사용자 키체인 계정의 `claudeAiOauth`만 읽고 MCP 토큰은 사용하지 않습니다. 토큰 갱신·저장·잠금은 Claude Code가 담당하며 Token Jar는 토큰을 POST·수정·복사·저장·캐시하지 않습니다. macOS 인증을 우회하거나 브라우저 로그인·승인 절차를 자동화하지 않습니다. 복구 실행은 고정된 실행 파일·빈 작업공간·제한 시간·안전 인자로 제한되고 Claude Code의 공식 소유자 잠금만 사용합니다.
 
 2026-09-18 자동 복구 변경은 패키지 테스트 **212개/12개 스위트 3회 연속**, 릴리즈 도구 테스트 13개, Provider I/O 감사, 91개 한영 현지화 키·manifest·plist·Swift 구문 검사를 통과했습니다. 소스 CI, Universal 빌드, 서명 ZIP 감사와 시작 smoke, 공개 ZIP·체크섬·서명 피드 재다운로드 검증을 마치고 [v0.1.13](https://github.com/nahwan-kim/token-jar/releases/tag/v0.1.13)을 게시했습니다. 앱·UI 자동화 테스트는 사용자 요청으로 제외했으며 **실제 Claude 키체인 승인·토큰 회전과 Sparkle 설치·재실행은 미검증**입니다. 시간 초과·취소는 macOS 키체인 호출 자체를 강제 종료하지 않으므로, 이전 조회가 끝날 때까지 새 조회를 막고 늦은 결과를 폐기합니다. 상세 검증과 lab 서명 절차는 [Distribution.md](TokenTankApp/Distribution/Distribution.md)와 [SecurityReview.md](TokenTankApp/Distribution/SecurityReview.md)를 참고하세요.
 
-> **연동 범위에 주의하세요.** 모든 서비스가 안정적인 공개 사용량 API를 제공하지는 않습니다. Claude OAuth와 Grok·Cursor의 연동은 제공자 변경에 영향을 받을 수 있습니다. 세션·응답 형식이 달라지거나 승인된 경계를 벗어나면 데이터를 만들거나 다른 출처로 대체하지 않고 오류를 표시합니다. API 과금 전체를 합산하는 비용 관리 도구는 아닙니다.
+> **연동 범위에 주의하세요.** 모든 서비스가 안정적인 공개 사용량 API를 제공하지는 않습니다. Claude OAuth와 Grok·Cursor·Antigravity의 연동은 제공자 변경에 영향을 받을 수 있습니다. 세션·응답 형식이 달라지거나 승인된 경계를 벗어나면 데이터를 만들거나 다른 출처로 대체하지 않고 오류를 표시합니다. API 과금 전체를 합산하는 비용 관리 도구는 아닙니다.
 
 정확한 경로, 조회 방식, 알려진 제한과 검증 상태는 [ProviderSources.json](TokenTankApp/Distribution/ProviderSources.json)에 기록되어 있습니다.
 
@@ -89,6 +90,7 @@ Claude 리셋권은 사용량과 같은 OAuth 세션의 읽기 전용 조회로 
 
 - 공식 도구가 소유한 인증 저장소는 원칙적으로 읽기 전용입니다. Claude 저장소는 정확히 읽기만 하며 Token Jar가 토큰을 직접 POST·수정·복사·저장·캐시하지 않습니다. 모든 주기·수동 Claude 수집은 조용한 재읽기 후 필요할 때 수집당 최대 한 번의 네이티브 승인과 제한된 Claude Code 소유자 `/usage`를 허용하며, 전용 **Claude 연결 복구**는 같은 경계의 즉시 수동 재시도입니다.
 - Grok도 읽기 전용입니다. Token Jar는 `~/.grok/auth.json`을 읽기만 하고 토큰을 갱신 요청(POST)하거나 파일에 쓰지 않습니다. 액세스 토큰 만료가 60초 이내이거나 첫 크레딧 프록시 요청이 401/403이면, 설치된 Grok CLI를 고정 경로·빈 작업 디렉터리·30초 제한·출력 상한으로 수집당 한 번 `grok models` 실행해 CLI가 자기 잠금 아래에서 직접 갱신하게 한 뒤 파일을 다시 읽습니다. 그래도 만료 상태면 ‘Grok CLI를 한 번 실행하면 갱신됨’을 표시하고 다음 확인에서 다시 읽습니다. 브라우저 쿠키·수동 토큰 UI·Management API·Keychain 토큰 캐시를 사용하지 않습니다.
+- Antigravity도 읽기 전용입니다. CLIProxyAPI가 저장한 `antigravity-*.json`(비활성 파일 제외)을 계정별로 읽기만 하고, 토큰 갱신(만료 30분 전)은 CLIProxyAPI가 합니다. Token Jar는 갱신 요청을 보내거나 파일에 쓰지 않으며, 파일의 토큰이 만료됐으면 ‘CLIProxyAPI를 실행하면 갱신됨’을 표시합니다. Gemini CLI(`~/.gemini/oauth_creds.json`)는 지원하지 않습니다.
 - 사용량 스냅샷은 메모리에만 유지합니다. Claude 프로필(토큰이 바뀔 때만 재조회)과 리셋권(30분마다 재조회) 결과도 앱 실행 중 메모리에만 두며 디스크나 키체인에 저장하지 않습니다. 표시 설정은 로컬에 저장합니다.
 - Codex와 Doubao는 허용된 공식 CLI를 실행합니다. 공식 CLI 자체의 세션 관리는 해당 도구가 담당합니다. Codex 홈이 둘 이상이면 같은 계정을 한 번만 조회하기 위해 각 `auth.json`의 계정 식별 클레임만 읽고, 토큰은 보관하거나 사용하지 않습니다.
 - 네트워크 조회가 필요한 서비스는 해당 제공자에 직접 요청합니다. 완전한 오프라인 앱은 아닙니다.
@@ -162,7 +164,7 @@ Scripts/               접근 경계 검사와 유휴 성능 측정
 
 ## About
 
-Token Jar is a native macOS menu bar app for checking AI usage limits across Codex, Claude, Grok, Cursor, and Doubao. It keeps provider-specific quotas separate, supports English and Korean, and uses existing official app or CLI sessions rather than introducing another account.
+Token Jar is a native macOS menu bar app for checking AI usage limits across Codex, Claude, Grok, Cursor, Doubao, and Antigravity. It keeps provider-specific quotas separate, supports English and Korean, and uses existing official app or CLI sessions rather than introducing another account.
 In Settings, “Launch at Login” is off by default; enable it explicitly and approve it in macOS System Settings when prompted.
 
 Provider names and logos belong to their respective owners. Token Jar is an independent project and is not endorsed by those providers. [CodexBar at `5e119a9ad76e3453058dab323f98e480f478d049`](https://github.com/steipete/CodexBar/commit/5e119a9ad76e3453058dab323f98e480f478d049) is pinned as the delegated-coordinator policy reference, and [OpenUsage at `56378e5765f85d38ff413036fd984afe3d4664e4`](https://github.com/robinebers/openusage/commit/56378e5765f85d38ff413036fd984afe3d4664e4) as the read-only comparison; neither is a runtime dependency. The README banner was generated with GPT Image 2 through ima2 using the app icon as a visual reference.

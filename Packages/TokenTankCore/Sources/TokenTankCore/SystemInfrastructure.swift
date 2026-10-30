@@ -183,6 +183,15 @@ public actor URLSessionNetworkClient: NetworkClient {
             }
         case .cursor:
             expectedNames = ["accept", "cookie"]
+        case .antigravity:
+            expectedNames = ["authorization", "content-type", "user-agent"]
+            let headers = Dictionary(uniqueKeysWithValues: request.headers.map { ($0.key.lowercased(), $0.value) })
+            guard headers["content-type"] == "application/json",
+                  headers["user-agent"] == AntigravityRequestPolicy.userAgent,
+                  let authorization = headers["authorization"],
+                  authorization.hasPrefix("Bearer "),
+                  antigravityAccessTokenIsSafe(String(authorization.dropFirst("Bearer ".count)))
+            else { return false }
         }
         return Set(normalizedNames) == expectedNames
     }
@@ -270,6 +279,21 @@ public actor URLSessionNetworkClient: NetworkClient {
                 && components.percentEncodedPath == "/api/usage-summary"
                 && components.query == nil
                 && request.body == nil
+        case .antigravity:
+            guard request.method == .post,
+                  components.query == nil,
+                  let body = request.body,
+                  body.count <= AntigravityRequestPolicy.maximumBodyBytes,
+                  request.timeout <= AntigravityRequestPolicy.timeout
+            else { return false }
+            let summary = AntigravityRequestPolicy.quotaSummaryURL
+            let loadCodeAssist = AntigravityRequestPolicy.loadCodeAssistURL
+            if host == summary.host, components.percentEncodedPath == summary.path {
+                return AntigravityRequestPolicy.isQuotaSummaryBody(body)
+            }
+            return host == loadCodeAssist.host
+                && components.percentEncodedPath == loadCodeAssist.path
+                && body == AntigravityRequestPolicy.loadCodeAssistBody
         }
     }
 
@@ -370,7 +394,7 @@ public actor KeychainCredentialStore: AppCredentialStore {
     private static func validate(_ id: CredentialID) throws {
         let allowedNames: Set<String>
         switch id.providerID {
-        case .codex, .claude, .grok, .cursor, .doubao:
+        case .codex, .claude, .grok, .cursor, .doubao, .antigravity:
             allowedNames = []
         }
         guard allowedNames.contains(id.name) else {

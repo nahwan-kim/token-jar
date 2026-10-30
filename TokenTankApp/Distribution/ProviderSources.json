@@ -65,9 +65,9 @@
         "Discover sign-ins: the default login, CLAUDE_CONFIG_DIR, and every ~/.claude-* directory that lies inside the home directory and holds .claude.json or .credentials.json. Each directory uses Keychain service Claude Code-credentials-<first 8 hex of SHA-256(directory path)> with account NSUserName(), else <dir>/.credentials.json. Identity (accountUuid, emailAddress) comes from that directory's .claude.json oauthAccount (16 MiB cap), else the profile response; sign-ins with the same accountUuid or the same access token are collected once",
         "Read claudeAiOauth only from ~/.claude/.credentials.json and the native generic-password service Claude Code-credentials with account NSUserName(); never match another same-service account. Require user:profile, finite positive expiry more than 60 seconds away, and reject MCP",
         "Every Claude collection first rereads the exact file noninteractively, then the exact Keychain account when no usable file session exists. Retain rejected-token identity independently per file/Keychain slot and adopt a changed valid external token. On expiry at 60 seconds or less or usage HTTP 401, retry usage at most once only with a changed token; HTTP 403 never recovers",
-        "Scheduled refresh, ordinary user refresh, startup, restart, and dedicated repair all use collection context allowsClaudeRecovery=true. isUserInitiated truthfully records the trigger and does not control recovery authority; the default schedule remains five minutes",
+        "Scheduled refresh, ordinary user refresh, startup, restart, and dedicated repair all use collection context allowsClaudeRecovery=true; isUserInitiated truthfully records the trigger and the default schedule remains five minutes. allowsClaudeKeychainPrompt=true only for dedicated repair (may ask once per account that needs it) and ordinary manual refresh (at most one dialog per collection, skipping any account whose dialog the user denied within six hours; per-account memory only). A prompt-capable recovery waits for an in-flight quiet recovery or no-UI Keychain lookup instead of joining it. Background collections never show the dialog because Claude Code rewrites its Keychain item on every token refresh, dropping prior grants",
         "When a bounded recovery cannot supply a usable session, retain the prior in-memory snapshot only as stale and expose typed repairClaudeConnection for unavailable Keychain access or a session still needing recovery. Missing or revoked login requires source-owner sign-in",
-        "Each collection has at most one recovery opportunity. After the screen-unlocked guard, it may attempt native authorization once and, for expired or rejected credentials, launch one bounded owner process. Denial, cancellation, lock, or authorization failure aborts the current attempt without another CLI or prompt loop; the next scheduled collection may try again",
+        "Each collection has at most one recovery opportunity. A prompt-allowed collection may, after the screen-unlocked guard, attempt native authorization once; any collection may, for expired or rejected credentials, launch one bounded owner process. A collection without prompt authority stops at repairClaudeConnection when the Keychain item is unreadable. Denial, cancellation, lock, or authorization failure aborts the current attempt without another CLI or prompt loop",
         "The localized Repair Claude Connection / Claude 연결 복구 action starts an immediate manual collection under the same limits. Concurrent repair callers coalesce. The UI immediately shows pending manual repair or active collection progress with native approval guidance, without inferring internal phases",
         "Claude Code may show its own permission UI during the single bounded owner launch. The owner uses fixed absolute executable candidates, an empty mode-0700 workspace, minimal fixed environment, fixed safe-mode/no-tools arguments, fixed bounded timeout, and the official owner refresh lock",
         "Prompt veto precedes readiness and success. Require readiness plus shift+tab before exactly /usage and a completed panel plus one second quiet; trust is accepted only in the verified-empty workspace and never after /usage. Completed flow sends Esc then /exit with five-second grace; the post-usage hard deadline is passive and pre-readiness cleanup supplies no input",
@@ -193,6 +193,36 @@
       "liveValidation": "Current-host arkcli exists; live usage plan currently fails closed on expired Volcengine SSO and asks for arkcli auth login.",
       "mutationRisk": "The CLI owner may maintain its own credential; Token Jar sends no auth mutation method.",
       "releaseBlocker": "Revalidate the owner session and sanitized arkcli JSON shape through the final frozen candidate"
+    },
+    {
+      "provider": "antigravity",
+      "surface": "Antigravity (Google Code Assist) Gemini and Claude/GPT 5-hour and weekly limits",
+      "selectedSource": "CLIProxyAPI-held Antigravity Google OAuth plus daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+      "sourceStatus": "watch",
+      "productionComposition": true,
+      "sourceStatusReason": "This follows the CodexBar Antigravity OAuth path without its token refresh: CLIProxyAPI owns the sign-in and renews each token 30 minutes before expiry, so Token Jar only reads the auth files. The quota summary endpoint is undocumented.",
+      "rejectedAlternative": "Gemini CLI ~/.gemini/oauth_creds.json (Google stopped serving consumer Gemini CLI OAuth), the Antigravity app language-server probe, and an own refresh-token grant are not composed.",
+      "documentation": [
+        "https://github.com/steipete/CodexBar/blob/main/docs/antigravity.md",
+        "https://github.com/router-for-me/CLIProxyAPI"
+      ],
+      "credentialOwner": "CLIProxyAPI",
+      "credentialPersistence": "CLIProxyAPI-owned antigravity-*.json; Token Jar does not persist, copy, write, or refresh the token",
+      "tokenTankIO": [
+        "List antigravity-*.json (at most 32) in ~/.cli-proxy-api/auths and ~/.cli-proxy-api; open each with O_NOFOLLOW and require a regular owner-only single-link file of at most 64 KiB",
+        "Skip disabled files; one account per email; a token within 60 seconds of expired/timestamp+expires_in is reported as waiting for CLIProxyAPI",
+        "POST retrieveUserQuotaSummary with {\"project\":<project_id>} or {}, then POST cloudcode-pa.googleapis.com/v1internal:loadCodeAssist with the fixed ANTIGRAVITY metadata body only for the plan name; a plan failure keeps usage",
+        "Expose every enabled bucket as <group>.<window> with remainingFraction x 100 as remaining percentage and resetTime"
+      ],
+      "externalPaths": [
+        "~/.cli-proxy-api/auths/antigravity-*.json",
+        "~/.cli-proxy-api/antigravity-*.json"
+      ],
+      "tccClass": "none",
+      "fdaRequired": false,
+      "liveValidation": "2026-10-30 current host: a CLIProxyAPI Antigravity sign-in returned two groups (Gemini Models, Claude and GPT models) with 5h and weekly buckets, and loadCodeAssist returned paidTier Google AI Pro.",
+      "mutationRisk": "None from Token Jar: no refresh grant, no file write. CLIProxyAPI rewrites the files on its own schedule.",
+      "releaseBlocker": "Revalidate the quota summary shape through the final frozen candidate"
     }
   ],
   "refreshPolicy": {

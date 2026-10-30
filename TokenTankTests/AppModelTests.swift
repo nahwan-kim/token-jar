@@ -584,7 +584,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.menuValue(for: grokPreference), "—")
         let withSymbols = model.menuBarSummaryItems()
         model.setShowsMenuBarPercentSign(false)
-        XCTAssertEqual(model.menuBarSummaryItems().map(\.text), ["63", "18", "—", "—", "—"])
+        XCTAssertEqual(model.menuBarSummaryItems().map(\.text), ["63", "18", "—", "—", "—", "—"])
         XCTAssertEqual(model.menuValue(for: claudePreference), "18%")
         XCTAssertFalse(model.menuBarLabelText(forDisplay: true).contains("%"))
         XCTAssertTrue(model.menuBarLabelText().contains("18%"))
@@ -612,11 +612,11 @@ final class AppModelTests: XCTestCase {
         }
         XCTAssertTrue(loaded)
         model.setShowsMenuBarPercentSign(false)
-        XCTAssertEqual(model.menuBarSummaryItems().map(\.text), ["0", "100", "—", "—", "—"])
+        XCTAssertEqual(model.menuBarSummaryItems().map(\.text), ["0", "100", "—", "—", "—", "—"])
         XCTAssertEqual(model.menuValue(for: model.preference(for: .codex)), "0%")
         XCTAssertEqual(model.menuValue(for: model.preference(for: .claude)), "100%")
         model.setShowsMenuBarPercentSign(true)
-        XCTAssertEqual(model.menuBarSummaryItems().map(\.text), ["0%", "100%", "—", "—", "—"])
+        XCTAssertEqual(model.menuBarSummaryItems().map(\.text), ["0%", "100%", "—", "—", "—", "—"])
         await model.stop()
     }
     func testMenuBarLabelJoinsEveryVisibleProvider() async throws {
@@ -628,7 +628,7 @@ final class AppModelTests: XCTestCase {
             context: makeContext(credentials: credentials)
         )
 
-        XCTAssertEqual(model.menuBarLabelText(), "Codex —  Claude —  Grok —  Cursor —  Doubao —")
+        XCTAssertEqual(model.menuBarLabelText(), "Codex —  Claude —  Grok —  Cursor —  Doubao —  Antigravity —")
 
         var cursor = model.preference(for: .cursor)
         cursor.isVisible = false
@@ -636,7 +636,7 @@ final class AppModelTests: XCTestCase {
         var claude = model.preference(for: .claude)
         claude.representativeQuotaID = "primary"
         model.updatePreference(claude)
-        XCTAssertEqual(model.menuBarLabelText(), "Codex —  Claude —  Grok —  Doubao —")
+        XCTAssertEqual(model.menuBarLabelText(), "Codex —  Claude —  Grok —  Doubao —  Antigravity —")
 
         await model.stop()
     }
@@ -1296,7 +1296,6 @@ final class AppModelTests: XCTestCase {
             "error.schema": ("Data format changed", "데이터 형식 변경됨"),
             "error.permission": ("Permission required", "권한 필요"),
             "error.keychain": ("Keychain unavailable", "키체인을 사용할 수 없음"),
-            "error.claude_keychain_guidance": ("Approve Token Jar’s native Keychain access prompt when macOS shows it. If access is not approved, automatic recovery will try again on the next refresh cycle.", "macOS가 표시하는 토큰 항아리의 네이티브 키체인 접근 요청을 승인하세요. 접근이 승인되지 않으면 다음 갱신 주기에 자동 복구를 다시 시도합니다."),
             "action.retry": ("Retry", "다시 시도"),
             "action.repair_claude_connection": ("Repair Claude Connection", "Claude 연결 복구"),
             "action.repair_claude_connection.help": ("Deliberately repair the Claude connection. This may ask for Keychain permission or run Claude Code.", "Claude 연결을 명시적으로 복구합니다. 키체인 권한을 요청하거나 Claude Code를 실행할 수 있습니다."),
@@ -1611,6 +1610,35 @@ final class AppModelTests: XCTestCase {
             QuotaDisplayFormatter.name(for: doubaoFiveHour, locale: Locale(identifier: "ko_KR")),
             "5시간"
         )
+    }
+
+    func testAntigravityQuotasNameTheirModelGroupAndCarryThePlan() {
+        func quota(_ id: String, _ name: String, group: String) -> RawQuotaItem {
+            RawQuotaItem(
+                id: RawQuotaID(rawValue: id),
+                originalName: name,
+                used: nil,
+                remaining: nil,
+                percentage: SourcePercentage(value: 40, rawText: "40", meaning: .remaining),
+                resetsAt: nil,
+                sourceFields: ["antigravityGroup": group, "plan": "Google AI Pro", "window": String(name.split(separator: ".").last!)]
+            )
+        }
+        let quotas = [
+            quota("gemini-5h", "gemini.5h", group: "Gemini"),
+            quota("gemini-weekly", "gemini.weekly", group: "Gemini"),
+            quota("3p-5h", "3p.5h", group: "Claude/GPT"),
+            quota("3p-weekly", "3p.weekly", group: "Claude/GPT"),
+        ]
+        let english = Locale(identifier: "en_US")
+        XCTAssertEqual(
+            QuotaDisplayFormatter.displayedQuotas(quotas, providerID: .antigravity).map { QuotaDisplayFormatter.name(for: $0, locale: english) },
+            ["Gemini 5-hour", "Gemini Weekly", "Claude/GPT 5-hour", "Claude/GPT Weekly"]
+        )
+        XCTAssertEqual(QuotaDisplayFormatter.name(for: quotas[3], locale: Locale(identifier: "ko_KR")), "Claude/GPT 주간")
+        XCTAssertEqual(QuotaDisplayFormatter.planName(for: .antigravity, quotas: quotas, locale: english), "Google AI Pro")
+        XCTAssertEqual(QuotaDisplayFormatter.resetWindow(for: quotas[0]), .fiveHour)
+        XCTAssertEqual(QuotaDisplayFormatter.resetWindow(for: quotas[1]), .weekly)
     }
 
     func testQuotaDisplayValuesUseReadableNumbersAndUnits() {

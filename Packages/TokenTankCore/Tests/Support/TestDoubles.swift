@@ -61,6 +61,7 @@ public actor MemoryGrokSessionProvider: GrokSessionProviding {
 public actor MemoryClaudeSessionProvider: ClaudeSessionProviding {
     private var results: [Result<ClaudeSession, CollectionError>]
     public private(set) var allowInteractionRequests: [Bool] = []
+    public private(set) var quietRecoveryCount = 0
     public private(set) var rejectedAccessTokens: [String?] = []
 
     public init(results: [Result<ClaudeSession, CollectionError>]) {
@@ -69,6 +70,15 @@ public actor MemoryClaudeSessionProvider: ClaudeSessionProviding {
 
     public func session(allowInteraction: Bool, rejectedAccessToken: String?) throws -> ClaudeSession {
         allowInteractionRequests.append(allowInteraction)
+        return try next(rejectedAccessToken: rejectedAccessToken)
+    }
+
+    public func quietRecoverySession(account sourceID: String, rejectedAccessToken: String?) throws -> ClaudeSession {
+        quietRecoveryCount += 1
+        return try next(rejectedAccessToken: rejectedAccessToken)
+    }
+
+    private func next(rejectedAccessToken: String?) throws -> ClaudeSession {
         rejectedAccessTokens.append(rejectedAccessToken)
         guard !results.isEmpty else {
             throw CollectionError(
@@ -198,21 +208,25 @@ public actor RecordingDiagnostics: DiagnosticsSink {
 public struct CollectionContextFlags: Equatable, Sendable {
     public let isUserInitiated: Bool
     public let allowsClaudeRecovery: Bool
+    public let allowsClaudeKeychainPrompt: Bool
     public let disabledAccountSourceIDs: Set<String>
 
     public init(
         isUserInitiated: Bool,
         allowsClaudeRecovery: Bool,
+        allowsClaudeKeychainPrompt: Bool = false,
         disabledAccountSourceIDs: Set<String> = []
     ) {
         self.isUserInitiated = isUserInitiated
         self.allowsClaudeRecovery = allowsClaudeRecovery
+        self.allowsClaudeKeychainPrompt = allowsClaudeKeychainPrompt
         self.disabledAccountSourceIDs = disabledAccountSourceIDs
     }
 
     public init(context: CollectionContext) {
         self.isUserInitiated = context.isUserInitiated
         self.allowsClaudeRecovery = context.allowsClaudeRecovery
+        self.allowsClaudeKeychainPrompt = context.allowsClaudeKeychainPrompt
         self.disabledAccountSourceIDs = context.disabledAccountSourceIDs
     }
 }
@@ -319,6 +333,7 @@ public enum TestContextFactory {
         network: any NetworkClient = QueueNetworkClient(results: []),
         grokSession: any GrokSessionProviding = NoGrokSessionProvider(),
         claudeSession: any ClaudeSessionProviding = NoClaudeSessionProvider(),
+        antigravitySession: any AntigravitySessionProviding = NoAntigravitySessionProvider(),
         credentials: any AppCredentialStore = InMemoryCredentialStore(),
         externalSessions: any ExternalSessionReader = MemoryExternalSessionReader(),
         sqlite: any ReadOnlySQLiteReader = MemorySQLiteReader(),
@@ -328,6 +343,7 @@ public enum TestContextFactory {
         diagnostics: any DiagnosticsSink = RecordingDiagnostics(),
         isUserInitiated: Bool = false,
         allowsClaudeRecovery: Bool = false,
+        allowsClaudeKeychainPrompt: Bool = false,
         disabledAccountSourceIDs: Set<String> = []
     ) -> CollectionContext {
         CollectionContext(
@@ -339,10 +355,12 @@ public enum TestContextFactory {
             doubaoPlan: doubaoPlan,
             grokSession: grokSession,
             claudeSession: claudeSession,
+            antigravitySession: antigravitySession,
             clock: clock,
             diagnostics: diagnostics,
             isUserInitiated: isUserInitiated,
             allowsClaudeRecovery: allowsClaudeRecovery,
+            allowsClaudeKeychainPrompt: allowsClaudeKeychainPrompt,
             disabledAccountSourceIDs: disabledAccountSourceIDs
         )
     }

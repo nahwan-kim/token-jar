@@ -6,6 +6,7 @@ public enum ProviderID: String, CaseIterable, Codable, Hashable, Identifiable, S
     case grok
     case cursor
     case doubao
+    case antigravity
 
     public var id: String { rawValue }
 
@@ -16,6 +17,7 @@ public enum ProviderID: String, CaseIterable, Codable, Hashable, Identifiable, S
         case .grok: "Grok"
         case .cursor: "Cursor"
         case .doubao: "Doubao"
+        case .antigravity: "Antigravity"
         }
     }
 
@@ -26,6 +28,7 @@ public enum ProviderID: String, CaseIterable, Codable, Hashable, Identifiable, S
         case .grok: "GRK"
         case .cursor: "CUR"
         case .doubao: "DB"
+        case .antigravity: "AGY"
         }
     }
 }

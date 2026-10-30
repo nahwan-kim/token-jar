@@ -3,7 +3,8 @@ import SwiftUI
 import TokenTankDomain
 
 /// Bundled brand marks from [theSVG](https://thesvg.org) `@thesvg/icons@3.3.2`.
-/// Codex uses OpenAI, Claude uses Claude, Grok uses Grok, Cursor uses Cursor, Doubao uses Doubao.
+/// Codex uses OpenAI, Claude uses Claude, Grok uses Grok, Cursor uses Cursor, Doubao uses Doubao,
+/// Antigravity uses Google Antigravity (its outline, as a template mark).
 /// Marks remain the trademarks of their owners; bundled only for identification.
 enum BrandIcon {
     static func resourceName(for providerID: ProviderID, color: Bool) -> String {
@@ -14,6 +15,7 @@ enum BrandIcon {
         case .grok: base = "grok"
         case .cursor: base = "cursor"
         case .doubao: base = "doubao"
+        case .antigravity: base = "antigravity"
         }
         if color, hasColorVariant(providerID) {
             return "\(base)-color"
@@ -24,7 +26,7 @@ enum BrandIcon {
     static func hasColorVariant(_ providerID: ProviderID) -> Bool {
         switch providerID {
         case .claude, .doubao: true
-        case .codex, .grok, .cursor: false
+        case .codex, .grok, .cursor, .antigravity: false
         }
     }
 
@@ -41,6 +43,8 @@ enum BrandIcon {
             Color(red: 37 / 255, green: 99 / 255, blue: 235 / 255)
         case .doubao:
             Color(red: 30 / 255, green: 55 / 255, blue: 252 / 255)
+        case .antigravity:
+            Color(red: 49 / 255, green: 134 / 255, blue: 255 / 255)
         }
     }
 
