@@ -259,9 +259,6 @@ struct SchedulerTests {
         await clock.advance(by: .seconds(1))
         await coordinator.refresh(.claude, userInitiated: true)
         #expect(await network.requests.count == 2)
-
-        await coordinator.repairClaudeConnection()
-        #expect(await network.requests.count == 3)
     }
 
     @Test("opening a usage surface collects only providers older than 60 seconds")

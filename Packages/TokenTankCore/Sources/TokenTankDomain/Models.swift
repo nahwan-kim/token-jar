@@ -425,7 +425,6 @@ public enum RecoveryAction: String, Codable, Equatable, Sendable {
     case retry
     case waitForNextRefresh
     case signInSourceApp
-    case repairClaudeConnection
     /// The source CLI renews its own session the next time it runs.
     case runSourceCLI
     case signInTokenTank

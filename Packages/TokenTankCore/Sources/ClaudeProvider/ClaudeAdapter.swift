@@ -340,25 +340,19 @@ private func claudeSourceSession(
     do {
         return try await context.claudeSession.session(
             account: sourceID,
-            allowInteraction: false,
+            allowsRefresh: false,
             rejectedAccessToken: rejectedAccessToken
         )
     } catch is CancellationError {
         throw CancellationError()
     } catch let error as CollectionError {
-        guard error.recoveryAction == .repairClaudeConnection, repairAvailable else { throw error }
+        guard error.diagnosticCode == ClaudeSession.refreshRequiredDiagnosticCode, repairAvailable else { throw error }
         // Each collection grants one attempt, not permission for every reread or HTTP retry.
         repairAvailable = false
         try Task.checkCancellation()
-        guard context.allowsClaudeKeychainPrompt else {
-            return try await context.claudeSession.quietRecoverySession(
-                account: sourceID,
-                rejectedAccessToken: rejectedAccessToken
-            )
-        }
         return try await context.claudeSession.session(
             account: sourceID,
-            allowInteraction: true,
+            allowsRefresh: true,
             rejectedAccessToken: rejectedAccessToken
         )
     } catch {

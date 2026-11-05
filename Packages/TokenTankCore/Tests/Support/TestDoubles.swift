@@ -60,21 +60,15 @@ public actor MemoryGrokSessionProvider: GrokSessionProviding {
 }
 public actor MemoryClaudeSessionProvider: ClaudeSessionProviding {
     private var results: [Result<ClaudeSession, CollectionError>]
-    public private(set) var allowInteractionRequests: [Bool] = []
-    public private(set) var quietRecoveryCount = 0
+    public private(set) var allowsRefreshRequests: [Bool] = []
     public private(set) var rejectedAccessTokens: [String?] = []
 
     public init(results: [Result<ClaudeSession, CollectionError>]) {
         self.results = results
     }
 
-    public func session(allowInteraction: Bool, rejectedAccessToken: String?) throws -> ClaudeSession {
-        allowInteractionRequests.append(allowInteraction)
-        return try next(rejectedAccessToken: rejectedAccessToken)
-    }
-
-    public func quietRecoverySession(account sourceID: String, rejectedAccessToken: String?) throws -> ClaudeSession {
-        quietRecoveryCount += 1
+    public func session(allowsRefresh: Bool, rejectedAccessToken: String?) throws -> ClaudeSession {
+        allowsRefreshRequests.append(allowsRefresh)
         return try next(rejectedAccessToken: rejectedAccessToken)
     }
 
@@ -208,25 +202,21 @@ public actor RecordingDiagnostics: DiagnosticsSink {
 public struct CollectionContextFlags: Equatable, Sendable {
     public let isUserInitiated: Bool
     public let allowsClaudeRecovery: Bool
-    public let allowsClaudeKeychainPrompt: Bool
     public let disabledAccountSourceIDs: Set<String>
 
     public init(
         isUserInitiated: Bool,
         allowsClaudeRecovery: Bool,
-        allowsClaudeKeychainPrompt: Bool = false,
         disabledAccountSourceIDs: Set<String> = []
     ) {
         self.isUserInitiated = isUserInitiated
         self.allowsClaudeRecovery = allowsClaudeRecovery
-        self.allowsClaudeKeychainPrompt = allowsClaudeKeychainPrompt
         self.disabledAccountSourceIDs = disabledAccountSourceIDs
     }
 
     public init(context: CollectionContext) {
         self.isUserInitiated = context.isUserInitiated
         self.allowsClaudeRecovery = context.allowsClaudeRecovery
-        self.allowsClaudeKeychainPrompt = context.allowsClaudeKeychainPrompt
         self.disabledAccountSourceIDs = context.disabledAccountSourceIDs
     }
 }
@@ -343,7 +333,6 @@ public enum TestContextFactory {
         diagnostics: any DiagnosticsSink = RecordingDiagnostics(),
         isUserInitiated: Bool = false,
         allowsClaudeRecovery: Bool = false,
-        allowsClaudeKeychainPrompt: Bool = false,
         disabledAccountSourceIDs: Set<String> = []
     ) -> CollectionContext {
         CollectionContext(
@@ -360,7 +349,6 @@ public enum TestContextFactory {
             diagnostics: diagnostics,
             isUserInitiated: isUserInitiated,
             allowsClaudeRecovery: allowsClaudeRecovery,
-            allowsClaudeKeychainPrompt: allowsClaudeKeychainPrompt,
             disabledAccountSourceIDs: disabledAccountSourceIDs
         )
     }

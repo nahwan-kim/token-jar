@@ -6,166 +6,31 @@ import TokenTankTestSupport
 
 @Suite("Refresh and persistence behavior", .serialized)
 struct RuntimeTests {
-    @Test("only user actions may show the Claude Keychain dialog; background collections recover quietly")
-    func claudeRecoveryAuthorityBoundary() async throws {
+    @Test("a Claude collection may refresh each account once; other contexts and providers are denied")
+    func claudeRefreshAuthorityBoundary() async throws {
         let sessions = RecordingClaudeSessions()
-        let clock = ManualClock()
-        let context = TestContextFactory.make(
-            claudeSession: sessions,
-            clock: clock,
-            isUserInitiated: true,
-            allowsClaudeRecovery: true
-        )
-        let coordinator = RefreshCoordinator(adapters: [InteractionAwareClaudeAdapter()], context: context)
-        let pastManualFloor = RefreshCoordinator.manualRefreshFloor
+        let context = TestContextFactory.make(claudeSession: sessions)
 
-        await coordinator.refresh(.claude)
-        await clock.advance(by: pastManualFloor)
-        await coordinator.refresh(.claude, userInitiated: true)
-        await clock.advance(by: pastManualFloor)
-        await coordinator.refreshAll(userInitiated: true)
-        await coordinator.repairClaudeConnection()
-        await clock.advance(by: pastManualFloor)
-        await coordinator.refresh(.claude, userInitiated: true)
+        let noRecovery = context.scoped(to: .claude, isUserInitiated: true, allowsClaudeRecovery: false)
+        #expect(await collectionError {
+            _ = try await noRecovery.claudeSession.session(allowsRefresh: true, rejectedAccessToken: nil)
+        }?.diagnosticCode == "capability.claude-session.denied")
+        _ = try await noRecovery.claudeSession.session(allowsRefresh: false, rejectedAccessToken: nil)
 
-        #expect(await sessions.calls == [
-            .read, .quiet,
-            .read, .prompt,
-            .read, .prompt,
-            .read, .prompt,
-            .read, .prompt,
-        ])
-        guard case .fresh = await coordinator.state(for: .claude) else {
-            Issue.record("Expected successful scoped session reads")
-            return
+        let collection = context.scoped(to: .claude, allowsClaudeRecovery: true)
+        _ = try await collection.claudeSession.session(allowsRefresh: true, rejectedAccessToken: "first")
+        #expect(await collectionError {
+            _ = try await collection.claudeSession.session(allowsRefresh: true, rejectedAccessToken: "second")
+        }?.diagnosticCode == "capability.claude-session.denied")
+        _ = try await collection.claudeSession.session(allowsRefresh: false, rejectedAccessToken: "readonly")
+
+        let nonClaude = context.scoped(to: .cursor, isUserInitiated: true, allowsClaudeRecovery: true)
+        for allowsRefresh in [false, true] {
+            #expect(await collectionError {
+                _ = try await nonClaude.claudeSession.session(allowsRefresh: allowsRefresh, rejectedAccessToken: nil)
+            }?.diagnosticCode == "capability.claude-session.denied")
         }
-
-        let noRecovery = context.scoped(
-            to: .claude,
-            isUserInitiated: true,
-            allowsClaudeRecovery: false,
-            allowsClaudeKeychainPrompt: true
-        )
-        #expect(await collectionError {
-            _ = try await noRecovery.claudeSession.session(allowInteraction: true, rejectedAccessToken: nil)
-        }?.diagnosticCode == "capability.claude-session.denied")
-        #expect(await collectionError {
-            _ = try await noRecovery.claudeSession.quietRecoverySession(
-                account: ClaudeAccount.defaultSourceID,
-                rejectedAccessToken: nil
-            )
-        }?.diagnosticCode == "capability.claude-session.denied")
-
-        let userAction = context.scoped(
-            to: .claude,
-            isUserInitiated: true,
-            allowsClaudeRecovery: true,
-            allowsClaudeKeychainPrompt: true
-        )
-        _ = try await userAction.claudeSession.session(allowInteraction: true, rejectedAccessToken: "first")
-        #expect(await collectionError {
-            _ = try await userAction.claudeSession.session(allowInteraction: true, rejectedAccessToken: "second")
-        }?.diagnosticCode == "capability.claude-session.denied")
-        _ = try await userAction.claudeSession.session(allowInteraction: false, rejectedAccessToken: "readonly")
-
-        // A background collection never reaches the dialog, and its one quiet recovery spends
-        // the same per-account budget.
-        let background = context.scoped(
-            to: .claude,
-            isUserInitiated: false,
-            allowsClaudeRecovery: true
-        )
-        #expect(await collectionError {
-            _ = try await background.claudeSession.session(allowInteraction: true, rejectedAccessToken: nil)
-        }?.diagnosticCode == "capability.claude-session.denied")
-        _ = try await background.claudeSession.quietRecoverySession(
-            account: ClaudeAccount.defaultSourceID,
-            rejectedAccessToken: nil
-        )
-        #expect(await collectionError {
-            _ = try await background.claudeSession.quietRecoverySession(
-                account: ClaudeAccount.defaultSourceID,
-                rejectedAccessToken: nil
-            )
-        }?.diagnosticCode == "capability.claude-session.denied")
-
-        let nonClaude = context.scoped(
-            to: .cursor,
-            isUserInitiated: true,
-            allowsClaudeRecovery: true,
-            allowsClaudeKeychainPrompt: true
-        )
-        #expect(await collectionError {
-            _ = try await nonClaude.claudeSession.session(allowInteraction: false, rejectedAccessToken: nil)
-        }?.diagnosticCode == "capability.claude-session.denied")
-        #expect(await sessions.calls.dropFirst(10) == [.prompt, .read, .quiet])
-    }
-
-    @Test("a denied Keychain dialog quiets manual refreshes for six hours, but Repair still asks")
-    func deniedClaudeKeychainPromptCooldown() async {
-        let sessions = RecordingClaudeSessions(denyPrompts: true)
-        let clock = ManualClock()
-        let coordinator = RefreshCoordinator(
-            adapters: [InteractionAwareClaudeAdapter()],
-            context: TestContextFactory.make(claudeSession: sessions, clock: clock)
-        )
-        let pastManualFloor = RefreshCoordinator.manualRefreshFloor
-
-        await coordinator.refresh(.claude, userInitiated: true)
-        await clock.advance(by: pastManualFloor)
-        await coordinator.refresh(.claude, userInitiated: true)
-        await coordinator.repairClaudeConnection()
-        await clock.advance(by: .seconds(ClaudeKeychainPromptGate.cooldown))
-        await coordinator.refresh(.claude, userInitiated: true)
-
-        #expect(await sessions.calls == [
-            .read, .prompt,
-            .read, .quiet,
-            .read, .prompt,
-            .read, .prompt,
-        ])
-        guard case let .stale(_, failure, _) = await coordinator.state(for: .claude) else {
-            Issue.record("Expected the denied prompt to leave Claude stale")
-            return
-        }
-        #expect(failure.diagnosticCode == ClaudeKeychainPromptGate.deniedDiagnosticCode)
-        #expect(failure.recoveryAction == .repairClaudeConnection)
-    }
-
-    @Test("a manual refresh shows one Keychain dialog and skips accounts denied recently; Repair asks for each")
-    func claudeKeychainPromptsArePerAccount() async throws {
-        let sessions = AccountPromptSessions(deniedAccounts: ["a"])
-        let gate = ClaudeKeychainPromptGate()
-        let context = TestContextFactory.make(claudeSession: sessions, clock: ManualClock())
-        func collection(repair: Bool) -> CollectionContext {
-            context.scoped(
-                to: .claude,
-                isUserInitiated: true,
-                allowsClaudeRecovery: true,
-                allowsClaudeKeychainPrompt: true,
-                appliesClaudePromptCooldown: !repair,
-                claudePromptGate: gate
-            )
-        }
-        func recover(_ account: String, in context: CollectionContext) async {
-            _ = try? await context.claudeSession.session(account: account, allowInteraction: true, rejectedAccessToken: nil)
-        }
-
-        let first = collection(repair: false)
-        await recover("a", in: first)
-        await recover("b", in: first)
-        let second = collection(repair: false)
-        await recover("a", in: second)
-        await recover("b", in: second)
-        let repair = collection(repair: true)
-        await recover("a", in: repair)
-        await recover("b", in: repair)
-
-        #expect(await sessions.calls == [
-            "a.prompt", "b.quiet",
-            "a.quiet", "b.prompt",
-            "a.prompt", "b.prompt",
-        ])
+        #expect(await sessions.calls == [.read, .refresh, .read])
     }
 
     @Test("disabled accounts reach every later collection context")
@@ -198,7 +63,6 @@ struct RuntimeTests {
         await coordinator.refreshDue()
         await coordinator.refresh(.claude)
         await coordinator.recollect(.claude)
-        await coordinator.repairClaudeConnection()
         #expect(await codex.fetchCount == 1)
         #expect(await claude.fetchCount == 0)
         #expect(await coordinator.state(for: .claude) == .neverLoaded)
@@ -446,119 +310,6 @@ struct RuntimeTests {
         #expect(actual == snapshot)
     }
 
-    @Test("concurrent explicit repairs wait for ordinary collection and coalesce")
-    func concurrentClaudeRepairsCoalesceAfterOrdinaryFailure() async {
-        let adapter = GatedProviderAdapter(id: .claude)
-        let coordinator = RefreshCoordinator(adapters: [adapter], context: TestContextFactory.make())
-        let repairRequired = CollectionError(
-            kind: .authenticationRejected,
-            diagnosticCode: "test.claude.repair-required",
-            recoveryAction: .repairClaudeConnection
-        )
-        let snapshot = TestContextFactory.snapshot(providerID: .claude)
-
-        let ordinary = Task { await coordinator.refresh(.claude, userInitiated: true) }
-        #expect(await eventually { await adapter.contexts.count == 1 })
-        let firstRepair = Task { await coordinator.repairClaudeConnection() }
-        let secondRepair = Task { await coordinator.repairClaudeConnection() }
-        await adapter.completeNext(with: .failure(repairRequired))
-        await ordinary.value
-
-        #expect(await eventually { await adapter.contexts.count == 2 })
-        await adapter.completeNext(with: .success(snapshot))
-        await firstRepair.value
-        await secondRepair.value
-
-        #expect(await adapter.contexts == [
-            CollectionContextFlags(isUserInitiated: true, allowsClaudeRecovery: true, allowsClaudeKeychainPrompt: true),
-            CollectionContextFlags(isUserInitiated: true, allowsClaudeRecovery: true, allowsClaudeKeychainPrompt: true),
-        ])
-        #expect(await adapter.maximumConcurrentFetches == 1)
-    }
-
-    @Test("stop invalidates a repair queued behind an ordinary collection")
-    func stopInvalidatesQueuedClaudeRepair() async {
-        let adapter = GatedProviderAdapter(id: .claude)
-        let coordinator = RefreshCoordinator(adapters: [adapter], context: TestContextFactory.make())
-        let repairRequired = CollectionError(
-            kind: .authenticationRejected,
-            diagnosticCode: "test.claude.repair-required",
-            recoveryAction: .repairClaudeConnection
-        )
-
-        let ordinary = Task { await coordinator.refresh(.claude) }
-        #expect(await eventually { await adapter.contexts.count == 1 })
-        let repair = Task { await coordinator.repairClaudeConnection() }
-        let stop = Task { await coordinator.stop() }
-        #expect(await eventually { await adapter.cancellationCount == 1 })
-        await adapter.completeNext(with: .failure(repairRequired))
-        await stop.value
-        await ordinary.value
-        await repair.value
-        #expect(await adapter.contexts.map(\.allowsClaudeRecovery) == [true])
-        // Restart creates a new ordinary collection, not a continuation of the old repair.
-        await coordinator.start()
-        #expect(await eventually { await adapter.contexts.count == 2 })
-        await adapter.completeNext(with: .success(TestContextFactory.snapshot(providerID: .claude)))
-        #expect(await eventually {
-            if case .fresh = await coordinator.state(for: .claude) { return true }
-            return false
-        })
-        #expect(await adapter.contexts.map(\.allowsClaudeRecovery) == [true, true])
-        await coordinator.stop()
-    }
-
-    @Test("failed explicit repair retains the previous Claude snapshot")
-    func failedClaudeRepairRetainsSnapshot() async {
-        let snapshot = TestContextFactory.snapshot(providerID: .claude)
-        let repairFailure = CollectionError(
-            kind: .authenticationRejected,
-            diagnosticCode: "test.claude.repair-failed",
-            recoveryAction: .repairClaudeConnection
-        )
-        let adapter = QueueProviderAdapter(
-            id: .claude,
-            results: [.success(snapshot), .failure(repairFailure)]
-        )
-        let coordinator = RefreshCoordinator(adapters: [adapter], context: TestContextFactory.make())
-
-        await coordinator.refresh(.claude)
-        await coordinator.repairClaudeConnection()
-
-        guard case let .authenticationActionRequired(retained, failure) = await coordinator.state(for: .claude) else {
-            Issue.record("Expected failed repair to retain the previous snapshot")
-            return
-        }
-        #expect(retained == snapshot)
-        #expect(failure.diagnosticCode == repairFailure.diagnosticCode)
-        #expect(await adapter.contexts.map(\.allowsClaudeRecovery) == [true, true])
-    }
-
-    @Test("cancelling an explicit repair cancels its collection and never publishes late success")
-    func cancelledRepairRevokesCollectionAuthority() async {
-        let adapter = GatedProviderAdapter(id: .claude)
-        let clock = ManualClock()
-        let coordinator = RefreshCoordinator(adapters: [adapter], context: TestContextFactory.make(clock: clock))
-        let repair = Task { await coordinator.repairClaudeConnection() }
-        #expect(await eventually { await adapter.contexts.count == 1 })
-        repair.cancel()
-        #expect(await eventually { await adapter.cancellationCount == 1 })
-        await adapter.completeNext(with: .success(TestContextFactory.snapshot(providerID: .claude)))
-        await repair.value
-        guard case let .stale(snapshot, failure, _) = await coordinator.state(for: .claude) else {
-            Issue.record("Expected cancelled repair, not a late fresh result")
-            return
-        }
-        #expect(snapshot == nil)
-        #expect(failure.kind == .cancelled)
-        await clock.advance(by: RefreshCoordinator.manualRefreshFloor)
-        let ordinary = Task { await coordinator.refresh(.claude, userInitiated: true) }
-        #expect(await eventually { await adapter.contexts.count == 2 })
-        await adapter.completeNext(with: .success(TestContextFactory.snapshot(providerID: .claude)))
-        await ordinary.value
-        #expect(await adapter.contexts.map(\.allowsClaudeRecovery) == [true, true])
-    }
-
     @Test("a suspended adapter does not lose completion delivered before fetch")
     func suspendedAdapterEarlyCompletion() async throws {
         let snapshot = TestContextFactory.snapshot(providerID: .claude)
@@ -660,7 +411,7 @@ struct RuntimeTests {
                 .failure(CollectionError(
                     kind: .authenticationRejected,
                     diagnosticCode: "test.claude.recovery-failed",
-                    recoveryAction: .repairClaudeConnection
+                    recoveryAction: .runSourceCLI
                 )),
                 .success(snapshot),
             ]
@@ -875,7 +626,7 @@ struct RuntimeTests {
         #expect(await collectionError {
             _ = try await context.scoped(to: .cursor).claudeSession.session(
                 account: ClaudeAccount.defaultSourceID,
-                allowInteraction: false,
+                allowsRefresh: false,
                 rejectedAccessToken: nil
             )
         }?.diagnosticCode == "capability.claude-session.denied")
@@ -917,10 +668,10 @@ struct RuntimeTests {
             _ = try await scoped.doubaoPlan.readPlanUsage()
         }?.diagnosticCode == "capability.doubao-plan.denied")
         #expect(await collectionError {
-            _ = try await grokScoped.claudeSession.session(allowInteraction: false, rejectedAccessToken: "rejected")
+            _ = try await grokScoped.claudeSession.session(allowsRefresh: false, rejectedAccessToken: "rejected")
         }?.diagnosticCode == "capability.claude-session.denied")
         #expect(await collectionError {
-            _ = try await scoped.claudeSession.session(allowInteraction: true, rejectedAccessToken: "rejected")
+            _ = try await scoped.claudeSession.session(allowsRefresh: true, rejectedAccessToken: "rejected")
         }?.diagnosticCode == "capability.claude-session.denied")
         let nativeClaudeRequest = ExternalFileRequest(
             providerID: .claude, relativePath: ".claude/.credentials.json", maximumBytes: 64 * 1024
@@ -1152,86 +903,12 @@ private actor AdvancingProviderAdapter: ProviderAdapter {
 }
 
 private actor RecordingClaudeSessions: ClaudeSessionProviding {
-    enum Call: Equatable { case read, prompt, quiet }
+    enum Call: Equatable { case read, refresh }
 
-    private let denyPrompts: Bool
     private(set) var calls: [Call] = []
 
-    init(denyPrompts: Bool = false) {
-        self.denyPrompts = denyPrompts
-    }
-
-    func session(allowInteraction: Bool, rejectedAccessToken: String?) throws -> ClaudeSession {
-        calls.append(allowInteraction ? .prompt : .read)
-        if allowInteraction, denyPrompts {
-            throw CollectionError(
-                kind: .keychainUnavailable,
-                diagnosticCode: ClaudeKeychainPromptGate.deniedDiagnosticCode,
-                recoveryAction: .repairClaudeConnection
-            )
-        }
+    func session(allowsRefresh: Bool, rejectedAccessToken: String?) throws -> ClaudeSession {
+        calls.append(allowsRefresh ? .refresh : .read)
         return ClaudeSession(accessToken: "synthetic", expiresAt: Date(timeIntervalSince1970: 2_000_000_000))
-    }
-
-    func quietRecoverySession(account sourceID: String, rejectedAccessToken: String?) -> ClaudeSession {
-        calls.append(.quiet)
-        return ClaudeSession(accessToken: "synthetic", expiresAt: Date(timeIntervalSince1970: 2_000_000_000))
-    }
-}
-
-private struct InteractionAwareClaudeAdapter: ProviderAdapter {
-    let id: ProviderID = .claude
-    let displayName = "Claude"
-    let defaultAbbreviation = "CLD"
-    var sourceDescriptor: ProviderSourceDescriptor {
-        TestContextFactory.snapshot(providerID: .claude).source
-    }
-
-    func probeAvailability(context: CollectionContext) async -> ProviderAvailability {
-        .available(sourceDescriptor)
-    }
-
-    /// Mirrors ClaudeAdapter: one silent read, then the recovery the collection is allowed.
-    func fetchSnapshot(context: CollectionContext) async throws -> ProviderSnapshot {
-        _ = try await context.claudeSession.session(allowInteraction: false, rejectedAccessToken: nil)
-        if context.allowsClaudeKeychainPrompt {
-            _ = try await context.claudeSession.session(allowInteraction: true, rejectedAccessToken: "synthetic")
-        } else if context.allowsClaudeRecovery {
-            _ = try await context.claudeSession.quietRecoverySession(
-                account: ClaudeAccount.defaultSourceID,
-                rejectedAccessToken: "synthetic"
-            )
-        }
-        return TestContextFactory.snapshot(providerID: .claude)
-    }
-}
-
-private actor AccountPromptSessions: ClaudeSessionProviding {
-    private let deniedAccounts: Set<String>
-    private(set) var calls: [String] = []
-
-    init(deniedAccounts: Set<String>) {
-        self.deniedAccounts = deniedAccounts
-    }
-
-    func session(allowInteraction: Bool, rejectedAccessToken: String?) throws -> ClaudeSession {
-        try session(account: ClaudeAccount.defaultSourceID, allowInteraction: allowInteraction, rejectedAccessToken: rejectedAccessToken)
-    }
-
-    func session(account sourceID: String, allowInteraction: Bool, rejectedAccessToken: String?) throws -> ClaudeSession {
-        calls.append("\(sourceID).\(allowInteraction ? "prompt" : "read")")
-        if allowInteraction, deniedAccounts.contains(sourceID) {
-            throw CollectionError(
-                kind: .keychainUnavailable,
-                diagnosticCode: ClaudeKeychainPromptGate.deniedDiagnosticCode,
-                recoveryAction: .repairClaudeConnection
-            )
-        }
-        return ClaudeSession(accessToken: "synthetic-\(sourceID)", expiresAt: Date(timeIntervalSince1970: 2_000_000_000))
-    }
-
-    func quietRecoverySession(account sourceID: String, rejectedAccessToken: String?) -> ClaudeSession {
-        calls.append("\(sourceID).quiet")
-        return ClaudeSession(accessToken: "synthetic-\(sourceID)", expiresAt: Date(timeIntervalSince1970: 2_000_000_000))
     }
 }

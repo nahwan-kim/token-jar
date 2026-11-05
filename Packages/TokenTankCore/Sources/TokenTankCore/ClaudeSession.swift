@@ -3,11 +3,12 @@ import CryptoKit
 import CoreGraphics
 import Dispatch
 import Foundation
-import LocalAuthentication
-@preconcurrency import Security
 import TokenTankDomain
 
 public struct ClaudeSession: Sendable, Equatable {
+    /// A readable sign-in whose token is expired or rejected; Claude Code may renew it.
+    public static let refreshRequiredDiagnosticCode = "claude.session.refresh-required"
+
     public let accessToken: String
     public let expiresAt: Date
     public let subscriptionType: String?
@@ -56,20 +57,16 @@ public struct ClaudeAccount: Sendable, Equatable, Identifiable {
 }
 
 public protocol ClaudeSessionProviding: Sendable {
-    /// `false` performs a read-only lookup. `true` grants one bounded recovery attempt that may
-    /// show the macOS Keychain authorization dialog; only a user action asks for it.
-    func session(allowInteraction: Bool, rejectedAccessToken: String?) async throws -> ClaudeSession
+    /// `false` only rereads the sign-in. `true` also lets Claude Code renew an expired or
+    /// rejected session once (`claude /usage`).
+    func session(allowsRefresh: Bool, rejectedAccessToken: String?) async throws -> ClaudeSession
     /// Every Claude Code sign-in on this Mac, default first.
     func accounts() async throws -> [ClaudeAccount]
     func session(
         account sourceID: String,
-        allowInteraction: Bool,
+        allowsRefresh: Bool,
         rejectedAccessToken: String?
     ) async throws -> ClaudeSession
-    /// One bounded recovery that never shows the Keychain authorization dialog: silent rereads and,
-    /// for an expired or rejected token Token Jar can still read, one Claude Code owner refresh.
-    /// Background collections use it, so a lost Keychain grant waits for the user instead of prompting.
-    func quietRecoverySession(account sourceID: String, rejectedAccessToken: String?) async throws -> ClaudeSession
 }
 
 public extension ClaudeSessionProviding {
@@ -79,7 +76,7 @@ public extension ClaudeSessionProviding {
 
     func session(
         account sourceID: String,
-        allowInteraction: Bool,
+        allowsRefresh: Bool,
         rejectedAccessToken: String?
     ) async throws -> ClaudeSession {
         guard sourceID == ClaudeAccount.defaultSourceID else {
@@ -89,12 +86,7 @@ public extension ClaudeSessionProviding {
                 recoveryAction: .signInSourceApp
             )
         }
-        return try await session(allowInteraction: allowInteraction, rejectedAccessToken: rejectedAccessToken)
-    }
-
-    /// Sources without an owner refresh only reread silently.
-    func quietRecoverySession(account sourceID: String, rejectedAccessToken: String?) async throws -> ClaudeSession {
-        try await session(account: sourceID, allowInteraction: false, rejectedAccessToken: rejectedAccessToken)
+        return try await session(allowsRefresh: allowsRefresh, rejectedAccessToken: rejectedAccessToken)
     }
 }
 
@@ -102,10 +94,10 @@ public struct NoClaudeSessionProvider: ClaudeSessionProviding {
     public init() {}
 
     public func session(
-        allowInteraction: Bool,
+        allowsRefresh: Bool,
         rejectedAccessToken: String?
     ) async throws -> ClaudeSession {
-        _ = allowInteraction
+        _ = allowsRefresh
         _ = rejectedAccessToken
         throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "claude.session.disabled")
     }
@@ -113,131 +105,21 @@ public struct NoClaudeSessionProvider: ClaudeSessionProviding {
 
 protocol ClaudeCredentialReading: Sendable {
     func readFile() async throws -> Data?
-    func readKeychain(allowInteraction: Bool) async throws -> Data?
-}
-
-final class ClaudeKeychainQueryGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var completed = false
-    private var acceptingWaiters = true
-    private var result: Result<Data?, Error>?
-    private var waiters: [UUID: CheckedContinuation<Data?, Error>] = [:]
-    private var cancelledBeforeRegistration: Set<UUID> = []
-    private var timedOutBeforeRegistration: Set<UUID> = []
-
-    var isCompleted: Bool {
-        lock.withLock { completed }
-    }
-
-    func wait(id: UUID) async throws -> Data? {
-        return try await withTaskCancellationHandler {
-            try Task.checkCancellation()
-            return try await withCheckedThrowingContinuation { continuation in
-                let immediate: Result<Data?, Error>? = lock.withLock {
-                    if cancelledBeforeRegistration.remove(id) != nil {
-                        return .failure(CancellationError())
-                    }
-                    if timedOutBeforeRegistration.remove(id) != nil {
-                        return .failure(Self.timeoutError())
-                    }
-                    if !acceptingWaiters {
-                        return .failure(Self.inFlightError())
-                    }
-                    if let result { return result }
-                    waiters[id] = continuation
-                    return nil
-                }
-                if let immediate {
-                    continuation.resume(with: immediate)
-                }
-            }
-        } onCancel: {
-            self.cancel(id)
-        }
-    }
-
-    func scheduleTimeout(for id: UUID, after timeout: TimeInterval) {
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) {
-            self.timeout(id)
-        }
-    }
-
-    func complete(_ result: Result<Data?, Error>) {
-        let completion: (
-            continuations: [CheckedContinuation<Data?, Error>],
-            result: Result<Data?, Error>
-        ) = lock.withLock {
-            guard !completed else { return ([], result) }
-            completed = true
-            let effectiveResult = acceptingWaiters
-                ? result
-                : .failure(Self.inFlightError())
-            self.result = effectiveResult
-            let current = Array(waiters.values)
-            waiters.removeAll()
-            cancelledBeforeRegistration.removeAll()
-            timedOutBeforeRegistration.removeAll()
-            return (current, effectiveResult)
-        }
-        completion.continuations.forEach { $0.resume(with: completion.result) }
-    }
-
-    private func cancel(_ id: UUID) {
-        let continuation: CheckedContinuation<Data?, Error>? = lock.withLock {
-            if completed { return nil }
-            acceptingWaiters = false
-            if let continuation = waiters.removeValue(forKey: id) {
-                return continuation
-            }
-            cancelledBeforeRegistration.insert(id)
-            return nil
-        }
-        continuation?.resume(throwing: CancellationError())
-    }
-
-    private func timeout(_ id: UUID) {
-        let continuation: CheckedContinuation<Data?, Error>? = lock.withLock {
-            if completed { return nil }
-            acceptingWaiters = false
-            if let continuation = waiters.removeValue(forKey: id) {
-                return continuation
-            }
-            timedOutBeforeRegistration.insert(id)
-            return nil
-        }
-        continuation?.resume(throwing: Self.timeoutError())
-    }
-
-    private static func timeoutError() -> CollectionError {
-        CollectionError(
-            kind: .keychainUnavailable,
-            diagnosticCode: "claude.session.keychain.timeout",
-            recoveryAction: .retry
-        )
-    }
-
-    static func inFlightError() -> CollectionError {
-        CollectionError(
-            kind: .keychainUnavailable,
-            diagnosticCode: "claude.session.keychain.query-in-flight",
-            recoveryAction: .retry
-        )
-    }
+    func readKeychain() async throws -> Data?
 }
 
 actor NativeClaudeCredentialReader: ClaudeCredentialReading {
     private static let maximumBytes = 64 * 1024
     static let defaultService = "Claude Code-credentials"
     static let defaultCredentialsPath = ".claude/.credentials.json"
+    static let securityTool = URL(fileURLWithPath: "/usr/bin/security")
+    /// `security` exits with `errSecItemNotFound` truncated to its low byte.
+    private static let itemNotFoundExitStatus: Int32 = 44
 
     private let policy: FilesystemAccessPolicy
     private let credentialsRelativePath: String
-    private let keychainLookup: @Sendable (Bool) throws -> Data?
+    private let keychainLookup: @Sendable () async throws -> Data?
     private let screenIsUnlocked: @Sendable () -> Bool
-    private let backgroundTimeout: TimeInterval
-    private let manualTimeout: TimeInterval
-    private var keychainQuery: ClaudeKeychainQueryGate?
-    private var keychainQueryAllowsInteraction = false
 
     init(
         homeDirectory: URL,
@@ -246,28 +128,23 @@ actor NativeClaudeCredentialReader: ClaudeCredentialReading {
     ) {
         self.policy = FilesystemAccessPolicy(homeDirectory: homeDirectory)
         self.credentialsRelativePath = credentialsRelativePath
-        self.keychainLookup = { try Self.readNativeKeychain(allowInteraction: $0, service: service) }
+        let account = NSUserName()
+        self.keychainLookup = {
+            try await Self.readWithSecurityTool(service: service, account: account, timeout: 5)
+        }
         self.screenIsUnlocked = Self.consoleIsUnlocked
-        self.backgroundTimeout = 5
-        // Explicit macOS authorization includes human password/biometric entry.
-        // Keep it bounded without giving it the background I/O time budget.
-        self.manualTimeout = 120
     }
 
     init(
         homeDirectory: URL,
         screenIsUnlocked: @escaping @Sendable () -> Bool = { true },
-        backgroundTimeout: TimeInterval = 5,
-        manualTimeout: TimeInterval = 120,
         credentialsRelativePath: String = NativeClaudeCredentialReader.defaultCredentialsPath,
-        keychainLookup: @escaping @Sendable (Bool) throws -> Data?
+        keychainLookup: @escaping @Sendable () async throws -> Data?
     ) {
         self.policy = FilesystemAccessPolicy(homeDirectory: homeDirectory)
         self.credentialsRelativePath = credentialsRelativePath
         self.keychainLookup = keychainLookup
         self.screenIsUnlocked = screenIsUnlocked
-        self.backgroundTimeout = backgroundTimeout
-        self.manualTimeout = manualTimeout
     }
 
     func readFile() async throws -> Data? {
@@ -282,7 +159,7 @@ actor NativeClaudeCredentialReader: ClaudeCredentialReading {
         }
     }
 
-    func readKeychain(allowInteraction: Bool) async throws -> Data? {
+    func readKeychain() async throws -> Data? {
         try Task.checkCancellation()
         guard screenIsUnlocked() else {
             throw CollectionError(
@@ -291,41 +168,7 @@ actor NativeClaudeCredentialReader: ClaudeCredentialReading {
                 recoveryAction: .retry
             )
         }
-
-        if keychainQuery?.isCompleted == true {
-            keychainQuery = nil
-        }
-        if allowInteraction, let pending = keychainQuery, !keychainQueryAllowsInteraction {
-            // A no-UI lookup cannot show the dialog: let it finish, then ask in a lookup of our own.
-            _ = try? await wait(for: pending, timeout: backgroundTimeout)
-            try Task.checkCancellation()
-            if keychainQuery === pending {
-                guard pending.isCompleted else { throw ClaudeKeychainQueryGate.inFlightError() }
-                keychainQuery = nil
-            }
-        }
-        let gate: ClaudeKeychainQueryGate
-        if let keychainQuery {
-            gate = keychainQuery
-        } else {
-            let lookup = keychainLookup
-            let newGate = ClaudeKeychainQueryGate()
-            keychainQuery = newGate
-            keychainQueryAllowsInteraction = allowInteraction
-            gate = newGate
-            DispatchQueue.global(qos: .utility).async {
-                newGate.complete(Result { try lookup(allowInteraction) })
-            }
-        }
-
-        let timeout = allowInteraction ? manualTimeout : backgroundTimeout
-        return try await wait(for: gate, timeout: timeout)
-    }
-
-    private func wait(for gate: ClaudeKeychainQueryGate, timeout: TimeInterval) async throws -> Data? {
-        let id = UUID()
-        gate.scheduleTimeout(for: id, after: timeout)
-        return try await gate.wait(id: id)
+        return try await keychainLookup()
     }
 
     private static func consoleIsUnlocked() -> Bool {
@@ -337,95 +180,152 @@ actor NativeClaudeCredentialReader: ClaudeCredentialReading {
         return session["CGSSessionScreenIsLocked"] as? Bool != true
     }
 
-    static func readNativeKeychain(
-        allowInteraction: Bool,
-        service: String = NativeClaudeCredentialReader.defaultService,
-        matching: (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus = SecItemCopyMatching
-    ) throws -> Data? {
-        let context = LAContext()
-        context.interactionNotAllowed = !allowInteraction
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: NSUserName(),
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecUseAuthenticationContext as String: context,
-            kSecUseAuthenticationUI as String: allowInteraction
-                ? kSecUseAuthenticationUIAllow
-                : kSecUseAuthenticationUIFail,
-        ]
-
-        var result: CFTypeRef?
-        let status = try ClaudeNativeKeychainAccess.perform(allowInteraction: allowInteraction) {
-            matching(query as CFDictionary, &result)
+    /// Reads a generic-password item through `/usr/bin/security`. Claude Code writes its
+    /// credentials with that tool, so every rewrite keeps it in the item's ACL and `apple-tool:`
+    /// partition: the read never shows the Keychain dialog, and a token renewal cannot revoke it
+    /// the way it revokes an "Always Allow" grant to Token Jar itself. A tool still running at
+    /// `timeout` (an item whose ACL does not trust it would wait on a dialog) is terminated.
+    static func readWithSecurityTool(
+        service: String,
+        account: String,
+        executable: URL = NativeClaudeCredentialReader.securityTool,
+        timeout: TimeInterval
+    ) async throws -> Data? {
+        let run = SecurityToolRun(
+            executable: executable,
+            arguments: ["find-generic-password", "-s", service, "-a", account, "-w"]
+        )
+        let outcome = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    continuation.resume(with: Result { try run.execute(timeout: timeout) })
+                }
+            }
+        } onCancel: {
+            run.cancel()
         }
-        switch status {
-        case errSecSuccess:
-            guard let data = result as? Data, !data.isEmpty, data.count <= maximumBytes else {
+        try Task.checkCancellation()
+        switch outcome.status {
+        case 0:
+            guard let data = decodedPassword(outcome.output), !data.isEmpty, data.count <= maximumBytes else {
                 throw malformed("claude.session.keychain.value-invalid")
             }
             return data
-        case errSecItemNotFound:
+        case itemNotFoundExitStatus:
             return nil
-        case errSecUserCanceled where allowInteraction, errSecAuthFailed where allowInteraction:
-            // The user dismissed or denied the authorization dialog.
-            throw CollectionError(
-                kind: .keychainUnavailable,
-                diagnosticCode: ClaudeKeychainPromptGate.deniedDiagnosticCode,
-                recoveryAction: .repairClaudeConnection
-            )
         default:
             throw CollectionError(
                 kind: .keychainUnavailable,
-                diagnosticCode: "claude.session.keychain.status-\(status)",
+                diagnosticCode: "claude.session.keychain.status-\(outcome.status)",
                 recoveryAction: .retry
             )
         }
     }
+
+    /// `security -w` prints the value and a newline, or its hex encoding when it is not printable.
+    private static func decodedPassword(_ output: Data) -> Data? {
+        var value = output
+        if value.last == UInt8(ascii: "\n") { value.removeLast() }
+        guard !value.isEmpty, value.count.isMultiple(of: 2),
+              value.allSatisfy({ (0x30...0x39).contains($0) || (0x61...0x66).contains($0) })
+        else { return value }
+        var bytes = Data(capacity: value.count / 2)
+        var index = value.startIndex
+        while index < value.endIndex {
+            guard let byte = UInt8(String(decoding: value[index..<value.index(index, offsetBy: 2)], as: UTF8.self), radix: 16)
+            else { return nil }
+            bytes.append(byte)
+            index = value.index(index, offsetBy: 2)
+        }
+        return bytes
+    }
 }
 
-enum ClaudeNativeKeychainAccess {
-    private static let lock = NSLock()
-
-    static func perform<T>(allowInteraction: Bool, _ operation: () throws -> T) throws -> T {
-        // The legacy login Keychain ignores LAContext/no-UI query flags for
-        // foreign ACL prompts. Serialize and restore the process-local policy;
-        // this does not change any item's ACL or the user's Keychain settings.
-        lock.lock()
-        defer { lock.unlock() }
-        var previous: DarwinBoolean = false
-        guard SecKeychainGetUserInteractionAllowed(&previous) == errSecSuccess else {
-            throw policyError()
-        }
-        if allowInteraction {
-            // A native call may outlive its async waiter. Never leave the host's
-            // process-wide policy enabled after timeout/cancellation by overriding it.
-            guard previous.boolValue else {
-                throw CollectionError(
-                    kind: .keychainUnavailable,
-                    diagnosticCode: "claude.session.keychain.interaction-policy-disabled",
-                    recoveryAction: .repairClaudeConnection
-                )
-            }
-            return try operation()
-        }
-        guard SecKeychainSetUserInteractionAllowed(false) == errSecSuccess else {
-            throw policyError()
-        }
-        let result = Result { try operation() }
-        guard SecKeychainSetUserInteractionAllowed(previous.boolValue) == errSecSuccess else {
-            throw policyError()
-        }
-        return try result.get()
+/// One bounded `/usr/bin/security` launch that a timeout or task cancellation terminates.
+private final class SecurityToolRun: @unchecked Sendable {
+    struct Outcome {
+        let status: Int32
+        let output: Data
     }
 
-    private static func policyError() -> CollectionError {
-        CollectionError(
-            kind: .keychainUnavailable,
-            diagnosticCode: "claude.session.keychain.interaction-policy-unavailable",
-            recoveryAction: .retry
+    private static let maximumOutputBytes = 256 * 1024
+
+    private let lock = NSLock()
+    private let process = Process()
+    private var cancelled = false
+    private var timedOut = false
+    private var started = false
+    private var finished = false
+
+    init(executable: URL, arguments: [String]) {
+        process.executableURL = executable
+        process.arguments = arguments
+        process.standardInput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+    }
+
+    func execute(timeout: TimeInterval) throws -> Outcome {
+        let output = Pipe()
+        process.standardOutput = output
+        let launched: Bool = try lock.withLock {
+            guard !cancelled else { return false }
+            do {
+                try process.run()
+                started = true
+            } catch {
+                throw CollectionError(
+                    kind: .keychainUnavailable,
+                    diagnosticCode: "claude.session.keychain.launch-failed",
+                    recoveryAction: .retry
+                )
+            }
+            return true
+        }
+        guard launched else { throw CancellationError() }
+        let deadline = DispatchWorkItem { [self] in
+            lock.withLock {
+                timedOut = true
+                if started, !finished { process.terminate() }
+            }
+        }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: deadline)
+        var data = Data()
+        let reader = output.fileHandleForReading
+        while case let chunk = reader.availableData, !chunk.isEmpty {
+            data.append(chunk)
+            if data.count > Self.maximumOutputBytes {
+                lock.withLock {
+                    if started, !finished { process.terminate() }
+                }
+                break
+            }
+        }
+        process.waitUntilExit()
+        lock.withLock { finished = true }
+        deadline.cancel()
+        let (wasCancelled, wasTimedOut) = lock.withLock { (cancelled, timedOut) }
+        if wasCancelled { throw CancellationError() }
+        if wasTimedOut {
+            throw CollectionError(
+                kind: .keychainUnavailable,
+                diagnosticCode: "claude.session.keychain.timeout",
+                recoveryAction: .retry
+            )
+        }
+        guard data.count <= Self.maximumOutputBytes else {
+            throw malformed("claude.session.keychain.value-invalid")
+        }
+        return Outcome(
+            status: process.terminationReason == .exit ? process.terminationStatus : -1,
+            output: data
         )
+    }
+
+    func cancel() {
+        lock.withLock {
+            cancelled = true
+            if started, !finished { process.terminate() }
+        }
     }
 }
 
@@ -467,7 +367,7 @@ private final class ClaudeRepairWaiters: @unchecked Sendable {
 }
 
 /// Session state for one Claude Code sign-in: its credential slots, rejected-token memory,
-/// and the single in-flight repair.
+/// and the single in-flight Claude Code owner refresh.
 actor ClaudeAccountSessionProvider {
     private static let minimumValidity: TimeInterval = 60
 
@@ -477,7 +377,6 @@ actor ClaudeAccountSessionProvider {
     private var repairTask: Task<ClaudeSession, Error>?
     private var repairID: UUID?
     private var repairWaiters: ClaudeRepairWaiters?
-    private var repairAllowsKeychainPrompt = false
     private var rejectedFileToken: String?
     private var rejectedKeychainToken: String?
 
@@ -491,34 +390,20 @@ actor ClaudeAccountSessionProvider {
         self.refresher = refresher
     }
 
-    func session(
-        allowInteraction: Bool,
-        allowsKeychainPrompt: Bool = true,
-        rejectedAccessToken: String?
-    ) async throws -> ClaudeSession {
+    func session(allowsRefresh: Bool, rejectedAccessToken: String?) async throws -> ClaudeSession {
         try Task.checkCancellation()
-        guard allowInteraction else {
-            let state = try await credentialState(
-                allowInteraction: false,
-                rejectedAccessToken: rejectedAccessToken
-            )
+        guard allowsRefresh else {
+            let state = try await credentialState(rejectedAccessToken: rejectedAccessToken)
             if let fresh = state.fresh {
                 return fresh
             }
             guard !state.unusableTokens.isEmpty else {
                 throw missingCredentials()
             }
-            throw repairRequired()
+            throw refreshRequired()
         }
 
-        while let repairTask, let repairWaiters {
-            if allowsKeychainPrompt, !repairAllowsKeychainPrompt {
-                // A quiet repair cannot show the Keychain dialog this request may need: let it
-                // finish, then start a repair of our own.
-                _ = try? await repairTask.value
-                try Task.checkCancellation()
-                continue
-            }
+        if let repairTask, let repairWaiters {
             return try await waitForRepair(
                 repairTask,
                 waiters: repairWaiters,
@@ -532,13 +417,9 @@ actor ClaudeAccountSessionProvider {
         waiters.insert(waiterID)
         repairID = id
         repairWaiters = waiters
-        repairAllowsKeychainPrompt = allowsKeychainPrompt
         let task = Task {
             do {
-                let session = try await self.repair(
-                    rejectedAccessToken: rejectedAccessToken,
-                    allowsKeychainPrompt: allowsKeychainPrompt
-                )
+                let session = try await self.repair(rejectedAccessToken: rejectedAccessToken)
                 self.settleRepair(id: id)
                 return session
             } catch {
@@ -576,7 +457,7 @@ actor ClaudeAccountSessionProvider {
             let session = try await task.value
             try Task.checkCancellation()
             guard !tokenIsRejected(session.accessToken, explicit: rejectedAccessToken) else {
-                throw repairRequired()
+                throw refreshRequired()
             }
             return session
         } onCancel: {
@@ -584,11 +465,8 @@ actor ClaudeAccountSessionProvider {
         }
     }
 
-    private func repair(rejectedAccessToken: String?, allowsKeychainPrompt: Bool) async throws -> ClaudeSession {
-        let initialState = try await credentialState(
-            allowInteraction: allowsKeychainPrompt,
-            rejectedAccessToken: rejectedAccessToken
-        )
+    private func repair(rejectedAccessToken: String?) async throws -> ClaudeSession {
+        let initialState = try await credentialState(rejectedAccessToken: rejectedAccessToken)
         try Task.checkCancellation()
         if let fresh = initialState.fresh {
             return fresh
@@ -596,29 +474,14 @@ actor ClaudeAccountSessionProvider {
         guard !initialState.unusableTokens.isEmpty else {
             throw missingCredentials()
         }
-
-        let reloadedState = try await credentialState(
-            allowInteraction: false,
-            rejectedAccessToken: rejectedAccessToken
-        )
-        try Task.checkCancellation()
-        if let fresh = reloadedState.fresh {
-            return fresh
-        }
-        guard !reloadedState.unusableTokens.isEmpty else {
-            throw missingCredentials()
-        }
-        let previousTokens = initialState.unusableTokens.union(reloadedState.unusableTokens)
+        let previousTokens = initialState.unusableTokens
         try Task.checkCancellation()
 
         do {
             try await refresher.refresh()
         } catch let refreshError {
             do {
-                let state = try await credentialState(
-                    allowInteraction: false,
-                    rejectedAccessToken: rejectedAccessToken
-                )
+                let state = try await credentialState(rejectedAccessToken: rejectedAccessToken)
                 if let session = state.fresh,
                    !previousTokens.contains(session.accessToken) {
                     return session
@@ -627,10 +490,7 @@ actor ClaudeAccountSessionProvider {
             throw refreshError
         }
 
-        let state = try await credentialState(
-            allowInteraction: false,
-            rejectedAccessToken: rejectedAccessToken
-        )
+        let state = try await credentialState(rejectedAccessToken: rejectedAccessToken)
         guard let session = state.fresh else {
             if state.unusableTokens.isEmpty {
                 throw CollectionError(
@@ -639,10 +499,10 @@ actor ClaudeAccountSessionProvider {
                     recoveryAction: .signInSourceApp
                 )
             }
-            throw repairRequired()
+            throw refreshRequired()
         }
         guard !previousTokens.contains(session.accessToken) else {
-            throw repairRequired()
+            throw refreshRequired()
         }
         return session
     }
@@ -652,10 +512,7 @@ actor ClaudeAccountSessionProvider {
             || token == rejectedFileToken
             || token == rejectedKeychainToken
     }
-    private func credentialState(
-        allowInteraction: Bool,
-        rejectedAccessToken: String?
-    ) async throws -> CredentialState {
+    private func credentialState(rejectedAccessToken: String?) async throws -> CredentialState {
         var unusableTokens: Set<String> = []
         if let data = try await credentials.readFile() {
             if let session = try decodeClaudeSession(data) {
@@ -678,34 +535,25 @@ actor ClaudeAccountSessionProvider {
             rejectedFileToken = nil
         }
 
-        do {
-            if let data = try await credentials.readKeychain(allowInteraction: allowInteraction) {
-                if let session = try decodeClaudeSession(data) {
-                    if rejectedKeychainToken != session.accessToken {
-                        rejectedKeychainToken = nil
-                    }
-                    if session.accessToken == rejectedAccessToken {
-                        rejectedKeychainToken = session.accessToken
-                    }
-                    let now = await clock.now()
-                    if !tokenIsRejected(session.accessToken, explicit: rejectedAccessToken),
-                       session.expiresAt > now.addingTimeInterval(Self.minimumValidity) {
-                        return CredentialState(fresh: session, unusableTokens: unusableTokens)
-                    }
-                    unusableTokens.insert(session.accessToken)
-                } else {
+        if let data = try await credentials.readKeychain() {
+            if let session = try decodeClaudeSession(data) {
+                if rejectedKeychainToken != session.accessToken {
                     rejectedKeychainToken = nil
                 }
+                if session.accessToken == rejectedAccessToken {
+                    rejectedKeychainToken = session.accessToken
+                }
+                let now = await clock.now()
+                if !tokenIsRejected(session.accessToken, explicit: rejectedAccessToken),
+                   session.expiresAt > now.addingTimeInterval(Self.minimumValidity) {
+                    return CredentialState(fresh: session, unusableTokens: unusableTokens)
+                }
+                unusableTokens.insert(session.accessToken)
             } else {
                 rejectedKeychainToken = nil
             }
-        } catch let error as CollectionError where error.kind == .keychainUnavailable {
-            throw CollectionError(
-                kind: .keychainUnavailable,
-                diagnosticCode: error.diagnosticCode,
-                recoveryAction: .repairClaudeConnection,
-                retryAfter: error.retryAfter
-            )
+        } else {
+            rejectedKeychainToken = nil
         }
         return CredentialState(fresh: nil, unusableTokens: unusableTokens)
     }
@@ -796,7 +644,7 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
 
     public func session(
         account sourceID: String,
-        allowInteraction: Bool,
+        allowsRefresh: Bool,
         rejectedAccessToken: String?
     ) async throws -> ClaudeSession {
         guard let provider = accountProviders[sourceID] ?? defaultProviderIfUndiscovered(sourceID) else {
@@ -807,30 +655,15 @@ public actor ClaudeCodeSessionProvider: ClaudeSessionProviding {
             )
         }
         return try await provider.session(
-            allowInteraction: allowInteraction,
+            allowsRefresh: allowsRefresh,
             rejectedAccessToken: rejectedAccessToken
         )
     }
 
-    public func quietRecoverySession(account sourceID: String, rejectedAccessToken: String?) async throws -> ClaudeSession {
-        guard let provider = accountProviders[sourceID] ?? defaultProviderIfUndiscovered(sourceID) else {
-            throw CollectionError(
-                kind: .externalSessionMissing,
-                diagnosticCode: "claude.session.account-missing",
-                recoveryAction: .signInSourceApp
-            )
-        }
-        return try await provider.session(
-            allowInteraction: true,
-            allowsKeychainPrompt: false,
-            rejectedAccessToken: rejectedAccessToken
-        )
-    }
-
-    public func session(allowInteraction: Bool, rejectedAccessToken: String?) async throws -> ClaudeSession {
+    public func session(allowsRefresh: Bool, rejectedAccessToken: String?) async throws -> ClaudeSession {
         try await session(
             account: ClaudeAccount.defaultSourceID,
-            allowInteraction: allowInteraction,
+            allowsRefresh: allowsRefresh,
             rejectedAccessToken: rejectedAccessToken
         )
     }
@@ -949,11 +782,11 @@ private func missingCredentials() -> CollectionError {
     )
 }
 
-private func repairRequired() -> CollectionError {
+private func refreshRequired() -> CollectionError {
     CollectionError(
         kind: .authenticationRejected,
-        diagnosticCode: "claude.session.repair-required",
-        recoveryAction: .repairClaudeConnection
+        diagnosticCode: ClaudeSession.refreshRequiredDiagnosticCode,
+        recoveryAction: .runSourceCLI
     )
 }
 

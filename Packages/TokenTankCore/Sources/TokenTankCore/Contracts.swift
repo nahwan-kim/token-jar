@@ -237,9 +237,8 @@ public struct CollectionContext: Sendable {
     public let diagnostics: any DiagnosticsSink
     public let correlationID: UUID
     public let isUserInitiated: Bool
+    /// Whether Claude collection may let Claude Code renew an expired or rejected session once per account.
     public let allowsClaudeRecovery: Bool
-    /// Whether Claude recovery may show the macOS Keychain authorization dialog; only user actions.
-    public let allowsClaudeKeychainPrompt: Bool
     /// Accounts the user turned off or removed; multi-account providers skip them entirely.
     public let disabledAccountSourceIDs: Set<String>
 
@@ -258,7 +257,6 @@ public struct CollectionContext: Sendable {
         correlationID: UUID = UUID(),
         isUserInitiated: Bool = false,
         allowsClaudeRecovery: Bool = false,
-        allowsClaudeKeychainPrompt: Bool = false,
         disabledAccountSourceIDs: Set<String> = []
     ) {
         self.network = network
@@ -275,7 +273,6 @@ public struct CollectionContext: Sendable {
         self.correlationID = correlationID
         self.isUserInitiated = isUserInitiated
         self.allowsClaudeRecovery = allowsClaudeRecovery
-        self.allowsClaudeKeychainPrompt = allowsClaudeKeychainPrompt
         self.disabledAccountSourceIDs = disabledAccountSourceIDs
     }
 }

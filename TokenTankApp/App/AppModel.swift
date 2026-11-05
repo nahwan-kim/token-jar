@@ -470,7 +470,6 @@ final class AppModel: ObservableObject {
     var locale: Locale { language.locale }
     private let languageDefaults: UserDefaults
     @Published private(set) var isRefreshing = false
-    @Published private(set) var isClaudeRepairPending = false
     @Published private(set) var credentialErrorCodes: [ProviderID: String] = [:]
     @Published private(set) var canCheckForUpdates = false
     @Published private(set) var updaterError = false
@@ -503,7 +502,6 @@ final class AppModel: ObservableObject {
     private var preferenceSaveTask: Task<Void, Never>?
     private var credentialOperations: [ProviderID: CredentialOperation] = [:]
     private var refreshOperations: [UUID: Task<Void, Never>] = [:]
-    private var claudeRepairOperationID: UUID?
     private var isStopping = false
     private var lastLoggedStateCodes: [ProviderID: String] = [:]
     private let updater: (any AppUpdating)?
@@ -695,8 +693,6 @@ final class AppModel: ObservableObject {
         pendingPreferenceTask?.cancel()
         let pendingRefreshOperations = Array(refreshOperations.values)
         refreshOperations.removeAll(keepingCapacity: false)
-        claudeRepairOperationID = nil
-        isClaudeRepairPending = false
         for operation in pendingRefreshOperations {
             operation.cancel()
         }
@@ -739,7 +735,6 @@ final class AppModel: ObservableObject {
         states = Dictionary(uniqueKeysWithValues: ProviderID.allCases.map { ($0, .neverLoaded) })
         rawStates = states
         isRefreshing = false
-        isClaudeRepairPending = false
         lastLoggedStateCodes.removeAll(keepingCapacity: false)
         canCheckForUpdates = false
         if started {
@@ -775,13 +770,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func repairClaudeConnection() {
-        guard !isStopping, !isClaudeRepairPending else { return }
-        ensureStarted()
-        guard started else { return }
-        isClaudeRepairPending = true
-        startClaudeConnectionRepair()
-    }
     func checkForUpdates() {
         guard
             started,
@@ -1477,13 +1465,13 @@ final class AppModel: ObservableObject {
                     recoveryAction: .signInSourceApp
                 )
             )
-        } else if ProcessInfo.processInfo.environment["TOKENTANK_UI_CLAUDE_REPAIR_FAILURE"] == "1" {
+        } else if ProcessInfo.processInfo.environment["TOKENTANK_UI_CLAUDE_REFRESH_REQUIRED"] == "1" {
             claudeState = .authenticationActionRequired(
                 snapshot: claude,
                 failure: CollectionError(
                     kind: .authenticationRejected,
-                    diagnosticCode: "ui-test.claude.repair-required",
-                    recoveryAction: .repairClaudeConnection
+                    diagnosticCode: "claude.session.refresh-required",
+                    recoveryAction: .runSourceCLI
                 )
             )
         } else if isClaudeRefreshing {
@@ -1539,7 +1527,6 @@ final class AppModel: ObservableObject {
             return selected
         }
         isRefreshing = false
-        isClaudeRepairPending = ProcessInfo.processInfo.environment["TOKENTANK_UI_CLAUDE_REPAIR_PENDING"] == "1"
     }
     #endif
 
@@ -1646,26 +1633,8 @@ final class AppModel: ObservableObject {
         refreshOperations[operationID] = task
     }
 
-    private func startClaudeConnectionRepair() {
-        guard !isStopping else {
-            isClaudeRepairPending = false
-            return
-        }
-        let operationID = UUID()
-        claudeRepairOperationID = operationID
-        let coordinator = coordinator
-        let task = Task { [weak self, coordinator] in
-            await coordinator.repairClaudeConnection()
-            self?.finishRefreshOperation(operationID)
-        }
-        refreshOperations[operationID] = task
-    }
-
     private func finishRefreshOperation(_ operationID: UUID) {
         refreshOperations.removeValue(forKey: operationID)
-        guard claudeRepairOperationID == operationID else { return }
-        claudeRepairOperationID = nil
-        isClaudeRepairPending = false
     }
     private func finishCredentialOperation(providerID: ProviderID, operationID: UUID) {
         guard credentialOperations[providerID]?.id == operationID else { return }

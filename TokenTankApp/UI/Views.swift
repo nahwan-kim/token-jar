@@ -78,8 +78,6 @@ struct DetailPopoverView: View {
                                 state: model.states[providerID] ?? .neverLoaded,
                                 now: context.date,
                                 retry: { model.refresh(providerID) },
-                                repairClaudeConnection: { model.repairClaudeConnection() },
-                                isClaudeRepairPending: providerID == .claude && model.isClaudeRepairPending,
                                 configure: { showSettings() }
                             )
                         }
@@ -284,8 +282,6 @@ struct ProviderDetailView: View {
     let state: CollectionState
     let now: Date
     let retry: () -> Void
-    let repairClaudeConnection: () -> Void
-    let isClaudeRepairPending: Bool
     let configure: () -> Void
 
     var body: some View {
@@ -364,7 +360,6 @@ struct ProviderDetailView: View {
                     fallbackRefreshedAt: snapshot.refreshedAt,
                     now: now,
                     retry: retry,
-                    repairClaudeConnection: repairClaudeConnection,
                     configure: configure
                 )
             }
@@ -434,18 +429,18 @@ struct ProviderDetailView: View {
 
     @ViewBuilder
     private var statusView: some View {
-        if providerID == .claude && (isClaudeRepairPending || isRefreshing) {
-            ClaudeRefreshProgressView(isManualRepair: isClaudeRepairPending)
+        if providerID == .claude && isRefreshing {
+            ClaudeRefreshProgressView()
         } else {
             switch state {
             case .neverLoaded, .refreshing, .fresh:
                 EmptyView()
             case let .stale(_, failure, _):
                 FailureView(providerID: providerID, failure: failure, retry: retry,
-                            repairClaudeConnection: repairClaudeConnection, configure: configure)
+                            configure: configure)
             case let .authenticationActionRequired(_, failure):
                 FailureView(providerID: providerID, failure: failure, retry: retry,
-                            repairClaudeConnection: repairClaudeConnection, configure: configure)
+                            configure: configure)
             }
         }
     }
@@ -516,7 +511,6 @@ private struct AccountDetailView: View {
     let fallbackRefreshedAt: Date
     let now: Date
     let retry: () -> Void
-    let repairClaudeConnection: () -> Void
     let configure: () -> Void
 
     private var accessibilityID: String { "provider.\(providerID.rawValue).account.\(account.sourceID)" }
@@ -538,7 +532,7 @@ private struct AccountDetailView: View {
             }
             if let failure = account.failure {
                 FailureView(providerID: providerID, failure: failure, retry: retry,
-                            repairClaudeConnection: repairClaudeConnection, configure: configure,
+                            configure: configure,
                             identifierPrefix: accessibilityID)
             }
             if providerID == .codex {
@@ -648,21 +642,14 @@ private struct ProviderStatusPresentation {
 }
 
 private struct ClaudeRefreshProgressView: View {
-    let isManualRepair: Bool
-
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             ProgressView()
                 .controlSize(.small)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                if isManualRepair {
-                    Text("state.claude_repairing")
-                        .font(.callout.weight(.semibold))
-                } else {
-                    Text("state.claude_refreshing")
-                        .font(.callout.weight(.semibold))
-                }
+                Text("state.claude_refreshing")
+                    .font(.callout.weight(.semibold))
                 Text("state.claude_refreshing.instruction")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -680,7 +667,6 @@ private struct FailureView: View {
     let providerID: ProviderID
     let failure: CollectionError
     let retry: () -> Void
-    let repairClaudeConnection: () -> Void
     let configure: () -> Void
     var identifierPrefix: String? = nil
     var body: some View {
@@ -697,13 +683,6 @@ private struct FailureView: View {
                     .font(.caption2.monospaced())
                     .foregroundStyle(.secondary)
                     .privacySensitive()
-                if providerID == .claude && needsNativeKeychainGuidance {
-                    Text("error.claude_keychain_guidance")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier(identifier("error.claude-keychain-guidance"))
-                }
             }
 
             Spacer(minLength: 8)
@@ -725,13 +704,6 @@ private struct FailureView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.trailing)
                 .accessibilityIdentifier(identifier("action.\(failure.recoveryAction.rawValue)"))
-        } else if failure.recoveryAction == .repairClaudeConnection {
-            if providerID == .claude {
-                Button(actionKey, action: repairClaudeConnection)
-                    .controlSize(.small)
-                    .help(Text("action.repair_claude_connection.help"))
-                    .accessibilityIdentifier(identifier("action.\(failure.recoveryAction.rawValue)"))
-            }
         } else if failure.recoveryAction != .none {
             Button(actionKey) {
                 switch failure.recoveryAction {
@@ -739,18 +711,13 @@ private struct FailureView: View {
                     retry()
                 case .signInTokenTank:
                     configure()
-                case .repairClaudeConnection, .signInSourceApp, .runSourceCLI, .allowAccessInSystemSettings,
-                     .waitForNextRefresh, .none:
+                case .signInSourceApp, .runSourceCLI, .allowAccessInSystemSettings, .waitForNextRefresh, .none:
                     break
                 }
             }
             .controlSize(.small)
             .accessibilityIdentifier(identifier("action.\(failure.recoveryAction.rawValue)"))
         }
-    }
-
-    private var needsNativeKeychainGuidance: Bool {
-        failure.kind == .keychainUnavailable || failure.kind == .permissionDenied
     }
 
     private var errorKey: LocalizedStringKey {
@@ -773,10 +740,13 @@ private struct FailureView: View {
     private var actionKey: LocalizedStringKey {
         switch failure.recoveryAction {
         case .retry: "action.retry"
-        case .repairClaudeConnection: "action.repair_claude_connection"
         case .waitForNextRefresh: "action.wait"
         case .runSourceCLI:
-            providerID == .antigravity ? "action.run_cli_proxy" : "action.run_grok_cli"
+            switch providerID {
+            case .claude: "action.run_claude_cli"
+            case .antigravity: "action.run_cli_proxy"
+            default: "action.run_grok_cli"
+            }
         case .signInSourceApp:
             switch providerID {
             case .claude: "action.sign_in_claude"

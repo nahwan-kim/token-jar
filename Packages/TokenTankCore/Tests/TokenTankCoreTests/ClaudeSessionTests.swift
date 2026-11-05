@@ -1,6 +1,5 @@
 import Darwin
 import Foundation
-import Security
 import Testing
 @testable import TokenTankCore
 import TokenTankDomain
@@ -10,175 +9,114 @@ import TokenTankTestSupport
 struct ClaudeSessionTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    @Test("native lookup selects the current OS account among same-service records")
-    func nativeAccountSelection() async throws {
+    @Test("security tool read passes the item selectors and returns the value without its newline")
+    func securityToolReadsValue() async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let current = credentials(token: "current-owner-token", expiry: now.addingTimeInterval(120))
-        let other = credentials(token: "other-account-token", expiry: now.addingTimeInterval(120))
-        let reader = NativeClaudeCredentialReader(homeDirectory: root, keychainLookup: { interaction in
-            try NativeClaudeCredentialReader.readNativeKeychain(allowInteraction: interaction) { query, result in
-                let fields = query as! [String: Any]
-                let currentAccount = fields[kSecAttrAccount as String] as? String == NSUserName()
-                let exactService = fields[kSecAttrService as String] as? String == "Claude Code-credentials"
-                let correctlyScoped = currentAccount && exactService
-                #expect(correctlyScoped)
-                result?.pointee = (correctlyScoped ? current : other) as NSData
-                return errSecSuccess
-            }
-        })
-        #expect(try await provider(reader: reader).session(allowInteraction: false, rejectedAccessToken: nil).accessToken == "current-owner-token")
-    }
+        let json = #"{"claudeAiOauth":{"accessToken":"tool-token"}}"#
+        let executable = try script(in: root, body: """
+        [ "$#" = 6 ] && [ "$1" = find-generic-password ] && [ "$2" = -s ] && [ "$3" = "Claude Code-credentials-1a2b3c4d" ] \\
+            && [ "$4" = -a ] && [ "$5" = some-user ] && [ "$6" = -w ] || exit 9
+        printf '%s\\n' '\(json)'
+        """)
 
-    @Test("missing current OS account never falls back to another same-service record")
-    func missingNativeAccountDoesNotBroadenLookup() async {
-        let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let other = credentials(token: "other-account-token", expiry: now.addingTimeInterval(120))
-        let reader = NativeClaudeCredentialReader(homeDirectory: root, keychainLookup: { interaction in
-            try NativeClaudeCredentialReader.readNativeKeychain(allowInteraction: interaction) { query, result in
-                let fields = query as! [String: Any]
-                if fields[kSecAttrAccount as String] as? String == NSUserName() {
-                    return errSecItemNotFound
-                }
-                result?.pointee = other as NSData
-                return errSecSuccess
-            }
-        })
-        await expectError(.externalSessionMissing, code: "claude.session.credentials-missing") {
-            try await provider(reader: reader).session(allowInteraction: false, rejectedAccessToken: nil)
-        }
-    }
-    @Test("legacy no-prompt policy restores prior interaction state after success and failure")
-    func legacyKeychainInteractionPolicy() throws {
-        var previous: DarwinBoolean = false
-        #expect(SecKeychainGetUserInteractionAllowed(&previous) == errSecSuccess)
-        defer { _ = SecKeychainSetUserInteractionAllowed(previous.boolValue) }
-        #expect(SecKeychainSetUserInteractionAllowed(true) == errSecSuccess)
-        let value = try ClaudeNativeKeychainAccess.perform(allowInteraction: false) {
-            var current: DarwinBoolean = true
-            #expect(SecKeychainGetUserInteractionAllowed(&current) == errSecSuccess)
-            #expect(!current.boolValue)
-            return "read-only"
-        }
-        #expect(value == "read-only")
-        var restored: DarwinBoolean = false
-        #expect(SecKeychainGetUserInteractionAllowed(&restored) == errSecSuccess)
-        #expect(restored.boolValue)
-        enum Failure: Error { case expected }
-        #expect(throws: Failure.self) {
-            try ClaudeNativeKeychainAccess.perform(allowInteraction: false) {
-                throw Failure.expected
-            }
-        }
-        #expect(SecKeychainGetUserInteractionAllowed(&restored) == errSecSuccess)
-        #expect(restored.boolValue)
-        try ClaudeNativeKeychainAccess.perform(allowInteraction: true) {
-            var manual: DarwinBoolean = false
-            #expect(SecKeychainGetUserInteractionAllowed(&manual) == errSecSuccess)
-            #expect(manual.boolValue)
-        }
-    }
-
-    @Test("recovery refuses a disabled process policy before starting native work")
-    func repairPreservesDisabledNativeInteraction() async throws {
-        var previous: DarwinBoolean = false
-        #expect(SecKeychainGetUserInteractionAllowed(&previous) == errSecSuccess)
-        defer { _ = SecKeychainSetUserInteractionAllowed(previous.boolValue) }
-        #expect(SecKeychainSetUserInteractionAllowed(false) == errSecSuccess)
-        let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let lookup = GatedNativeKeychainLookup(late: nil, recovered: nil)
-        // If the policy gate regresses, the fixture remains bounded and never
-        // touches actual credentials or presents a system authorization dialog.
-        lookup.releaseFirst()
-        let reader = NativeClaudeCredentialReader(
-            homeDirectory: root,
-            manualTimeout: 0.1,
-            keychainLookup: { allowed in
-                try ClaudeNativeKeychainAccess.perform(allowInteraction: allowed) {
-                    lookup.read(allowInteraction: allowed)
-                }
-            }
+        let data = try await NativeClaudeCredentialReader.readWithSecurityTool(
+            service: "Claude Code-credentials-1a2b3c4d", account: "some-user", executable: executable, timeout: 5
         )
-        for _ in 0..<2 {
-            await expectError(.keychainUnavailable,
-                              code: "claude.session.keychain.interaction-policy-disabled",
-                              recoveryAction: .repairClaudeConnection) {
-                try await reader.readKeychain(allowInteraction: true)
-            }
-            var current: DarwinBoolean = true
-            #expect(SecKeychainGetUserInteractionAllowed(&current) == errSecSuccess)
-            #expect(!current.boolValue)
-        }
-        #expect(lookup.callCount == 0)
+
+        #expect(data == Data(json.utf8))
     }
 
-    @Test("timed-out or cancelled interactive lookup preserves policy and suppresses replacement work")
-    func interactiveLookupLifetimeDoesNotEscalatePolicy() async throws {
-        var previous: DarwinBoolean = false
-        #expect(SecKeychainGetUserInteractionAllowed(&previous) == errSecSuccess)
-        defer { _ = SecKeychainSetUserInteractionAllowed(previous.boolValue) }
-        #expect(SecKeychainSetUserInteractionAllowed(true) == errSecSuccess)
+    @Test("security tool hex output for non-printable values is decoded")
+    func securityToolDecodesHex() async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        for cancel in [false, true] {
-            let lookup = GatedNativeKeychainLookup(late: Data("discard-late-value".utf8), recovered: nil)
-            let workerFinished = DispatchSemaphore(value: 0)
-            let reader = NativeClaudeCredentialReader(
-                homeDirectory: root,
-                manualTimeout: cancel ? 2 : 0.1,
-                keychainLookup: { allowed in
-                    defer { workerFinished.signal() }
-                    return try ClaudeNativeKeychainAccess.perform(allowInteraction: allowed) {
-                        lookup.read(allowInteraction: allowed)
-                    }
-                }
+        let json = #"{"claudeAiOauth":{"accessToken":"héx"}}"#
+        let hex = Data(json.utf8).map { String(format: "%02x", $0) }.joined()
+        let executable = try script(in: root, body: "echo \(hex)")
+
+        let data = try await NativeClaudeCredentialReader.readWithSecurityTool(
+            service: "svc", account: "acct", executable: executable, timeout: 5
+        )
+
+        #expect(data == Data(json.utf8))
+    }
+
+    @Test("security tool exit 44 means the item does not exist")
+    func securityToolItemNotFound() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = try script(in: root, body: "exit 44")
+
+        let data = try await NativeClaudeCredentialReader.readWithSecurityTool(
+            service: "svc", account: "acct", executable: executable, timeout: 5
+        )
+
+        #expect(data == nil)
+    }
+
+    @Test("any other security tool exit status is a retryable keychainUnavailable carrying the status")
+    func securityToolOtherStatus() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = try script(in: root, body: "echo ignored; exit 36")
+
+        await expectError(.keychainUnavailable, code: "claude.session.keychain.status-36", recoveryAction: .retry) {
+            try await NativeClaudeCredentialReader.readWithSecurityTool(
+                service: "svc", account: "acct", executable: executable, timeout: 5
             )
-            let task = Task { try await reader.readKeychain(allowInteraction: true) }
-            await lookup.waitForCalls(1)
-            if cancel {
-                task.cancel()
-                await expectCancellation { try await task.value }
-            } else {
-                await expectError(.keychainUnavailable, code: "claude.session.keychain.timeout", recoveryAction: .retry) {
-                    try await task.value
-                }
-            }
-            var current: DarwinBoolean = false
-            #expect(SecKeychainGetUserInteractionAllowed(&current) == errSecSuccess)
-            #expect(current.boolValue)
-            await expectError(.keychainUnavailable, code: "claude.session.keychain.query-in-flight", recoveryAction: .retry) {
-                try await reader.readKeychain(allowInteraction: true)
-            }
-            #expect(lookup.callCount == 1)
-            lookup.releaseFirst()
-            let finished = await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .utility).async {
-                    continuation.resume(returning: workerFinished.wait(timeout: .now() + 2) == .success)
-                }
-            }
-            #expect(finished)
-            #expect(SecKeychainGetUserInteractionAllowed(&current) == errSecSuccess)
-            #expect(current.boolValue)
         }
     }
 
-    @Test("native Keychain failures retain the OS status rather than collapsing distinct causes")
-    func nativeKeychainFailureDiagnostics() {
-        for status in [errSecInteractionNotAllowed, errSecNotAvailable, errSecAuthFailed, errSecUserCanceled] {
-            do {
-                _ = try NativeClaudeCredentialReader.readNativeKeychain(allowInteraction: false) { _, _ in status }
-                Issue.record("Expected native Keychain failure")
-            } catch let error as CollectionError {
-                #expect(error.kind == .keychainUnavailable)
-                #expect(error.diagnosticCode == "claude.session.keychain.status-\(status)")
-                #expect(error.recoveryAction == .retry)
-            } catch {
-                Issue.record("Unexpected error: \(error)")
-            }
+    @Test("a security tool that outlives the timeout is terminated and reported promptly")
+    func securityToolTimeout() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = try script(in: root, body: "exec sleep 30")
+
+        let started = ContinuousClock.now
+        await expectError(.keychainUnavailable, code: "claude.session.keychain.timeout", recoveryAction: .retry) {
+            try await NativeClaudeCredentialReader.readWithSecurityTool(
+                service: "svc", account: "acct", executable: executable, timeout: 0.2
+            )
+        }
+        #expect(ContinuousClock.now - started < .seconds(10))
+    }
+
+    @Test("a security tool that cannot be launched is reported as launch failure")
+    func securityToolLaunchFailure() async {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let missing = root.appendingPathComponent("missing-security")
+        await expectError(.keychainUnavailable, code: "claude.session.keychain.launch-failed", recoveryAction: .retry) {
+            try await NativeClaudeCredentialReader.readWithSecurityTool(
+                service: "svc", account: "acct", executable: missing, timeout: 5
+            )
         }
     }
+
+    @Test("cancelling a read terminates the security tool and throws cancellation")
+    func securityToolCancellation() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let marker = root.appendingPathComponent("started")
+        let executable = try script(in: root, body: "touch '\(marker.path)'; exec sleep 30")
+
+        let task = Task {
+            try await NativeClaudeCredentialReader.readWithSecurityTool(
+                service: "svc", account: "acct", executable: executable, timeout: 30
+            )
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !FileManager.default.fileExists(atPath: marker.path), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let started = ContinuousClock.now
+        task.cancel()
+        await expectCancellation { try await task.value }
+        #expect(ContinuousClock.now - started < .seconds(10))
+    }
+
     @Test("MCP-only file permits the separate native Claude AI Keychain session")
     func mcpOnlyFileUsesKeychain() async throws {
         let reader = ClaudeTestCredentialReader(
@@ -187,9 +125,9 @@ struct ClaudeSessionTests {
         )
         let refresher = RecordingClaudeRefresher()
         #expect(try await provider(reader: reader, refresher: refresher)
-            .session(allowInteraction: false, rejectedAccessToken: nil).accessToken == "native-ai")
+            .session(allowsRefresh: false, rejectedAccessToken: nil).accessToken == "native-ai")
         #expect(await refresher.count == 0)
-        #expect(await reader.interactionFlags == [false])
+        #expect(await reader.keychainReads == 1)
     }
 
     @Test("credentials expiring while Keychain responds are not treated as fresh")
@@ -201,232 +139,62 @@ struct ClaudeSessionTests {
         let provider = ClaudeCodeSessionProvider(
             clock: clock, credentials: reader, refresher: RecordingClaudeRefresher()
         )
-        await expectError(.authenticationRejected, code: "claude.session.repair-required") {
-            try await provider.session(allowInteraction: false, rejectedAccessToken: nil)
+        await expectError(.authenticationRejected, code: ClaudeSession.refreshRequiredDiagnosticCode) {
+            try await provider.session(allowsRefresh: false, rejectedAccessToken: nil)
         }
     }
 
-    @Test("locked console skips native Keychain for both timer and manual collection")
+    @Test("locked console skips native Keychain lookup and falls back to a fresh file")
     func lockedConsoleNeverStartsKeychainLookup() async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let reader = NativeClaudeCredentialReader(
             homeDirectory: root, screenIsUnlocked: { false },
-            keychainLookup: { _ in
+            keychainLookup: {
                 Issue.record("Locked-screen lookup must not reach Security")
                 return nil
             }
         )
-        for allowInteraction in [false, true] {
-            await expectError(
-                .keychainUnavailable,
-                code: "claude.session.keychain.screen-locked",
-                recoveryAction: .repairClaudeConnection
-            ) {
-                try await provider(reader: reader).session(allowInteraction: allowInteraction, rejectedAccessToken: nil)
-            }
+        await expectError(
+            .keychainUnavailable,
+            code: "claude.session.keychain.screen-locked",
+            recoveryAction: .retry
+        ) {
+            try await provider(reader: reader).session(allowsRefresh: false, rejectedAccessToken: nil)
         }
 
         let directory = root.appendingPathComponent(".claude", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try credentials(token: "fresh-file", expiry: now.addingTimeInterval(120))
             .write(to: directory.appendingPathComponent(".credentials.json"))
-        #expect(try await provider(reader: reader).session(allowInteraction: false, rejectedAccessToken: nil).accessToken == "fresh-file")
+        #expect(try await provider(reader: reader).session(allowsRefresh: false, rejectedAccessToken: nil).accessToken == "fresh-file")
     }
 
-    @Test("bounded Keychain worker suppresses duplicates, discards late data, and recovers")
-    func boundedKeychainLookup() async throws {
+    @Test("native reader returns the injected Keychain value and starts no lookup when pre-cancelled")
+    func nativeReaderLookup() async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let lookup = GatedNativeKeychainLookup(
-            late: Data("late".utf8),
-            recovered: Data("recovered".utf8)
-        )
-        let reader = NativeClaudeCredentialReader(
-            homeDirectory: root,
-            backgroundTimeout: 0.1,
-            manualTimeout: 0.15,
-            keychainLookup: { allowInteraction in
-                lookup.read(allowInteraction: allowInteraction)
-            }
-        )
-
-        let first = Task { try await reader.readKeychain(allowInteraction: false) }
-        await lookup.waitForCalls(1)
-        // A prompt-capable read never joins the silent one; while it is stuck, nothing new starts.
-        let duplicate = Task { try await reader.readKeychain(allowInteraction: true) }
-
-        await expectError(
-            .keychainUnavailable,
-            code: "claude.session.keychain.timeout",
-            recoveryAction: .retry
-        ) {
-            try await first.value
-        }
-        await expectError(
-            .keychainUnavailable,
-            code: "claude.session.keychain.query-in-flight",
-            recoveryAction: .retry
-        ) {
-            try await duplicate.value
-        }
-        #expect(lookup.callCount == 1)
-
-        lookup.releaseFirst()
-        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-        var recovered: Data?
-        while ContinuousClock.now < deadline {
-            do {
-                recovered = try await reader.readKeychain(allowInteraction: false)
-                break
-            } catch let error as CollectionError
-                where error.diagnosticCode == "claude.session.keychain.query-in-flight" {
-                // The injected closure has returned, but the worker may not yet
-                // have published completion to its continuation gate.
-                await Task.yield()
-            }
-        }
-        #expect(recovered == Data("recovered".utf8))
-        #expect(lookup.callCount == 2)
-        #expect(lookup.interactionFlags == [false, false])
-    }
-
-    @Test("a prompt-capable Keychain read waits for an in-flight silent read, then asks itself")
-    func promptCapableReadDoesNotJoinSilentRead() async throws {
-        let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let lookup = GatedNativeKeychainLookup(late: nil, recovered: Data("approved".utf8))
-        let reader = NativeClaudeCredentialReader(
-            homeDirectory: root,
-            backgroundTimeout: 2,
-            manualTimeout: 2,
-            keychainLookup: { allowInteraction in
-                lookup.read(allowInteraction: allowInteraction)
-            }
-        )
-
-        let silent = Task { try await reader.readKeychain(allowInteraction: false) }
-        await lookup.waitForCalls(1)
-        let prompt = Task { try await reader.readKeychain(allowInteraction: true) }
-        try await Task.sleep(for: .milliseconds(50))
-        lookup.releaseFirst()
-
-        #expect(try await silent.value == nil)
-        #expect(try await prompt.value == Data("approved".utf8))
-        #expect(lookup.interactionFlags == [false, true])
-    }
-
-    @Test("a Repair that may prompt does not join a quiet recovery already in flight")
-    func promptCapableRepairDoesNotJoinQuietRecovery() async throws {
-        let reader = SilentBlockedReader(data: credentials(token: "approved-token", expiry: now.addingTimeInterval(3_600)))
-        let sessions = provider(reader: reader)
-
-        let quiet = Task {
-            try await sessions.quietRecoverySession(account: ClaudeAccount.defaultSourceID, rejectedAccessToken: nil)
-        }
-        await reader.waitUntilSilentStarted()
-        let repair = Task {
-            try await sessions.session(account: ClaudeAccount.defaultSourceID, allowInteraction: true, rejectedAccessToken: nil)
-        }
-        try await Task.sleep(for: .milliseconds(50))
-        await reader.releaseSilent()
-
-        await expectError(.keychainUnavailable, code: "test.keychain.locked") {
-            try await quiet.value
-        }
-        #expect(try await repair.value.accessToken == "approved-token")
-        #expect(await reader.interactionFlags == [false, true])
-    }
-
-    @Test("cancelled Keychain waiter returns promptly without starting a replacement query")
-    func cancelledKeychainWaiter() async {
-        let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let lookup = GatedNativeKeychainLookup(late: nil, recovered: nil)
-        let reader = NativeClaudeCredentialReader(
-            homeDirectory: root,
-            backgroundTimeout: 1,
-            manualTimeout: 1,
-            keychainLookup: { allowInteraction in
-                lookup.read(allowInteraction: allowInteraction)
-            }
-        )
-        let task = Task { try await reader.readKeychain(allowInteraction: false) }
-        await lookup.waitForCalls(1)
-        task.cancel()
-        do {
-            _ = try await task.value
-            Issue.record("Expected cancellation")
-        } catch is CancellationError {} catch {
-            Issue.record("Unexpected error: \(error)")
-        }
-
-        await expectError(
-            .keychainUnavailable,
-            code: "claude.session.keychain.query-in-flight",
-            recoveryAction: .retry
-        ) {
-            try await reader.readKeychain(allowInteraction: false)
-        }
-        #expect(lookup.callCount == 1)
-        lookup.releaseFirst()
-    }
-
-    @Test("cancellation before waiter registration seals an already-started query")
-    func cancelledBeforeWaiterRegistrationSealsQuery() async {
-        let gate = ClaudeKeychainQueryGate()
-        let observer = Task {
-            withUnsafeCurrentTask { $0?.cancel() }
-            return try await gate.wait(id: UUID())
-        }
-        do {
-            _ = try await observer.value
-            Issue.record("Expected cancellation")
-        } catch is CancellationError {} catch {
-            Issue.record("Unexpected error: \(error)")
-        }
-
-        let next = UUID()
-        gate.scheduleTimeout(for: next, after: 0.1)
-        await expectError(
-            .keychainUnavailable,
-            code: "claude.session.keychain.query-in-flight",
-            recoveryAction: .retry
-        ) {
-            try await gate.wait(id: next)
-        }
-    }
-
-    @Test("pre-cancelled and locked reads start no Keychain worker")
-    func guardedKeychainReadStartsNoWorker() async {
-        let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let lookup = GatedNativeKeychainLookup(late: nil, recovered: nil)
+        let calls = LockedCounter()
         let reader = NativeClaudeCredentialReader(
             homeDirectory: root,
             screenIsUnlocked: { true },
-            keychainLookup: { allowInteraction in
-                lookup.read(allowInteraction: allowInteraction)
+            keychainLookup: {
+                calls.increment()
+                return Data("value".utf8)
             }
         )
+        #expect(try await reader.readKeychain() == Data("value".utf8))
+        #expect(calls.value == 1)
+
         let cancelled = Task {
             await Task.yield()
-            return try await reader.readKeychain(allowInteraction: false)
+            return try await reader.readKeychain()
         }
         cancelled.cancel()
-        _ = try? await cancelled.value
-        #expect(lookup.callCount == 0)
-
-        let lockedReader = NativeClaudeCredentialReader(
-            homeDirectory: root,
-            screenIsUnlocked: { false },
-            keychainLookup: { allowInteraction in
-                lookup.read(allowInteraction: allowInteraction)
-            }
-        )
-        _ = try? await lockedReader.readKeychain(allowInteraction: true)
-        #expect(lookup.callCount == 0)
+        await expectCancellation { try await cancelled.value }
+        #expect(calls.value == 1)
     }
+
     @Test("fresh credential file is authoritative over Keychain")
     func freshFilePrecedence() async throws {
         let reader = ClaudeTestCredentialReader(
@@ -435,7 +203,7 @@ struct ClaudeSessionTests {
         )
         let provider = provider(reader: reader)
 
-        let session = try await provider.session(allowInteraction: false, rejectedAccessToken: nil)
+        let session = try await provider.session(allowsRefresh: false, rejectedAccessToken: nil)
 
         #expect(session.accessToken == "file-token")
         #expect(session.subscriptionType == "max")
@@ -457,10 +225,10 @@ struct ClaudeSessionTests {
 
         await expectError(
             .authenticationRejected,
-            code: "claude.session.repair-required",
-            recoveryAction: .repairClaudeConnection
+            code: ClaudeSession.refreshRequiredDiagnosticCode,
+            recoveryAction: .runSourceCLI
         ) {
-            try await provider(reader: reader).session(allowInteraction: false, rejectedAccessToken: nil)
+            try await provider(reader: reader).session(allowsRefresh: false, rejectedAccessToken: nil)
         }
     }
 
@@ -473,12 +241,12 @@ struct ClaudeSessionTests {
         let refresher = RecordingClaudeRefresher()
         let provider = provider(reader: reader, refresher: refresher)
 
-        #expect(try await provider.session(allowInteraction: false, rejectedAccessToken: nil).accessToken == "keychain-new")
+        #expect(try await provider.session(allowsRefresh: false, rejectedAccessToken: nil).accessToken == "keychain-new")
         #expect(await refresher.count == 0)
     }
 
-    @Test("read-only lookup of expired credentials reports recovery required")
-    func expiredReadOnlyRequiresRepair() async {
+    @Test("lookup of expired credentials without refresh reports refresh required")
+    func expiredWithoutRefreshRequiresRefresh() async {
         let reader = ClaudeTestCredentialReader(
             file: .success(credentials(token: "old", expiry: now)),
             keychain: .success(nil)
@@ -487,50 +255,50 @@ struct ClaudeSessionTests {
 
         await expectError(
             .authenticationRejected,
-            code: "claude.session.repair-required",
-            recoveryAction: .repairClaudeConnection
+            code: ClaudeSession.refreshRequiredDiagnosticCode,
+            recoveryAction: .runSourceCLI
         ) {
             try await provider(reader: reader, refresher: refresher)
-                .session(allowInteraction: false, rejectedAccessToken: nil)
+                .session(allowsRefresh: false, rejectedAccessToken: nil)
         }
         #expect(await refresher.count == 0)
-        #expect(await reader.interactionFlags == [false])
+        #expect(await reader.keychainReads == 1)
     }
 
-    @Test("read-only lookup of near-expiry credentials reports recovery required")
-    func nearExpiryReadOnlyRequiresRepair() async {
+    @Test("lookup of near-expiry credentials without refresh reports refresh required")
+    func nearExpiryWithoutRefreshRequiresRefresh() async {
         let reader = ClaudeTestCredentialReader(
             file: .success(credentials(token: "near", expiry: now.addingTimeInterval(60))),
             keychain: .success(nil)
         )
         let refresher = RecordingClaudeRefresher()
 
-        await expectError(.authenticationRejected, code: "claude.session.repair-required") {
+        await expectError(.authenticationRejected, code: ClaudeSession.refreshRequiredDiagnosticCode) {
             try await provider(reader: reader, refresher: refresher)
-                .session(allowInteraction: false, rejectedAccessToken: nil)
+                .session(allowsRefresh: false, rejectedAccessToken: nil)
         }
         #expect(await refresher.count == 0)
-        #expect(await reader.interactionFlags == [false])
+        #expect(await reader.keychainReads == 1)
     }
 
-    @Test("read-only lookup of a rejected token reports recovery required")
-    func rejectedTokenReadOnlyRequiresRepair() async {
+    @Test("lookup of a rejected token without refresh reports refresh required")
+    func rejectedTokenWithoutRefreshRequiresRefresh() async {
         let reader = ClaudeTestCredentialReader(
             file: .success(credentials(token: "rejected", expiry: now.addingTimeInterval(300))),
             keychain: .success(nil)
         )
         let refresher = RecordingClaudeRefresher()
 
-        await expectError(.authenticationRejected, code: "claude.session.repair-required") {
+        await expectError(.authenticationRejected, code: ClaudeSession.refreshRequiredDiagnosticCode) {
             try await provider(reader: reader, refresher: refresher)
-                .session(allowInteraction: false, rejectedAccessToken: "rejected")
+                .session(allowsRefresh: false, rejectedAccessToken: "rejected")
         }
         #expect(await refresher.count == 0)
-        #expect(await reader.interactionFlags == [false])
+        #expect(await reader.keychainReads == 1)
     }
 
-    @Test("authorized recovery rotates through the owner with one interactive lookup")
-    func explicitRepairSuccess() async throws {
+    @Test("refresh rotates through the owner and rereads the Keychain once")
+    func explicitRefreshSuccess() async throws {
         let reader = ClaudeTestCredentialReader(
             file: .success(nil),
             keychain: .success(credentials(token: "old", expiry: now))
@@ -541,34 +309,17 @@ struct ClaudeSessionTests {
         }
 
         let session = try await provider(reader: reader, refresher: refresher)
-            .session(allowInteraction: true, rejectedAccessToken: nil)
+            .session(allowsRefresh: true, rejectedAccessToken: nil)
 
         #expect(session.accessToken == "new")
         #expect(await refresher.count == 1)
-        #expect(await reader.interactionFlags == [true, false, false])
+        #expect(await reader.keychainReads == 2)
     }
 
-    @Test("external rotation found before owner refresh is adopted")
-    func ownerRotationBeforeRepair() async throws {
-        let reader = SequencedClaudeCredentialReader(files: [
-            credentials(token: "old", expiry: now),
-            credentials(token: "rotated", expiry: now.addingTimeInterval(300)),
-        ])
-        let refresher = RecordingClaudeRefresher()
-
-        let session = try await provider(reader: reader, refresher: refresher)
-            .session(allowInteraction: true, rejectedAccessToken: nil)
-
-        #expect(session.accessToken == "rotated")
-        #expect(await refresher.count == 0)
-        #expect(await reader.interactionFlags == [true])
-    }
-
-    @Test("a failed owner refresh adopts an external rotation without another prompt")
-    func ownerRotationDuringFailedRepair() async throws {
+    @Test("a failed owner refresh adopts an external rotation")
+    func ownerRotationDuringFailedRefresh() async throws {
         let old = credentials(token: "old", expiry: now)
         let reader = SequencedClaudeCredentialReader(files: [
-            old,
             old,
             credentials(token: "rotated", expiry: now.addingTimeInterval(300)),
         ])
@@ -577,11 +328,11 @@ struct ClaudeSessionTests {
         }
 
         let session = try await provider(reader: reader, refresher: refresher)
-            .session(allowInteraction: true, rejectedAccessToken: nil)
+            .session(allowsRefresh: true, rejectedAccessToken: nil)
 
         #expect(session.accessToken == "rotated")
         #expect(await refresher.count == 1)
-        #expect(await reader.interactionFlags == [true, false])
+        #expect(await reader.keychainReads == 1)
     }
 
     @Test("a rejected file token permits a fresh different Keychain token")
@@ -593,11 +344,11 @@ struct ClaudeSessionTests {
         let refresher = RecordingClaudeRefresher()
 
         let session = try await provider(reader: reader, refresher: refresher)
-            .session(allowInteraction: false, rejectedAccessToken: "rejected")
+            .session(allowsRefresh: false, rejectedAccessToken: "rejected")
 
         #expect(session.accessToken == "keychain")
         #expect(await refresher.count == 0)
-        #expect(await reader.interactionFlags == [false])
+        #expect(await reader.keychainReads == 1)
     }
 
     @Test("rejections remain source-scoped until both stores rotate through owner renewal")
@@ -615,22 +366,22 @@ struct ClaudeSessionTests {
         let provider = provider(reader: reader, refresher: refresher)
 
         #expect(try await provider.session(
-            allowInteraction: false,
+            allowsRefresh: false,
             rejectedAccessToken: "file-a"
         ).accessToken == "keychain-b")
         #expect(try await provider.session(
-            allowInteraction: false,
+            allowsRefresh: false,
             rejectedAccessToken: nil
         ).accessToken == "keychain-b")
         #expect(await refresher.count == 0)
 
         #expect(try await provider.session(
-            allowInteraction: true,
+            allowsRefresh: true,
             rejectedAccessToken: "keychain-b"
         ).accessToken == "file-c")
         #expect(await refresher.count == 1)
         #expect(try await provider.session(
-            allowInteraction: false,
+            allowsRefresh: false,
             rejectedAccessToken: nil
         ).accessToken == "file-c")
     }
@@ -645,7 +396,7 @@ struct ClaudeSessionTests {
         let provider = provider(reader: reader, refresher: refresher)
 
         #expect(try await provider.session(
-            allowInteraction: false,
+            allowsRefresh: false,
             rejectedAccessToken: "file-a"
         ).accessToken == "keychain-b")
 
@@ -659,20 +410,20 @@ struct ClaudeSessionTests {
                 expiry: now.addingTimeInterval(300)
             ))
             #expect(try await provider.session(
-                allowInteraction: false,
+                allowsRefresh: false,
                 rejectedAccessToken: rejected
             ).accessToken == replacement)
         }
 
         #expect(try await provider.session(
-            allowInteraction: false,
+            allowsRefresh: false,
             rejectedAccessToken: nil
         ).accessToken == "keychain-e")
         #expect(await refresher.count == 0)
     }
 
-    @Test("authorized recovery rejects an unchanged token after one owner refresh")
-    func repairUnchangedFailsClosed() async {
+    @Test("refresh rejects an unchanged token after one owner refresh")
+    func refreshUnchangedFailsClosed() async {
         let reader = ClaudeTestCredentialReader(
             file: .success(nil),
             keychain: .success(credentials(token: "same", expiry: now))
@@ -684,14 +435,14 @@ struct ClaudeSessionTests {
 
         await expectError(
             .authenticationRejected,
-            code: "claude.session.repair-required",
-            recoveryAction: .repairClaudeConnection
+            code: ClaudeSession.refreshRequiredDiagnosticCode,
+            recoveryAction: .runSourceCLI
         ) {
             try await provider(reader: reader, refresher: refresher)
-                .session(allowInteraction: true, rejectedAccessToken: nil)
+                .session(allowsRefresh: true, rejectedAccessToken: nil)
         }
         #expect(await refresher.count == 1)
-        #expect(await reader.interactionFlags == [true, false, false])
+        #expect(await reader.keychainReads == 2)
     }
 
     @Test("malformed replacement credentials remain fail-closed")
@@ -706,15 +457,15 @@ struct ClaudeSessionTests {
 
         await expectError(.malformedResponse, code: "claude.session.credentials.invalid-json") {
             try await provider(reader: reader, refresher: refresher)
-                .session(allowInteraction: true, rejectedAccessToken: nil)
+                .session(allowsRefresh: true, rejectedAccessToken: nil)
         }
         #expect(await refresher.count == 1)
-        #expect(await reader.interactionFlags == [true, false])
+        #expect(await reader.keychainReads == 1)
     }
 
-    @Test("authorization denial never launches the owner refresher")
-    func authorizationDenialDoesNotRefresh() async {
-        let denial = CollectionError(kind: .keychainUnavailable, diagnosticCode: "test.denied")
+    @Test("a Keychain read failure never launches the owner refresher")
+    func keychainFailureDoesNotRefresh() async {
+        let denial = CollectionError(kind: .keychainUnavailable, diagnosticCode: "test.denied", recoveryAction: .retry)
         let reader = ClaudeTestCredentialReader(
             file: .success(credentials(token: "old", expiry: now)),
             keychain: .failure(denial)
@@ -724,17 +475,17 @@ struct ClaudeSessionTests {
         await expectError(
             .keychainUnavailable,
             code: "test.denied",
-            recoveryAction: .repairClaudeConnection
+            recoveryAction: .retry
         ) {
             try await provider(reader: reader, refresher: refresher)
-                .session(allowInteraction: true, rejectedAccessToken: nil)
+                .session(allowsRefresh: true, rejectedAccessToken: nil)
         }
         #expect(await refresher.count == 0)
-        #expect(await reader.interactionFlags == [true])
+        #expect(await reader.keychainReads == 1)
     }
 
-    @Test("a read-only lookup does not repeat a failed authorized recovery")
-    func readOnlyLookupDoesNotRepeatFailedRecovery() async {
+    @Test("a lookup without refresh does not repeat a failed owner refresh")
+    func lookupWithoutRefreshDoesNotRepeatFailedRefresh() async {
         let reader = ClaudeTestCredentialReader(
             file: .success(credentials(token: "old", expiry: now.addingTimeInterval(300))),
             keychain: .success(nil)
@@ -745,18 +496,18 @@ struct ClaudeSessionTests {
         let provider = provider(reader: reader, refresher: refresher)
 
         await expectError(.authenticationRejected, code: "test.refresh-failed") {
-            try await provider.session(allowInteraction: true, rejectedAccessToken: "old")
+            try await provider.session(allowsRefresh: true, rejectedAccessToken: "old")
         }
         await expectError(
             .authenticationRejected,
-            code: "claude.session.repair-required",
-            recoveryAction: .repairClaudeConnection
+            code: ClaudeSession.refreshRequiredDiagnosticCode,
+            recoveryAction: .runSourceCLI
         ) {
-            try await provider.session(allowInteraction: false, rejectedAccessToken: nil)
+            try await provider.session(allowsRefresh: false, rejectedAccessToken: nil)
         }
 
         #expect(await refresher.count == 1)
-        #expect(await reader.interactionFlags == [true, false, false, false])
+        #expect(await reader.keychainReads == 3)
     }
 
     @Test("missing credentials never launches the owner refresher")
@@ -765,7 +516,7 @@ struct ClaudeSessionTests {
         let refresher = RecordingClaudeRefresher()
 
         await expectError(.externalSessionMissing, recoveryAction: .signInSourceApp) {
-            try await provider(reader: reader, refresher: refresher).session(allowInteraction: true, rejectedAccessToken: nil)
+            try await provider(reader: reader, refresher: refresher).session(allowsRefresh: true, rejectedAccessToken: nil)
         }
         #expect(await refresher.count == 0)
     }
@@ -783,7 +534,7 @@ struct ClaudeSessionTests {
             code: "claude.session.profile-scope-missing",
             recoveryAction: .signInSourceApp
         ) {
-            try await provider(reader: reader, refresher: refresher).session(allowInteraction: true, rejectedAccessToken: nil)
+            try await provider(reader: reader, refresher: refresher).session(allowsRefresh: true, rejectedAccessToken: nil)
         }
         #expect(await reader.keychainReads == 0)
         #expect(await refresher.count == 0)
@@ -802,25 +553,10 @@ struct ClaudeSessionTests {
             code: "claude.session.credentials-missing",
             recoveryAction: .signInSourceApp
         ) {
-            try await provider(reader: reader, refresher: refresher).session(allowInteraction: true, rejectedAccessToken: nil)
+            try await provider(reader: reader, refresher: refresher).session(allowsRefresh: true, rejectedAccessToken: nil)
         }
         #expect(await reader.keychainReads == 1)
         #expect(await refresher.count == 0)
-    }
-
-    @Test("background Keychain reads prohibit UI and manual reads allow it")
-    func keychainInteractionMode() async {
-        let backgroundReader = ClaudeTestCredentialReader(file: .success(nil), keychain: .success(nil))
-        await expectError(.externalSessionMissing, recoveryAction: .signInSourceApp) {
-            try await provider(reader: backgroundReader).session(allowInteraction: false, rejectedAccessToken: nil)
-        }
-        #expect(await backgroundReader.interactionFlags == [false])
-
-        let manualReader = ClaudeTestCredentialReader(file: .success(nil), keychain: .success(nil))
-        await expectError(.externalSessionMissing, recoveryAction: .signInSourceApp) {
-            try await provider(reader: manualReader).session(allowInteraction: true, rejectedAccessToken: nil)
-        }
-        #expect(await manualReader.interactionFlags == [true])
     }
 
     @Test("file permission and schema errors are not hidden by Keychain")
@@ -835,18 +571,18 @@ struct ClaudeSessionTests {
                 keychain: .success(credentials(token: "hidden", expiry: now.addingTimeInterval(120)))
             )
             await expectError(failure.kind, code: failure.diagnosticCode) {
-                try await provider(reader: reader).session(allowInteraction: true, rejectedAccessToken: nil)
+                try await provider(reader: reader).session(allowsRefresh: true, rejectedAccessToken: nil)
             }
             #expect(await reader.keychainReads == 0)
         }
     }
 
-    @Test("Keychain denial remains non-authentication unavailability")
+    @Test("Keychain read failures keep their own recovery action")
     func keychainUnavailableMapping() async {
-        let failure = CollectionError(kind: .keychainUnavailable, diagnosticCode: "test.locked")
+        let failure = CollectionError(kind: .keychainUnavailable, diagnosticCode: "test.locked", recoveryAction: .retry)
         let reader = ClaudeTestCredentialReader(file: .success(nil), keychain: .failure(failure))
-        await expectError(.keychainUnavailable, code: "test.locked", recoveryAction: .repairClaudeConnection) {
-            try await provider(reader: reader).session(allowInteraction: false, rejectedAccessToken: nil)
+        await expectError(.keychainUnavailable, code: "test.locked", recoveryAction: .retry) {
+            try await provider(reader: reader).session(allowsRefresh: false, rejectedAccessToken: nil)
         }
     }
 
@@ -857,7 +593,7 @@ struct ClaudeSessionTests {
             let data = rawCredentials(token: "token", expiry: expiry, scopes: ["user:profile"])
             let reader = ClaudeTestCredentialReader(file: .success(data), keychain: .success(nil))
             await expectError(.malformedResponse, code: "claude.session.expiry-invalid") {
-                try await provider(reader: reader).session(allowInteraction: false, rejectedAccessToken: nil)
+                try await provider(reader: reader).session(allowsRefresh: false, rejectedAccessToken: nil)
             }
         }
 
@@ -873,7 +609,7 @@ struct ClaudeSessionTests {
                 keychain: .success(nil)
             )
             await expectError(.authenticationRejected, code: "claude.session.access-token-invalid") {
-                try await provider(reader: reader).session(allowInteraction: false, rejectedAccessToken: nil)
+                try await provider(reader: reader).session(allowsRefresh: false, rejectedAccessToken: nil)
             }
         }
     }
@@ -888,7 +624,7 @@ struct ClaudeSessionTests {
         let provider = provider(reader: reader, refresher: refresher)
         let task = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            return try await provider.session(allowInteraction: true, rejectedAccessToken: nil)
+            return try await provider.session(allowsRefresh: true, rejectedAccessToken: nil)
         }
 
         do {
@@ -912,10 +648,10 @@ struct ClaudeSessionTests {
             await reader.setFile(replacement)
         }
         let provider = provider(reader: reader, refresher: refresher)
-        let owner = Task { try await provider.session(allowInteraction: true, rejectedAccessToken: nil) }
+        let owner = Task { try await provider.session(allowsRefresh: true, rejectedAccessToken: nil) }
         await refresher.waitUntilStarted()
         let observers = (0..<8).map { _ in
-            Task { try await provider.session(allowInteraction: true, rejectedAccessToken: nil) }
+            Task { try await provider.session(allowsRefresh: true, rejectedAccessToken: nil) }
         }
         await Task.yield()
         owner.cancel()
@@ -938,80 +674,80 @@ struct ClaudeSessionTests {
             }
         }
         #expect(await refresher.count == 1)
-        #expect(await reader.interactionFlags == [true, false])
-        #expect(try await provider.session(allowInteraction: false, rejectedAccessToken: nil).accessToken == "new")
+        #expect(await reader.keychainReads == 1)
+        #expect(try await provider.session(allowsRefresh: false, rejectedAccessToken: nil).accessToken == "new")
     }
 
-    @Test("concurrent recoveries coalesce before the initial authorization prompt finishes")
-    func concurrentRepairsCoalesceInitialPrompt() async throws {
+    @Test("concurrent refreshes coalesce while the initial Keychain read is in flight")
+    func concurrentRefreshesCoalesceInitialRead() async throws {
         let old = credentials(token: "old", expiry: now)
         let replacement = credentials(token: "new", expiry: now.addingTimeInterval(120))
-        let reader = InitialPromptGatedReader(file: old)
+        let reader = FirstKeychainReadGatedReader(file: old)
         let refresher = RecordingClaudeRefresher {
             await reader.setFile(replacement)
         }
         let provider = provider(reader: reader, refresher: refresher)
 
         let callers = (0..<8).map { _ in
-            Task { try await provider.session(allowInteraction: true, rejectedAccessToken: nil) }
+            Task { try await provider.session(allowsRefresh: true, rejectedAccessToken: nil) }
         }
-        await reader.waitUntilPrompted()
+        await reader.waitUntilReadStarted()
         await Task.yield()
-        #expect(await reader.interactionFlags == [true])
-        await reader.releasePrompt()
+        #expect(await reader.keychainReads == 1)
+        await reader.releaseRead()
 
         for caller in callers {
             #expect(try await caller.value.accessToken == "new")
         }
         #expect(await refresher.count == 1)
-        #expect(await reader.interactionFlags == [true, false])
+        #expect(await reader.keychainReads == 1)
     }
 
-    @Test("cancelling the last repair waiter before authorization completes prevents owner launch")
+    @Test("cancelling the last refresh waiter during the initial Keychain read prevents owner launch")
     func cancellationBeforeOwnerLaunch() async {
-        let reader = InitialPromptGatedReader(file: credentials(token: "old", expiry: now))
+        let reader = FirstKeychainReadGatedReader(file: credentials(token: "old", expiry: now))
         let refresher = RecordingClaudeRefresher()
         let provider = provider(reader: reader, refresher: refresher)
         let callers = (0..<4).map { _ in
-            Task { try await provider.session(allowInteraction: true, rejectedAccessToken: nil) }
+            Task { try await provider.session(allowsRefresh: true, rejectedAccessToken: nil) }
         }
 
-        await reader.waitUntilPrompted()
+        await reader.waitUntilReadStarted()
         for caller in callers { caller.cancel() }
-        await reader.releasePrompt()
+        await reader.releaseRead()
         for caller in callers {
             await expectCancellation { try await caller.value }
         }
 
         #expect(await refresher.count == 0)
-        #expect(await reader.interactionFlags == [true])
+        #expect(await reader.keychainReads == 1)
     }
 
-    @Test("a coalesced repair result is still checked against each caller's rejected token")
-    func concurrentRepairPreservesCallerRejection() async throws {
+    @Test("a coalesced refresh result is still checked against each caller's rejected token")
+    func concurrentRefreshPreservesCallerRejection() async throws {
         let old = credentials(token: "old", expiry: now)
         let replacement = credentials(token: "new", expiry: now.addingTimeInterval(120))
-        let reader = InitialPromptGatedReader(file: old)
+        let reader = FirstKeychainReadGatedReader(file: old)
         let refresher = RecordingClaudeRefresher {
             await reader.setFile(replacement)
         }
         let provider = provider(reader: reader, refresher: refresher)
         let owner = Task {
-            try await provider.session(allowInteraction: true, rejectedAccessToken: nil)
+            try await provider.session(allowsRefresh: true, rejectedAccessToken: nil)
         }
 
-        await reader.waitUntilPrompted()
+        await reader.waitUntilReadStarted()
         let rejectingObserver = Task {
-            try await provider.session(allowInteraction: true, rejectedAccessToken: "new")
+            try await provider.session(allowsRefresh: true, rejectedAccessToken: "new")
         }
         await Task.yield()
-        await reader.releasePrompt()
+        await reader.releaseRead()
 
         #expect(try await owner.value.accessToken == "new")
         await expectError(
             .authenticationRejected,
-            code: "claude.session.repair-required",
-            recoveryAction: .repairClaudeConnection
+            code: ClaudeSession.refreshRequiredDiagnosticCode,
+            recoveryAction: .runSourceCLI
         ) {
             try await rejectingObserver.value
         }
@@ -1044,10 +780,18 @@ struct ClaudeSessionTests {
         kind: CollectionErrorKind,
         code: String? = nil
     ) async {
-        let reader = NativeClaudeCredentialReader(homeDirectory: root) { _ in nil }
+        let reader = NativeClaudeCredentialReader(homeDirectory: root) { nil }
         await expectError(kind, code: code) {
-            try await provider(reader: reader).session(allowInteraction: false, rejectedAccessToken: nil)
+            try await provider(reader: reader).session(allowsRefresh: false, rejectedAccessToken: nil)
         }
+    }
+
+    /// Writes an executable `/bin/sh` script that stands in for `/usr/bin/security`.
+    private func script(in directory: URL, body: String) throws -> URL {
+        let url = directory.appendingPathComponent("fake-security-\(UUID().uuidString)")
+        try Data("#!/bin/sh\n\(body)\n".utf8).write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+        return url
     }
 
     private func provider(
@@ -1215,72 +959,21 @@ struct ClaudeSessionTests {
 
 }
 
-private final class GatedNativeKeychainLookup: @unchecked Sendable {
+private final class LockedCounter: @unchecked Sendable {
     private let lock = NSLock()
-    private let firstRelease = DispatchSemaphore(value: 0)
-    private let late: Data?
-    private let recovered: Data?
-    private var calls = 0
-    private var completions = 0
-    private var flags: [Bool] = []
+    private var count = 0
 
-    init(late: Data?, recovered: Data?) {
-        self.late = late
-        self.recovered = recovered
-    }
+    var value: Int { lock.withLock { count } }
 
-    var callCount: Int {
-        lock.withLock { calls }
-    }
-
-    var interactionFlags: [Bool] {
-        lock.withLock { flags }
-    }
-
-    func read(allowInteraction: Bool) -> Data? {
-        let call = lock.withLock {
-            calls += 1
-            flags.append(allowInteraction)
-            return calls
-        }
-        let value: Data?
-        if call == 1 {
-            firstRelease.wait()
-            value = late
-        } else {
-            value = recovered
-        }
-        lock.withLock { completions += 1 }
-        return value
-    }
-
-    func releaseFirst() {
-        firstRelease.signal()
-    }
-
-    func waitForCalls(_ expected: Int) async {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-        while ContinuousClock.now < deadline {
-            if callCount >= expected { return }
-            try? await Task.sleep(for: .milliseconds(1))
-        }
-        Issue.record("Keychain lookup did not start")
-    }
-
-    func waitForCompletions(_ expected: Int) async {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-        while ContinuousClock.now < deadline {
-            if lock.withLock({ completions }) >= expected { return }
-            try? await Task.sleep(for: .milliseconds(1))
-        }
-        Issue.record("Keychain lookup did not complete")
+    func increment() {
+        lock.withLock { count += 1 }
     }
 }
 
 private actor SequencedClaudeCredentialReader: ClaudeCredentialReading {
     private let files: [Data]
     private var index = 0
-    private(set) var interactionFlags: [Bool] = []
+    private(set) var keychainReads = 0
 
     init(files: [Data]) {
         self.files = files
@@ -1296,18 +989,19 @@ private actor SequencedClaudeCredentialReader: ClaudeCredentialReading {
         return files[index]
     }
 
-    func readKeychain(allowInteraction: Bool) async throws -> Data? {
-        interactionFlags.append(allowInteraction)
+    func readKeychain() async throws -> Data? {
+        keychainReads += 1
         return nil
     }
 }
 
-private actor InitialPromptGatedReader: ClaudeCredentialReading {
+/// Blocks the first Keychain read until released, then reads nothing from the Keychain.
+private actor FirstKeychainReadGatedReader: ClaudeCredentialReading {
     private var file: Data
-    private var promptReleased = false
-    private var promptWaiters: [CheckedContinuation<Void, Never>] = []
+    private var readReleased = false
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
     private var observers: [CheckedContinuation<Void, Never>] = []
-    private(set) var interactionFlags: [Bool] = []
+    private(set) var keychainReads = 0
 
     init(file: Data) {
         self.file = file
@@ -1315,13 +1009,13 @@ private actor InitialPromptGatedReader: ClaudeCredentialReading {
 
     func readFile() async throws -> Data? { file }
 
-    func readKeychain(allowInteraction: Bool) async throws -> Data? {
-        interactionFlags.append(allowInteraction)
-        guard allowInteraction, !promptReleased else { return nil }
+    func readKeychain() async throws -> Data? {
+        keychainReads += 1
+        guard !readReleased else { return nil }
         let current = observers
         observers.removeAll()
         current.forEach { $0.resume() }
-        await withCheckedContinuation { promptWaiters.append($0) }
+        await withCheckedContinuation { releaseWaiters.append($0) }
         return nil
     }
 
@@ -1329,24 +1023,24 @@ private actor InitialPromptGatedReader: ClaudeCredentialReading {
         file = data
     }
 
-    func waitUntilPrompted() async {
-        if !interactionFlags.isEmpty { return }
+    func waitUntilReadStarted() async {
+        if keychainReads > 0 { return }
         await withCheckedContinuation { observers.append($0) }
     }
 
-    func releasePrompt() {
-        promptReleased = true
-        let current = promptWaiters
-        promptWaiters.removeAll()
+    func releaseRead() {
+        readReleased = true
+        let current = releaseWaiters
+        releaseWaiters.removeAll()
         current.forEach { $0.resume() }
     }
 }
+
 private actor ClaudeTestCredentialReader: ClaudeCredentialReading {
     private var file: Result<Data?, CollectionError>
     private var keychain: Result<Data?, CollectionError>
     private(set) var fileReads = 0
     private(set) var keychainReads = 0
-    private(set) var interactionFlags: [Bool] = []
 
     init(file: Result<Data?, CollectionError>, keychain: Result<Data?, CollectionError>) {
         self.file = file
@@ -1358,9 +1052,8 @@ private actor ClaudeTestCredentialReader: ClaudeCredentialReading {
         return try file.get()
     }
 
-    func readKeychain(allowInteraction: Bool) async throws -> Data? {
+    func readKeychain() async throws -> Data? {
         keychainReads += 1
-        interactionFlags.append(allowInteraction)
         return try keychain.get()
     }
 
@@ -1379,46 +1072,9 @@ private struct AdvancingClaudeCredentialReader: ClaudeCredentialReading {
 
     func readFile() async throws -> Data? { nil }
 
-    func readKeychain(allowInteraction: Bool) async throws -> Data? {
+    func readKeychain() async throws -> Data? {
         await clock.advance(by: .seconds(2))
         return data
-    }
-}
-
-/// No file; the silent Keychain read blocks until released and then fails, a prompting read succeeds.
-private actor SilentBlockedReader: ClaudeCredentialReading {
-    private let data: Data
-    private var released = false
-    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
-    private var startWaiters: [CheckedContinuation<Void, Never>] = []
-    private(set) var interactionFlags: [Bool] = []
-
-    init(data: Data) {
-        self.data = data
-    }
-
-    func readFile() async throws -> Data? { nil }
-
-    func readKeychain(allowInteraction: Bool) async throws -> Data? {
-        interactionFlags.append(allowInteraction)
-        guard !allowInteraction else { return data }
-        startWaiters.forEach { $0.resume() }
-        startWaiters.removeAll()
-        if !released {
-            await withCheckedContinuation { releaseWaiters.append($0) }
-        }
-        throw CollectionError(kind: .keychainUnavailable, diagnosticCode: "test.keychain.locked")
-    }
-
-    func waitUntilSilentStarted() async {
-        if interactionFlags.contains(false) { return }
-        await withCheckedContinuation { startWaiters.append($0) }
-    }
-
-    func releaseSilent() {
-        released = true
-        releaseWaiters.forEach { $0.resume() }
-        releaseWaiters.removeAll()
     }
 }
 

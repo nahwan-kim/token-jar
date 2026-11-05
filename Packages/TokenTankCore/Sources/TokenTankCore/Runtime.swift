@@ -88,7 +88,7 @@ public actor RefreshCoordinator {
     private var wakeGateDeadline: Date?
     private var networkRestoredAt: Date?
     private var inFlight: [ProviderID: Task<ProviderSnapshot, Error>] = [:]
-    private var activeOperations: [ProviderID: CollectionOperation] = [:]
+    private var activeOperations: Set<ProviderID> = []
     private var operationWaiters: [ProviderID: [CheckedContinuation<Void, Never>]] = [:]
     private var generation: UInt = 0
     private var acceptingRefreshes = true
@@ -98,16 +98,10 @@ public actor RefreshCoordinator {
     private var continuations: [UUID: AsyncStream<[ProviderID: CollectionState]>.Continuation] = [:]
     private var disabledAccountSourceIDs: Set<String> = []
     private var disabledProviderIDs: Set<ProviderID> = []
-    private let claudePromptGate = ClaudeKeychainPromptGate()
 
     /// Providers the scheduler, refresh-all and stale-surface refresh may collect.
     private var collectedProviders: [ProviderID] {
         providerOrder.filter { !disabledProviderIDs.contains($0) }
-    }
-
-    private enum CollectionOperation: Equatable {
-        case ordinary
-        case claudeRepair
     }
 
     public init(
@@ -213,12 +207,12 @@ public actor RefreshCoordinator {
     /// copied the previous set, so this waits for it and then collects again.
     public func recollect(_ providerID: ProviderID) async {
         guard acceptingRefreshes, adapters[providerID] != nil, !disabledProviderIDs.contains(providerID) else { return }
-        while activeOperations[providerID] != nil {
+        while activeOperations.contains(providerID) {
             await waitForOperation(providerID)
             guard !Task.isCancelled, acceptingRefreshes else { return }
         }
-        activeOperations[providerID] = .ordinary
-        await collectReserved(providerID, operation: .ordinary, isUserInitiated: false)
+        activeOperations.insert(providerID)
+        await collectReserved(providerID, isUserInitiated: false)
     }
 
     public func state(for providerID: ProviderID) -> CollectionState {
@@ -253,7 +247,7 @@ public actor RefreshCoordinator {
             wakeGateDeadline = nil
         }
         let due = collectedProviders.filter { providerID in
-            activeOperations[providerID] == nil
+            !activeOperations.contains(providerID)
                 && !queued.contains(providerID)
                 && (nextDueAt[providerID] ?? .distantPast) <= now
         }
@@ -272,7 +266,7 @@ public actor RefreshCoordinator {
         guard acceptingRefreshes else { return }
         let now = await context.clock.now()
         guard acceptingRefreshes else { return }
-        for providerID in collectedProviders where activeOperations[providerID] == nil && !queued.contains(providerID) {
+        for providerID in collectedProviders where !activeOperations.contains(providerID) && !queued.contains(providerID) {
             if let succeeded = lastSucceededAt[providerID], now.timeIntervalSince(succeeded) <= age.seconds {
                 continue
             }
@@ -320,37 +314,10 @@ public actor RefreshCoordinator {
         guard acceptingRefreshes else { return }
         let providerIDs = collectedProviders.filter { providerID in
             guard !queued.contains(providerID) else { return false }
-            guard userInitiated, activeOperations[providerID] == nil else { return true }
+            guard userInitiated, !activeOperations.contains(providerID) else { return true }
             return !isWithinManualFloor(providerID, now: now)
         }
         await runPool(providerIDs, userInitiated: userInitiated)
-    }
-
-    public func repairClaudeConnection() async {
-        guard acceptingRefreshes, adapters[.claude] != nil, !disabledProviderIDs.contains(.claude) else { return }
-        let requestGeneration = generation
-        var waitedForOrdinaryCollection = false
-
-        while let activeOperation = activeOperations[.claude] {
-            await waitForOperation(.claude)
-            guard
-                !Task.isCancelled,
-                acceptingRefreshes,
-                requestGeneration == generation
-            else { return }
-            if activeOperation == .claudeRepair { return }
-            waitedForOrdinaryCollection = true
-        }
-
-        guard
-            !Task.isCancelled,
-            acceptingRefreshes,
-            requestGeneration == generation,
-            !waitedForOrdinaryCollection || stateRequiresClaudeRepair
-        else { return }
-
-        activeOperations[.claude] = .claudeRepair
-        await collectReserved(.claude, operation: .claudeRepair, isUserInitiated: true)
     }
 
     public func refresh(_ providerID: ProviderID, userInitiated: Bool = false) async {
@@ -359,14 +326,14 @@ public actor RefreshCoordinator {
 
     private func refresh(_ providerID: ProviderID, userInitiated: Bool, enforcesManualFloor: Bool) async {
         guard acceptingRefreshes, adapters[providerID] != nil, !disabledProviderIDs.contains(providerID) else { return }
-        if activeOperations[providerID] != nil {
+        if activeOperations.contains(providerID) {
             await waitForOperation(providerID)
             return
         }
         if enforcesManualFloor {
             let now = await context.clock.now()
             guard acceptingRefreshes else { return }
-            if activeOperations[providerID] != nil {
+            if activeOperations.contains(providerID) {
                 await waitForOperation(providerID)
                 return
             }
@@ -382,8 +349,8 @@ public actor RefreshCoordinator {
                 return
             }
         }
-        activeOperations[providerID] = .ordinary
-        await collectReserved(providerID, operation: .ordinary, isUserInitiated: userInitiated)
+        activeOperations.insert(providerID)
+        await collectReserved(providerID, isUserInitiated: userInitiated)
     }
 
     private func isWithinManualFloor(_ providerID: ProviderID, now: Date) -> Bool {
@@ -459,7 +426,7 @@ public actor RefreshCoordinator {
     private func nextTickDelay() async -> Duration {
         let now = await context.clock.now()
         let earliest = collectedProviders
-            .filter { activeOperations[$0] == nil && !queued.contains($0) }
+            .filter { !activeOperations.contains($0) && !queued.contains($0) }
             .map { nextDueAt[$0] ?? .distantPast }
             .min()
         guard let earliest, earliest > now else { return tick }
@@ -546,11 +513,7 @@ public actor RefreshCoordinator {
         nextDueAt[providerID] = due
     }
 
-    private func collectReserved(
-        _ providerID: ProviderID,
-        operation: CollectionOperation,
-        isUserInitiated: Bool
-    ) async {
+    private func collectReserved(_ providerID: ProviderID, isUserInitiated: Bool) async {
         defer { finishOperation(providerID) }
         guard !Task.isCancelled, acceptingRefreshes, let adapter = adapters[providerID] else { return }
         let operationGeneration = generation
@@ -567,12 +530,8 @@ public actor RefreshCoordinator {
         let startedAt = await context.clock.monotonicNow()
         let correlationID = UUID()
 
-        // Background collections may still renew a readable session through Claude Code, but only a
-        // user action may show the Keychain dialog: Repair for every account that needs it, a manual
-        // refresh at most once and never for an account the user denied in the last six hours.
+        // Every Claude collection may let Claude Code renew an expired or rejected session once.
         let allowsClaudeRecovery = providerID == .claude
-        let allowsClaudeKeychainPrompt = providerID == .claude
-            && (operation == .claudeRepair || isUserInitiated)
         let previous: ProviderSnapshot?
         if let current = states[providerID]?.snapshot {
             previous = current
@@ -588,9 +547,6 @@ public actor RefreshCoordinator {
             correlationID: correlationID,
             isUserInitiated: isUserInitiated,
             allowsClaudeRecovery: allowsClaudeRecovery,
-            allowsClaudeKeychainPrompt: allowsClaudeKeychainPrompt,
-            appliesClaudePromptCooldown: operation != .claudeRepair,
-            claudePromptGate: claudePromptGate,
             disabledAccountSourceIDs: disabledAccountSourceIDs
         )
         let task = Task<ProviderSnapshot, Error> {
@@ -611,24 +567,16 @@ public actor RefreshCoordinator {
         }
         inFlight[providerID] = task
         do {
-            let snapshot = try await withTaskCancellationHandler {
-                await context.diagnostics.record(
-                    DiagnosticEvent(
-                        level: .info,
-                        category: "collection",
-                        code: "collection.started",
-                        providerID: providerID,
-                        correlationID: correlationID
-                    )
+            await context.diagnostics.record(
+                DiagnosticEvent(
+                    level: .info,
+                    category: "collection",
+                    code: "collection.started",
+                    providerID: providerID,
+                    correlationID: correlationID
                 )
-                let result = try await task.value
-                if operation == .claudeRepair { try Task.checkCancellation() }
-                return result
-            } onCancel: {
-                // Explicit repair owns its operation, so cancelling it cancels the collection.
-                // Ordinary callers retain shared-operation cancellation behavior.
-                if operation == .claudeRepair { task.cancel() }
-            }
+            )
+            let snapshot = try await task.value
             guard
                 snapshot.providerID == providerID,
                 snapshot.source == adapter.sourceDescriptor
@@ -698,29 +646,15 @@ public actor RefreshCoordinator {
         emitStates()
     }
 
-    private var stateRequiresClaudeRepair: Bool {
-        let failure: CollectionError?
-        switch states[.claude] {
-        case let .stale(_, currentFailure, _), let .authenticationActionRequired(_, currentFailure):
-            failure = currentFailure
-        case let .fresh(snapshot):
-            // A multi-account snapshot can succeed while one account still needs repair.
-            return snapshot.accounts.contains { $0.failure?.recoveryAction == .repairClaudeConnection }
-        default:
-            failure = nil
-        }
-        return failure?.recoveryAction == .repairClaudeConnection
-    }
-
     private func waitForOperation(_ providerID: ProviderID) async {
-        guard activeOperations[providerID] != nil else { return }
+        guard activeOperations.contains(providerID) else { return }
         await withCheckedContinuation { continuation in
             operationWaiters[providerID, default: []].append(continuation)
         }
     }
 
     private func finishOperation(_ providerID: ProviderID) {
-        activeOperations.removeValue(forKey: providerID)
+        activeOperations.remove(providerID)
         let waiters = operationWaiters.removeValue(forKey: providerID) ?? []
         for waiter in waiters { waiter.resume() }
     }
@@ -804,9 +738,6 @@ extension CollectionContext {
         correlationID: UUID = UUID(),
         isUserInitiated: Bool = false,
         allowsClaudeRecovery: Bool = false,
-        allowsClaudeKeychainPrompt: Bool = false,
-        appliesClaudePromptCooldown: Bool = true,
-        claudePromptGate: ClaudeKeychainPromptGate = ClaudeKeychainPromptGate(),
         disabledAccountSourceIDs: Set<String> = []
     ) -> CollectionContext {
         CollectionContext(
@@ -820,11 +751,7 @@ extension CollectionContext {
             claudeSession: ProviderScopedClaudeSessionProvider(
                 providerID: providerID,
                 base: claudeSession,
-                allowsClaudeRecovery: allowsClaudeRecovery,
-                allowsClaudeKeychainPrompt: allowsClaudeKeychainPrompt,
-                appliesPromptCooldown: appliesClaudePromptCooldown,
-                promptGate: claudePromptGate,
-                clock: clock
+                allowsClaudeRecovery: allowsClaudeRecovery
             ),
             antigravitySession: ProviderScopedAntigravitySessionProvider(
                 providerID: providerID,
@@ -835,7 +762,6 @@ extension CollectionContext {
             correlationID: correlationID,
             isUserInitiated: isUserInitiated,
             allowsClaudeRecovery: allowsClaudeRecovery,
-            allowsClaudeKeychainPrompt: allowsClaudeKeychainPrompt,
             disabledAccountSourceIDs: disabledAccountSourceIDs
         )
     }
@@ -902,60 +828,23 @@ private struct ProviderScopedAntigravitySessionProvider: AntigravitySessionProvi
     }
 }
 
-/// Remembers, per Claude account, a denied Keychain authorization so ordinary manual refreshes stop
-/// asking for that account for a while. Repair Claude Connection always asks.
-public actor ClaudeKeychainPromptGate {
-    public static let deniedDiagnosticCode = "claude.session.keychain.denied"
-    public static let cooldown: TimeInterval = 6 * 60 * 60
-
-    private var deniedUntil: [String: Date] = [:]
-
-    public init() {}
-
-    func allowsPrompt(account sourceID: String, now: Date) -> Bool {
-        deniedUntil[sourceID].map { now >= $0 } ?? true
-    }
-
-    func recordDenial(account sourceID: String, at now: Date) {
-        deniedUntil[sourceID] = now.addingTimeInterval(Self.cooldown)
-    }
-}
-
 private actor ProviderScopedClaudeSessionProvider: ClaudeSessionProviding {
     let providerID: ProviderID
     let base: any ClaudeSessionProviding
     let allowsClaudeRecovery: Bool
-    let allowsClaudeKeychainPrompt: Bool
-    /// Ordinary manual refreshes: one dialog per collection, none for a recently denied account.
-    let appliesPromptCooldown: Bool
-    let promptGate: ClaudeKeychainPromptGate
-    let clock: any TokenTankClock
-    /// One recovery (quiet owner refresh, or Keychain approval plus owner refresh) per account per collection.
-    private var spentInteractionAccounts: Set<String> = []
-    private var promptOffered = false
+    /// One Claude Code owner refresh per account per collection.
+    private var refreshedAccounts: Set<String> = []
 
-    init(
-        providerID: ProviderID,
-        base: any ClaudeSessionProviding,
-        allowsClaudeRecovery: Bool,
-        allowsClaudeKeychainPrompt: Bool,
-        appliesPromptCooldown: Bool,
-        promptGate: ClaudeKeychainPromptGate,
-        clock: any TokenTankClock
-    ) {
+    init(providerID: ProviderID, base: any ClaudeSessionProviding, allowsClaudeRecovery: Bool) {
         self.providerID = providerID
         self.base = base
         self.allowsClaudeRecovery = allowsClaudeRecovery
-        self.allowsClaudeKeychainPrompt = allowsClaudeKeychainPrompt
-        self.appliesPromptCooldown = appliesPromptCooldown
-        self.promptGate = promptGate
-        self.clock = clock
     }
 
-    func session(allowInteraction: Bool, rejectedAccessToken: String?) async throws -> ClaudeSession {
+    func session(allowsRefresh: Bool, rejectedAccessToken: String?) async throws -> ClaudeSession {
         try await session(
             account: ClaudeAccount.defaultSourceID,
-            allowInteraction: allowInteraction,
+            allowsRefresh: allowsRefresh,
             rejectedAccessToken: rejectedAccessToken
         )
     }
@@ -967,43 +856,18 @@ private actor ProviderScopedClaudeSessionProvider: ClaudeSessionProviding {
 
     func session(
         account sourceID: String,
-        allowInteraction: Bool,
+        allowsRefresh: Bool,
         rejectedAccessToken: String?
     ) async throws -> ClaudeSession {
         guard providerID == .claude else { throw deniedError }
-        guard allowInteraction else {
-            return try await base.session(account: sourceID, allowInteraction: false, rejectedAccessToken: rejectedAccessToken)
+        if allowsRefresh {
+            guard allowsClaudeRecovery, refreshedAccounts.insert(sourceID).inserted else { throw deniedError }
         }
-        guard allowsClaudeRecovery, allowsClaudeKeychainPrompt, spentInteractionAccounts.insert(sourceID).inserted else {
-            throw deniedError
-        }
-        if appliesPromptCooldown {
-            // Claimed before the gate check so concurrent accounts cannot both take the one dialog.
-            guard !promptOffered else {
-                return try await base.quietRecoverySession(account: sourceID, rejectedAccessToken: rejectedAccessToken)
-            }
-            promptOffered = true
-            guard await promptGate.allowsPrompt(account: sourceID, now: await clock.now()) else {
-                promptOffered = false
-                return try await base.quietRecoverySession(account: sourceID, rejectedAccessToken: rejectedAccessToken)
-            }
-        }
-        do {
-            return try await base.session(
-                account: sourceID,
-                allowInteraction: true,
-                rejectedAccessToken: rejectedAccessToken
-            )
-        } catch let error as CollectionError where error.diagnosticCode == ClaudeKeychainPromptGate.deniedDiagnosticCode {
-            await promptGate.recordDenial(account: sourceID, at: await clock.now())
-            throw error
-        }
-    }
-
-    func quietRecoverySession(account sourceID: String, rejectedAccessToken: String?) async throws -> ClaudeSession {
-        guard providerID == .claude else { throw deniedError }
-        guard allowsClaudeRecovery, spentInteractionAccounts.insert(sourceID).inserted else { throw deniedError }
-        return try await base.quietRecoverySession(account: sourceID, rejectedAccessToken: rejectedAccessToken)
+        return try await base.session(
+            account: sourceID,
+            allowsRefresh: allowsRefresh,
+            rejectedAccessToken: rejectedAccessToken
+        )
     }
 
     private var deniedError: CollectionError {

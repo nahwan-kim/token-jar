@@ -8,6 +8,13 @@
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "Grok CLI를 한 번 실행하면 갱신됨" } }
       }
     },
+    "action.run_claude_cli" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Run Claude Code once to renew" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Claude Code를 한 번 실행하면 갱신됨" } }
+      }
+    },
     "action.run_cli_proxy" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -83,20 +90,6 @@
       "localizations" : {
         "en" : { "stringUnit" : { "state" : "translated", "value" : "Refresh every provider" } },
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "모든 Provider 새로고침" } }
-      }
-    },
-    "action.repair_claude_connection" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Repair Claude Connection" } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Claude 연결 복구" } }
-      }
-    },
-    "action.repair_claude_connection.help" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Deliberately repair the Claude connection. This may ask for Keychain permission or run Claude Code." } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Claude 연결을 명시적으로 복구합니다. 키체인 권한을 요청하거나 Claude Code를 실행할 수 있습니다." } }
       }
     },
     "action.retry" : {
@@ -195,13 +188,6 @@
       "localizations" : {
         "en" : { "stringUnit" : { "state" : "translated", "value" : "Keychain unavailable" } },
         "ko" : { "stringUnit" : { "state" : "translated", "value" : "키체인을 사용할 수 없음" } }
-      }
-    },
-    "error.claude_keychain_guidance" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Background updates never show the macOS Keychain dialog. Choose Repair Claude Connection and approve Token Jar’s Keychain access. If you deny it, Refresh stops asking for 6 hours; Repair always asks." } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "자동 갱신은 macOS 키체인 승인창을 띄우지 않습니다. Claude 연결 복구를 눌러 토큰 항아리의 키체인 접근을 승인하세요. 거부하면 6시간 동안 새로고침은 묻지 않고, 연결 복구는 언제든 다시 묻습니다." } }
       }
     },
     "error.network" : {
@@ -718,8 +704,8 @@
     "source.detail.claude" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Live Claude usage through the native Claude Code OAuth session. Background updates reread it silently and may let Claude Code renew it, but never show the Keychain dialog; only Refresh or Repair Claude Connection may ask." } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "네이티브 Claude Code OAuth 세션으로 라이브 사용량을 조회합니다. 자동 갱신은 조용히 다시 읽고 Claude Code가 세션을 갱신하게 할 수 있지만 키체인 승인창은 띄우지 않습니다. 승인창은 새로고침이나 Claude 연결 복구를 누를 때만 나타납니다." } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Live Claude usage through the native Claude Code OAuth session. Token Jar reads the Claude Code sign-in through macOS security without any Keychain dialog and lets Claude Code renew an expired session automatically." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "네이티브 Claude Code OAuth 세션으로 라이브 사용량을 조회합니다. 토큰 항아리는 macOS security로 Claude Code 로그인을 키체인 승인창 없이 읽고, 세션이 만료되면 Claude Code가 자동으로 갱신하게 합니다." } }
       }
     },
     "source.detail.codex" : {
@@ -781,15 +767,8 @@
     "state.claude_refreshing.instruction" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Keep Claude Code signed in. If macOS asks, approve native Keychain access." } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Claude Code 로그인 상태를 유지하세요. macOS가 요청하면 네이티브 키체인 접근을 승인하세요." } }
-      }
-    },
-    "state.claude_repairing" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Repairing Claude connection…" } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Claude 연결 복구 중…" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Keep Claude Code signed in. Token Jar lets Claude Code renew an expired session automatically." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "Claude Code 로그인 상태를 유지하세요. 세션이 만료되면 Claude Code가 자동으로 갱신합니다." } }
       }
     },
     "state.refreshing" : {
