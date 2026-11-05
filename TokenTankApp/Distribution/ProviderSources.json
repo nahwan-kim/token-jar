@@ -196,7 +196,7 @@
     },
     {
       "provider": "antigravity",
-      "surface": "Antigravity (Google Code Assist) Gemini and Claude/GPT 5-hour and weekly limits",
+      "surface": "Antigravity (Google Code Assist) Gemini and Claude/GPT 5-hour and weekly limits plus the Gemini 4 Argon weekly limit",
       "selectedSource": "CLIProxyAPI-held Antigravity Google OAuth plus daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
       "sourceStatus": "watch",
       "productionComposition": true,

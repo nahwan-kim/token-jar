@@ -16,10 +16,11 @@ public enum AntigravityRequestPolicy {
     )
     public static let maximumBodyBytes = 512
     public static let timeout: TimeInterval = 15
+    // retrieveUserQuotaSummary returns the separate "Gemini 4 Argon" group only to hub 2.16.0 and later.
     #if arch(arm64)
-    public static let userAgent = "antigravity/hub/2.9.1 darwin/arm64"
+    public static let userAgent = "antigravity/hub/2.19.1 darwin/arm64"
     #else
-    public static let userAgent = "antigravity/hub/2.9.1 darwin/amd64"
+    public static let userAgent = "antigravity/hub/2.19.1 darwin/amd64"
     #endif
 
     /// `{"project":"<id>"}`, or `{}` when CLIProxyAPI has not stored a project.

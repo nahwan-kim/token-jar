@@ -36,6 +36,12 @@ struct AntigravityAdapterTests {
                 {"bucketId": "3p-5h", "window": "5h", "resetTime": "2026-10-30T06:30:02Z", "remainingFraction": 0},
                 {"bucketId": "3p-daily", "window": "daily", "disabled": true, "remainingFraction": 0.5}
               ]
+            },
+            {
+              "displayName": "Gemini 4 Argon",
+              "buckets": [
+                {"bucketId": "gemini-argon-wtu-weekly", "window": "weekly", "resetTime": "2026-11-07T03:08:13Z", "remainingFraction": 0.0021298667}
+              ]
             }
           ]
         }
@@ -61,8 +67,8 @@ struct AntigravityAdapterTests {
     @Test("buckets become remaining percentages per group, 5-hour before weekly, disabled skipped")
     func decodeSummary() throws {
         let snapshot = try AntigravityAdapter.decodeSnapshot(from: summary)
-        #expect(snapshot.quotas.map(\.originalName) == ["gemini.5h", "gemini.weekly", "3p.5h", "3p.weekly"])
-        #expect(snapshot.quotas.map(\.id.rawValue) == ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"])
+        #expect(snapshot.quotas.map(\.originalName) == ["gemini.5h", "gemini.weekly", "3p.5h", "3p.weekly", "gemini-argon-wtu.weekly"])
+        #expect(snapshot.quotas.map(\.id.rawValue) == ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly", "gemini-argon-wtu-weekly"])
         let gemini = snapshot.quotas[0]
         #expect(gemini.percentage.meaning == .remaining)
         #expect(gemini.percentage.value == 25)
@@ -73,6 +79,8 @@ struct AntigravityAdapterTests {
         #expect(snapshot.quotas[2].percentage.value == 0)
         #expect(snapshot.quotas[3].percentage.value == 100)
         #expect(snapshot.quotas[3].sourceFields["antigravityGroup"] == "Claude/GPT")
+        #expect(snapshot.quotas[4].sourceFields["antigravityGroup"] == "Gemini 4 Argon")
+        #expect(snapshot.quotas[4].percentage.value == Decimal(string: "0.21298667"))
     }
 
     @Test("a fraction outside 0...1, an unreadable reset time, or a missing group list fails closed")
@@ -108,7 +116,7 @@ struct AntigravityAdapterTests {
         #expect(requests[0].body == Data(#"{"project":"aicode-consumers"}"#.utf8))
         #expect(requests[1].body == AntigravityRequestPolicy.loadCodeAssistBody)
         #expect(snapshot.accountEmail == "a@example.com")
-        #expect(snapshot.quotas.count == 4)
+        #expect(snapshot.quotas.count == 5)
         #expect(snapshot.quotas.allSatisfy { $0.sourceFields["plan"] == "Google AI Pro" })
     }
 
@@ -124,7 +132,7 @@ struct AntigravityAdapterTests {
         )
         let snapshot = try await AntigravityAdapter().fetchSnapshot(context: context)
         #expect(await network.requests.first?.body == Data("{}".utf8))
-        #expect(snapshot.quotas.count == 4)
+        #expect(snapshot.quotas.count == 5)
         #expect(snapshot.quotas.allSatisfy { $0.sourceFields["plan"] == nil })
     }
 
@@ -163,7 +171,7 @@ struct AntigravityAdapterTests {
         let snapshot = try await AntigravityAdapter().fetchSnapshot(context: context)
         #expect(snapshot.accounts.count == 2)
         #expect(snapshot.account(for: "antigravity.a@example.com")?.plan == "Google AI Pro")
-        #expect(snapshot.account(for: "antigravity.a@example.com")?.quotas.count == 4)
+        #expect(snapshot.account(for: "antigravity.a@example.com")?.quotas.count == 5)
         #expect(snapshot.account(for: "antigravity.b")?.failure?.diagnosticCode == "antigravity.session.expired")
     }
 }

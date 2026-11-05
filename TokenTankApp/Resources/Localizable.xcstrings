@@ -32,8 +32,8 @@
     "source.detail.antigravity" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Antigravity Gemini and Claude/GPT 5-hour and weekly limits for each Google sign-in kept by CLIProxyAPI. Token Jar only reads ~/.cli-proxy-api/auths/antigravity-*.json; CLIProxyAPI renews the tokens. Sign in again with CLIProxyAPI's Antigravity login if the sign-in was revoked." } },
-        "ko" : { "stringUnit" : { "state" : "translated", "value" : "CLIProxyAPI에 로그인된 Google 계정별 Antigravity Gemini·Claude/GPT 5시간·주간 한도입니다. ~/.cli-proxy-api/auths/antigravity-*.json은 읽기만 하며 토큰 갱신은 CLIProxyAPI가 합니다. 로그인이 해제된 경우 CLIProxyAPI의 Antigravity 로그인으로 다시 로그인하세요." } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Antigravity Gemini and Claude/GPT 5-hour and weekly limits, plus the separate Gemini 4 Argon weekly limit, for each Google sign-in kept by CLIProxyAPI. Token Jar only reads ~/.cli-proxy-api/auths/antigravity-*.json; CLIProxyAPI renews the tokens. Sign in again with CLIProxyAPI's Antigravity login if the sign-in was revoked." } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "CLIProxyAPI에 로그인된 Google 계정별 Antigravity Gemini·Claude/GPT 5시간·주간 한도와 별도의 Gemini 4 Argon 주간 한도입니다. ~/.cli-proxy-api/auths/antigravity-*.json은 읽기만 하며 토큰 갱신은 CLIProxyAPI가 합니다. 로그인이 해제된 경우 CLIProxyAPI의 Antigravity 로그인으로 다시 로그인하세요." } }
       }
     },
     "codex.weekly" : {

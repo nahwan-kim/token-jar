@@ -14,7 +14,7 @@ public struct AntigravityAdapter: ProviderAdapter {
             kind: .localSession,
             credentialOwnership: .externalProvider,
             documentationURL: URL(string: "https://github.com/steipete/CodexBar/blob/main/docs/antigravity.md"),
-            detail: "Antigravity Google OAuth sign-ins kept by CLIProxyAPI (~/.cli-proxy-api/auths/antigravity-*.json, else ~/.cli-proxy-api), one account per enabled file, plus daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary for the Gemini and Claude/GPT 5-hour and weekly limits and cloudcode-pa.googleapis.com/v1internal:loadCodeAssist for the plan name. Token Jar only reads the auth files; CLIProxyAPI renews each token before it expires, so Token Jar sends no refresh grant and writes nothing."
+            detail: "Antigravity Google OAuth sign-ins kept by CLIProxyAPI (~/.cli-proxy-api/auths/antigravity-*.json, else ~/.cli-proxy-api), one account per enabled file, plus daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary for the Gemini and Claude/GPT 5-hour and weekly limits and the separate Gemini 4 Argon weekly limit, and cloudcode-pa.googleapis.com/v1internal:loadCodeAssist for the plan name. Token Jar only reads the auth files; CLIProxyAPI renews each token before it expires, so Token Jar sends no refresh grant and writes nothing."
         )
     }
 
