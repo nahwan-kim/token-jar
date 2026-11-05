@@ -576,6 +576,26 @@ final class AppModelTests: XCTestCase {
 
         await model.stop()
     }
+    func testUsageWindowFollowsSettingsProviderOrder() async throws {
+        let credentials = InMemoryCredentialStore()
+        let model = AppModel(
+            adapters: [],
+            credentialStore: credentials,
+            preferencesStore: MemoryPreferencesStore(),
+            context: makeContext(credentials: credentials)
+        )
+
+        model.move(.grok, offset: -1)
+        model.move(.grok, offset: -1)
+        var cursor = model.preference(for: .cursor)
+        cursor.isVisible = false
+        model.updatePreference(cursor)
+
+        XCTAssertEqual(model.visibleProviderIDs, [.grok, .codex, .claude, .doubao, .antigravity])
+        XCTAssertEqual(model.menuBarLabelText(), "Grok —  Codex —  Claude —  Doubao —  Antigravity —")
+
+        await model.stop()
+    }
     func testCodexMenuUsesIndependentAccountValuesInStableSourceOrder() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let primary = makeSnapshot(providerID: .codex, percentage: 26)

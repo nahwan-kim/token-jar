@@ -1218,9 +1218,10 @@ final class AppModel: ObservableObject {
         updateCollectionFilters(recollect: preference.isVisible ? preference.providerID : nil)
     }
 
-    /// Providers shown in the usage window, in their fixed order; hidden ones are left out.
+    /// Providers shown in the usage window, in the Settings order the menu bar also uses;
+    /// hidden ones are left out.
     var visibleProviderIDs: [ProviderID] {
-        ProviderID.allCases.filter { preferences.preference(for: $0).isVisible }
+        preferences.visibleProviders.map(\.providerID)
     }
 
     func setShowsMenuBarPercentSign(_ value: Bool) {
