@@ -41,6 +41,15 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             ? .korean : .english
     }
 }
+
+/// The app bundle's localization for the language chosen in Settings, not the system one.
+/// `String(localized:bundle:locale:)` would still pick the system language here.
+func appLanguageStrings(for locale: Locale) -> Bundle {
+    let bundle = Bundle(for: AppModel.self)
+    let language = locale.language.languageCode?.identifier ?? "en"
+    return bundle.path(forResource: language, ofType: "lproj").flatMap(Bundle.init(path:)) ?? bundle
+}
+
 struct CodexAccountMenuValue: Equatable, Identifiable, Sendable {
     let sourceID: String
     let value: String
@@ -262,7 +271,7 @@ struct TerminalAccountSignInService: AccountSignInServicing {
             command = "\(executable(ClaudeCLIAuthRefresher.defaultExecutableCandidates(homeDirectory: homeDirectory), fallback: "claude")) "
                 + "auth login"
         }
-        let strings = Self.strings(for: locale)
+        let strings = appLanguageStrings(for: locale)
         let title = Self.shellQuoted(String(
             format: strings.localizedString(forKey: "settings.account.add.terminal_title", value: nil, table: nil),
             directory.providerID.displayName,
@@ -284,13 +293,6 @@ struct TerminalAccountSignInService: AccountSignInServicing {
         fi
 
         """
-    }
-
-    /// The app bundle's localization for the language chosen in Settings, not the system one.
-    private static func strings(for locale: Locale) -> Bundle {
-        let bundle = Bundle(for: AppModel.self)
-        let language = locale.language.languageCode?.identifier ?? "en"
-        return bundle.path(forResource: language, ofType: "lproj").flatMap(Bundle.init(path:)) ?? bundle
     }
 
     private func executable(_ candidates: [URL], fallback: String) -> String {
@@ -433,11 +435,7 @@ enum CodexAccountPresentation {
     }
 
     static func localized(_ key: String, locale: Locale) -> String {
-        String(
-            localized: String.LocalizationValue(stringLiteral: key),
-            bundle: Bundle(for: AppModel.self),
-            locale: locale
-        )
+        appLanguageStrings(for: locale).localizedString(forKey: key, value: nil, table: nil)
     }
 
     private static func fallbackLabel(for sourceID: String, locale: Locale) -> String {

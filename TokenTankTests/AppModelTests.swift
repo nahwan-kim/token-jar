@@ -994,11 +994,16 @@ final class AppModelTests: XCTestCase {
             refreshedAt: now
         )
         let staleCredentials = InMemoryCredentialStore()
+        let languageSuite = "TokenTankTests.staleLanguage.\(UUID().uuidString)"
+        let languageDefaults = try XCTUnwrap(UserDefaults(suiteName: languageSuite))
+        defer { languageDefaults.removePersistentDomain(forName: languageSuite) }
+        languageDefaults.set(AppLanguage.english.rawValue, forKey: "appLanguage")
         let staleModel = AppModel(
             adapters: [TestAppAdapter(id: .codex, results: [.success(staleSnapshot)])],
             credentialStore: staleCredentials,
             preferencesStore: MemoryPreferencesStore(),
-            context: makeContext(credentials: staleCredentials)
+            context: makeContext(credentials: staleCredentials),
+            languageDefaults: languageDefaults
         )
         staleModel.ensureStarted()
         let staleBecameFresh = await eventually {
