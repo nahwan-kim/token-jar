@@ -21,9 +21,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Keep the oldest supported image explicit.  Do not silently replace it
-          # when GitHub changes the macOS-latest alias.
-          - os: macos-14
+          # Keep the oldest supported toolchain explicit.  Do not silently replace it
+          # when GitHub changes the macOS-latest alias.  GitHub retired every macOS 14
+          # image on 2026-11-02; macOS 15 still ships the pinned Xcode 16.2.
+          - os: macos-15
             xcode: "16.2"
             developer_dir: /Applications/Xcode_16.2.app/Contents/Developer
           - os: macos-latest
