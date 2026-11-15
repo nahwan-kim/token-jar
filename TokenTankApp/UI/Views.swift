@@ -997,8 +997,12 @@ enum QuotaDisplayFormatter {
                 ticketScope: .weekly
             )
         }
-        var rows = displayedQuotas(quotas, providerID: .claude).map(row)
-        if let fable = quotas.first(where: { $0.originalName.hasPrefix("weekly_scoped.") }),
+        // One weekly row (weekly_all and seven_day are aliases); other usage only when no weekly limit exists.
+        let usage = displayedQuotas(quotas, providerID: .claude)
+        let weekly = usage.first { $0.originalName == "weekly_all" || $0.originalName == "seven_day" }
+        var rows = (weekly.map { [$0] } ?? usage).map(row)
+        if let fable = quotas.first(where: { $0.originalName == "weekly_scoped.Fable" })
+            ?? quotas.first(where: { $0.originalName.hasPrefix("weekly_scoped.") }),
            !rows.contains(where: { $0.usage.id == fable.id }) {
             rows.append(row(fable))
         }
@@ -1062,14 +1066,19 @@ enum QuotaDisplayFormatter {
             return !clears.isEmpty && !clears.contains("seven_day")
         }
         let allGrants = quotas.filter { $0.id.rawValue.hasPrefix("rateLimitResetCredit.") }
-        let grants = allGrants.filter { isScoped($0) == (scope == .scoped) }
+        let scopedGrants = allGrants.filter(isScoped)
+        // The published summary stays authoritative for the weekly row; every Fable grant it counted is
+        // carved out of it. The Fable row counts only grants that have not expired yet.
+        let grants = scope == .scoped
+            ? scopedGrants.filter { $0.resetsAt.map { $0 > now } ?? true }
+            : allGrants.filter { !isScoped($0) }
         if scope == .scoped, grants.isEmpty { return nil }
-        var scopedCount = Decimal.zero
-        for grant in allGrants where isScoped(grant) {
-            scopedCount += grant.remaining?.value ?? 0
+        func sum(_ items: [RawQuotaItem]) -> Decimal {
+            items.reduce(Decimal.zero) { $0 + ($1.remaining?.value ?? 0) }
         }
-        // The published summary stays authoritative for the weekly row; Fable grants are carved out of it.
-        let count: Decimal? = scope == .scoped ? scopedCount : summary.remaining.map { max(0, $0.value - scopedCount) }
+        let count: Decimal? = scope == .scoped
+            ? sum(grants)
+            : summary.remaining.map { max(0, $0.value - sum(scopedGrants)) }
         let expiry = grants.filter { ($0.remaining?.value ?? 0) > 0 }
             .compactMap(\.resetsAt).filter { $0 > now }.min()
         return ResetCredits(count: count, expiresAt: count == 0 ? nil : expiry)

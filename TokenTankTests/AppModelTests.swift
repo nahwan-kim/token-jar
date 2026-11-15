@@ -275,6 +275,15 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(rows[1].tickets, .init(count: 1, expiresAt: now.addingTimeInterval(7200)))
         XCTAssertNil(QuotaDisplayFormatter.claudeResetCredits(
             Array(quotas.dropLast()), scope: .scoped, isFresh: true, now: now))
+        // An expired Fable grant leaves the Fable row and is still carved out of the weekly summary.
+        let later = now.addingTimeInterval(7200)
+        XCTAssertNil(QuotaDisplayFormatter.claudeResetCredits(quotas, scope: .scoped, isFresh: true, now: later))
+        XCTAssertEqual(QuotaDisplayFormatter.claudeResetCredits(quotas, scope: .weekly, isFresh: true, now: later)?.count, 1)
+        // weekly_all and seven_day are aliases: only one weekly row.
+        let alias = RawQuotaItem(id: "seven", originalName: "seven_day", used: nil, remaining: nil,
+                                 percentage: .missing(meaning: .used), resetsAt: nil)
+        XCTAssertEqual(QuotaDisplayFormatter.claudeQuotaRows(quotas + [alias], isFresh: true, now: now).map(\.usage.id),
+                       [weekly.id, fable.id])
     }
 
     func testClaudeResetTicketsNeverBecomeRepresentativeUsageQuotas() async {
