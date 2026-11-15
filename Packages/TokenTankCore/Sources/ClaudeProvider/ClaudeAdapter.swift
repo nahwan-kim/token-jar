@@ -258,6 +258,15 @@ public struct ClaudeAdapter: ProviderAdapter {
             let endsAt = try claudeOptionalDate(grant, key: "ends_at")
             let paused = try claudeOptionalBoolean(grant, key: "paused")
             let usableNow = try claudeOptionalBoolean(grant, key: "usable_now")
+            let clears: [String]?
+            if let value = grant["clears"], !(value is NSNull) {
+                guard let names = value as? [String] else {
+                    throw claudeSchemaError("claude.oauth.reset-credit.clears-invalid")
+                }
+                clears = names
+            } else {
+                clears = nil
+            }
             var summed = Decimal.zero
             var accumulated = total
             var increment = count.value
@@ -271,6 +280,7 @@ public struct ClaudeAdapter: ProviderAdapter {
             if let raw = grant["ends_at"] as? String { fields["ends_at"] = raw }
             if let paused { fields["paused"] = String(paused) }
             if let usableNow { fields["usable_now"] = String(usableNow) }
+            if let clears { fields["clears"] = clears.joined(separator: ",") }
             rows.append(RawQuotaItem(
                 id: RawQuotaID(rawValue: "rateLimitResetCredit.\(grantID)"),
                 originalName: claudeNonempty(grant["label"] as? String) ?? grantID,

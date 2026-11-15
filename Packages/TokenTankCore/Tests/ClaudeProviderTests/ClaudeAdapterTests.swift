@@ -819,7 +819,7 @@ struct ClaudeAdapterTests {
             """
             {"cedar_ember":{"eligible":false,"grants":[
               {"id":"first_grant","label":"First","resets_left":2,"starts_at":"2030-09-01T00:00:00Z","ends_at":"2030-09-02T00:00:00Z","paused":true,"usable_now":false,"secret":"ignored"},
-              {"id":"second-2","label":"","resets_left":3,"starts_at":null,"ends_at":null,"paused":false,"usable_now":true}
+              {"id":"second-2","label":"","resets_left":3,"starts_at":null,"ends_at":null,"paused":false,"usable_now":true,"clears":["seven_day_overage_included"]}
             ]}}
             """.utf8
         )
@@ -841,6 +841,7 @@ struct ClaudeAdapterTests {
             "paused": "true", "usable_now": "false",
         ])
         #expect(rows[2].sourceFields["starts_at"] == nil)
+        #expect(rows[2].sourceFields["clears"] == "seven_day_overage_included")
         #expect(rows[1].sourceFields["secret"] == nil)
     }
 

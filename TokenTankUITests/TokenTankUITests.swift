@@ -621,24 +621,27 @@ final class TokenTankUITests: XCTestCase {
             app.launch()
             let window = app.windows["Token Jar UI Test Detail"]
             XCTAssertTrue(window.waitForExistence(timeout: timeout))
-            let session = window.descendants(matching: .any)["quota.ui-test.claude.session"]
-            XCTAssertTrue(session.exists)
-            let tickets = session.descendants(matching: .any)["provider.claude.reset-credits"]
+            let weekly = window.descendants(matching: .any)["quota.ui-test.claude"]
+            XCTAssertTrue(weekly.exists)
+            let tickets = weekly.descendants(matching: .any)["provider.claude.reset-credits"]
             XCTAssertTrue(tickets.exists)
             XCTAssertTrue(accessibilityText(tickets).contains(title))
             let count = tickets.descendants(matching: .any)["provider.claude.ticket-count"]
-            XCTAssertEqual(count.label, "2")
+            XCTAssertEqual(count.value as? String, "2")
             let expiry = tickets.descendants(matching: .any)["provider.claude.ticket-expiry"]
             XCTAssertTrue(expiry.exists)
-            XCTAssertFalse(expiry.label.isEmpty)
-            XCTAssertNotEqual(expiry.label, "—")
+            XCTAssertFalse((expiry.value as? String ?? "").isEmpty)
+            XCTAssertNotEqual(expiry.value as? String, "—")
             XCTAssertFalse(window.descendants(matching: .any)["quota.rateLimitResetCredits"].exists)
-            XCTAssertTrue(window.descendants(matching: .any)["quota.ui-test.claude"].exists)
+            let session = window.descendants(matching: .any)["quota.ui-test.claude.session"]
+            XCTAssertFalse(session.descendants(matching: .any)["provider.claude.reset-credits"].exists)
             let fable = window.descendants(matching: .any)["quota.scoped.ui-test.claude.fable"]
             XCTAssertTrue(fable.exists)
-            XCTAssertEqual(tickets.frame.minY, fable.frame.minY, accuracy: 2)
-            XCTAssertLessThanOrEqual(tickets.frame.maxX, fable.frame.minX)
-            XCTAssertGreaterThan(tickets.frame.minY, session.descendants(matching: .any)["field.percentage"].frame.maxY)
+            let fableTickets = weekly.descendants(matching: .any)["provider.claude.scoped.reset-credits"]
+            XCTAssertTrue(fableTickets.exists)
+            XCTAssertEqual(fableTickets.descendants(matching: .any)["provider.claude.scoped.ticket-count"].value as? String, "1")
+            XCTAssertLessThan(tickets.frame.maxY, fable.frame.minY + 2)
+            XCTAssertGreaterThan(fableTickets.frame.minY, fable.frame.maxY - 2)
             app.terminate()
             XCTAssertTrue(app.wait(for: .notRunning, timeout: timeout))
         }

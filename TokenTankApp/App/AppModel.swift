@@ -1350,7 +1350,7 @@ final class AppModel: ObservableObject {
                 ))
                 quotas.append(RawQuotaItem(
                     id: "rateLimitResetCredits", originalName: "tickets", used: nil,
-                    remaining: SourceValue(value: 2, rawText: "2", unit: "credits"),
+                    remaining: SourceValue(value: 3, rawText: "3", unit: "credits"),
                     percentage: .missing(meaning: .remaining), resetsAt: nil,
                     sourceFields: ["item": "cedar_ember"]
                 ))
@@ -1359,7 +1359,14 @@ final class AppModel: ObservableObject {
                     remaining: SourceValue(value: 2, rawText: "2", unit: "credits"),
                     percentage: .missing(meaning: .remaining),
                     resetsAt: now.addingTimeInterval(30 * 86400),
-                    sourceFields: ["item": "cedar_ember.grant"]
+                    sourceFields: ["item": "cedar_ember.grant", "clears": "seven_day,seven_day_overage_included"]
+                ))
+                quotas.append(RawQuotaItem(
+                    id: "rateLimitResetCredit.claude-fable", originalName: "Fable reset", used: nil,
+                    remaining: SourceValue(value: 1, rawText: "1", unit: "credits"),
+                    percentage: .missing(meaning: .remaining),
+                    resetsAt: now.addingTimeInterval(90 * 86400),
+                    sourceFields: ["item": "cedar_ember.grant", "clears": "seven_day_overage_included"]
                 ))
             }
             return ProviderSnapshot(

@@ -340,7 +340,12 @@ struct ProviderDetailView: View {
                                 in: snapshot.quotas
                             ),
                             resetCredits: providerID == .claude
-                                ? QuotaDisplayFormatter.claudeResetCredits(for: quota, state: state, now: now)
+                                ? QuotaDisplayFormatter.claudeResetCredits(
+                                    for: quota, in: snapshot.quotas, scope: .weekly, isFresh: isFresh, now: now)
+                                : nil,
+                            scopedResetCredits: providerID == .claude
+                                ? QuotaDisplayFormatter.claudeResetCredits(
+                                    for: quota, in: snapshot.quotas, scope: .scoped, isFresh: isFresh, now: now)
                                 : nil
                         )
                     }
@@ -547,10 +552,14 @@ private struct AccountDetailView: View {
                         now: now,
                         scopedLimit: QuotaDisplayFormatter.claudeFableLimit(for: quota, in: account.quotas),
                         resetCredits: providerID == .claude
-                            && (quota.originalName == "session" || quota.originalName == "five_hour")
-                            ? (isFresh && account.failure == nil
-                                ? QuotaDisplayFormatter.resetCredits(account.quotas, now: now)
-                                : QuotaDisplayFormatter.ResetCredits(count: nil, expiresAt: nil))
+                            ? QuotaDisplayFormatter.claudeResetCredits(
+                                for: quota, in: account.quotas, scope: .weekly,
+                                isFresh: isFresh && account.failure == nil, now: now)
+                            : nil,
+                        scopedResetCredits: providerID == .claude
+                            ? QuotaDisplayFormatter.claudeResetCredits(
+                                for: quota, in: account.quotas, scope: .scoped,
+                                isFresh: isFresh && account.failure == nil, now: now)
                             : nil,
                         identifierPrefix: accessibilityID
                     )
@@ -770,6 +779,7 @@ struct QuotaValueView: View {
     let now: Date
     var scopedLimit: QuotaDisplayFormatter.ScopedLimit? = nil
     var resetCredits: QuotaDisplayFormatter.ResetCredits? = nil
+    var scopedResetCredits: QuotaDisplayFormatter.ResetCredits? = nil
     var identifierPrefix: String? = nil
 
     var body: some View {
@@ -812,6 +822,10 @@ struct QuotaValueView: View {
             if let remainingPercentage {
                 percentageGauge(for: remainingPercentage)
             }
+            if let resetCredits {
+                ResetCreditsView(tickets: resetCredits, identifierPrefix: "provider.claude")
+                    .padding(.top, 4)
+            }
             if let scopedLimit {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -831,9 +845,9 @@ struct QuotaValueView: View {
                 .accessibilityLabel(Text(verbatim: "\(scopedLimit.title), ") + Text("quota.percentage.remaining"))
                 .accessibilityValue(Text(verbatim: QuotaDisplayFormatter.percentageValue(scopedLimit.remaining, locale: locale)))
             }
-            if let resetCredits {
-                ResetCreditsView(tickets: resetCredits, identifierPrefix: "provider.claude")
-                    .padding(.top, 4)
+            if let scopedResetCredits {
+                ResetCreditsView(tickets: scopedResetCredits, identifierPrefix: "provider.claude.scoped")
+                    .padding(.top, 2)
             }
         }
         .padding(.horizontal, 8)
@@ -1018,14 +1032,42 @@ enum QuotaDisplayFormatter {
         quota.id.rawValue == "rateLimitResetCredits" || quota.id.rawValue.hasPrefix("rateLimitResetCredit.")
     }
 
+    enum ClaudeResetScope {
+        /// Grants that clear the all-model weekly limit.
+        case weekly
+        /// Grants that clear only the model-scoped weekly limit (Fable).
+        case scoped
+    }
+
+    /// Reset tickets for the weekly row (`scope: .weekly`) or its Fable block (`scope: .scoped`).
+    /// A grant whose `clears` names limits but not `seven_day` belongs to the Fable block;
+    /// every other grant belongs to the weekly row.
     static func claudeResetCredits(
-        for quota: RawQuotaItem, state: CollectionState, now: Date
+        for quota: RawQuotaItem, in quotas: [RawQuotaItem], scope: ClaudeResetScope, isFresh: Bool, now: Date
     ) -> ResetCredits? {
-        guard quota.originalName == "session" || quota.originalName == "five_hour" else { return nil }
-        guard case let .fresh(snapshot) = state else {
-            return ResetCredits(count: nil, expiresAt: nil)
+        guard quota.originalName == "weekly_all" || quota.originalName == "seven_day" else { return nil }
+        guard isFresh else {
+            return scope == .weekly ? ResetCredits(count: nil, expiresAt: nil) : nil
         }
-        return resetCredits(snapshot.quotas, now: now)
+        guard let summary = quotas.first(where: { $0.id.rawValue == "rateLimitResetCredits" }) else {
+            return scope == .weekly ? ResetCredits(count: nil, expiresAt: nil) : nil
+        }
+        func isScoped(_ grant: RawQuotaItem) -> Bool {
+            let clears = grant.sourceFields["clears"].map { $0.split(separator: ",").map(String.init) } ?? []
+            return !clears.isEmpty && !clears.contains("seven_day")
+        }
+        let allGrants = quotas.filter { $0.id.rawValue.hasPrefix("rateLimitResetCredit.") }
+        let grants = allGrants.filter { isScoped($0) == (scope == .scoped) }
+        if scope == .scoped, grants.isEmpty { return nil }
+        var scopedCount = Decimal.zero
+        for grant in allGrants where isScoped(grant) {
+            scopedCount += grant.remaining?.value ?? 0
+        }
+        // The published summary stays authoritative for the weekly row; Fable grants are carved out of it.
+        let count: Decimal? = scope == .scoped ? scopedCount : summary.remaining.map { max(0, $0.value - scopedCount) }
+        let expiry = grants.filter { ($0.remaining?.value ?? 0) > 0 }
+            .compactMap(\.resetsAt).filter { $0 > now }.min()
+        return ResetCredits(count: count, expiresAt: count == 0 ? nil : expiry)
     }
 
     static func ticketExpiry(_ date: Date?, locale: Locale = .current, timeZone: TimeZone = .current) -> String {
