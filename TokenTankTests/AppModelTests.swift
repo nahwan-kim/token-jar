@@ -209,41 +209,35 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(QuotaDisplayFormatter.displayedQuotas(rows + [extra], providerID: .claude), [extra])
     }
 
-    func testClaudeResetTicketsAttachOnlyToWeeklyQuota() {
+    func testClaudeRowsPairUsageWithTicketsAndDropFiveHour() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        for name in ["session", "five_hour", "weekly_all", "seven_day", "weekly_scoped.Fable"] {
-            let quota = RawQuotaItem(id: RawQuotaID(rawValue: name), originalName: name,
-                                     used: nil, remaining: nil,
-                                     percentage: .missing(meaning: .used), resetsAt: nil)
-            let tickets = QuotaDisplayFormatter.claudeResetCredits(
-                for: quota, in: [], scope: .weekly, isFresh: false, now: now)
-            if name == "weekly_all" || name == "seven_day" {
-                XCTAssertNotNil(tickets)
-                XCTAssertNil(tickets?.count)
-            } else {
-                XCTAssertNil(tickets)
-            }
-            XCTAssertNil(QuotaDisplayFormatter.claudeResetCredits(
-                for: quota, in: [], scope: .scoped, isFresh: false, now: now))
+        func usage(_ name: String) -> RawQuotaItem {
+            RawQuotaItem(id: RawQuotaID(rawValue: name), originalName: name, used: nil, remaining: nil,
+                         percentage: .missing(meaning: .used), resetsAt: nil)
         }
+        let quotas = [usage("five_hour"), usage("session"), usage("weekly_all"), usage("weekly_scoped.Fable")]
+        let rows = QuotaDisplayFormatter.claudeQuotaRows(quotas, isFresh: false, now: now)
+        XCTAssertEqual(rows.map(\.usage.originalName), ["weekly_all", "weekly_scoped.Fable"])
+        // Stale weekly row keeps a "—" ticket column; Fable shows none without Fable grants.
+        XCTAssertNotNil(rows[0].tickets)
+        XCTAssertNil(rows[0].tickets?.count)
+        XCTAssertNil(rows[1].tickets)
+        XCTAssertEqual(QuotaDisplayFormatter.name(for: rows[1].usage, locale: Locale(identifier: "ko_KR")), "Fable")
+        XCTAssertTrue(QuotaDisplayFormatter.displayedQuotas([usage("five_hour")], providerID: .claude).isEmpty)
     }
 
     func testClaudeResetTicketsNeverDisplayRetainedCountsAsCurrent() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let weekly = RawQuotaItem(id: "weekly", originalName: "weekly_all", used: nil, remaining: nil,
-                                  percentage: .missing(meaning: .used), resetsAt: nil)
         let summary = RawQuotaItem(
             id: "rateLimitResetCredits", originalName: "tickets", used: nil,
             remaining: SourceValue(value: 2, rawText: "2", unit: "credits"),
             percentage: .missing(meaning: .remaining), resetsAt: nil,
             sourceFields: ["item": "cedar_ember"]
         )
-        let quotas = [weekly, summary]
         XCTAssertEqual(QuotaDisplayFormatter.claudeResetCredits(
-            for: weekly, in: quotas, scope: .weekly, isFresh: true, now: now
+            [summary], scope: .weekly, isFresh: true, now: now
         )?.count, 2)
-        let stale = QuotaDisplayFormatter.claudeResetCredits(
-            for: weekly, in: quotas, scope: .weekly, isFresh: false, now: now)
+        let stale = QuotaDisplayFormatter.claudeResetCredits([summary], scope: .weekly, isFresh: false, now: now)
         XCTAssertNotNil(stale)
         XCTAssertNil(stale?.count)
         XCTAssertNil(stale?.expiresAt)
@@ -253,6 +247,8 @@ final class AppModelTests: XCTestCase {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let weekly = RawQuotaItem(id: "weekly", originalName: "weekly_all", used: nil, remaining: nil,
                                   percentage: .missing(meaning: .used), resetsAt: nil)
+        let fable = RawQuotaItem(id: "fable", originalName: "weekly_scoped.Fable", used: nil, remaining: nil,
+                                 percentage: .missing(meaning: .used), resetsAt: nil)
         let summary = RawQuotaItem(
             id: "rateLimitResetCredits", originalName: "tickets", used: nil,
             remaining: SourceValue(value: 2, rawText: "2", unit: "credits"),
@@ -269,20 +265,16 @@ final class AppModelTests: XCTestCase {
         }
         // Shapes observed on 2026-11-15: a weekly reset clears both limits, a Fable reset only the scoped one.
         let quotas = [
-            weekly, summary,
+            weekly, fable, summary,
             grant("full-reset-2611", clears: "seven_day,seven_day_overage_included", expiry: 3600),
             grant("launch-2610-fable", clears: "seven_day_overage_included", expiry: 7200),
         ]
-        let weeklyTickets = QuotaDisplayFormatter.claudeResetCredits(
-            for: weekly, in: quotas, scope: .weekly, isFresh: true, now: now)
-        XCTAssertEqual(weeklyTickets?.count, 1)
-        XCTAssertEqual(weeklyTickets?.expiresAt, now.addingTimeInterval(3600))
-        let fableTickets = QuotaDisplayFormatter.claudeResetCredits(
-            for: weekly, in: quotas, scope: .scoped, isFresh: true, now: now)
-        XCTAssertEqual(fableTickets?.count, 1)
-        XCTAssertEqual(fableTickets?.expiresAt, now.addingTimeInterval(7200))
+        let rows = QuotaDisplayFormatter.claudeQuotaRows(quotas, isFresh: true, now: now)
+        XCTAssertEqual(rows.map(\.usage.id), [weekly.id, fable.id])
+        XCTAssertEqual(rows[0].tickets, .init(count: 1, expiresAt: now.addingTimeInterval(3600)))
+        XCTAssertEqual(rows[1].tickets, .init(count: 1, expiresAt: now.addingTimeInterval(7200)))
         XCTAssertNil(QuotaDisplayFormatter.claudeResetCredits(
-            for: weekly, in: Array(quotas.dropLast()), scope: .scoped, isFresh: true, now: now))
+            Array(quotas.dropLast()), scope: .scoped, isFresh: true, now: now))
     }
 
     func testClaudeResetTicketsNeverBecomeRepresentativeUsageQuotas() async {
@@ -1434,7 +1426,7 @@ final class AppModelTests: XCTestCase {
                 ],
                 providerID: .claude
             ).map(\.originalName),
-            ["session", "weekly_all"]
+            ["weekly_all"]
         )
         let weeklyAll = RawQuotaItem(
             id: "weekly_all",
@@ -1452,14 +1444,10 @@ final class AppModelTests: XCTestCase {
             percentage: SourcePercentage(value: 44, rawText: "44", meaning: .used),
             resetsAt: nil
         )
-        XCTAssertEqual(
-            QuotaDisplayFormatter.claudeFableLimit(for: weeklyAll, in: [weeklyAll, fable])?.title,
-            "Fable"
-        )
-        XCTAssertEqual(
-            QuotaDisplayFormatter.claudeFableLimit(for: weeklyAll, in: [weeklyAll, fable])?.remaining,
-            56
-        )
+        let rows = QuotaDisplayFormatter.claudeQuotaRows([weeklyAll, fable], isFresh: true, now: Date())
+        XCTAssertEqual(rows.map(\.usage.id), [weeklyAll.id, fable.id])
+        XCTAssertEqual(QuotaDisplayFormatter.name(for: fable, locale: Locale(identifier: "en_US")), "Fable")
+        XCTAssertEqual(QuotaDisplayFormatter.remainingPercentage(fable.percentage), 56)
         XCTAssertEqual(
             QuotaDisplayFormatter.name(
                 for: RawQuotaItem(

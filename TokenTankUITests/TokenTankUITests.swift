@@ -433,7 +433,7 @@ final class TokenTankUITests: XCTestCase {
             ).firstMatch.waitForExistence(timeout: timeout)
         )
     }
-    func testFableUsesWeeklyGaugeLayout() {
+    func testClaudeShowsWeeklyAndFableRowsWithoutFiveHour() {
         continueAfterFailure = false
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
@@ -444,14 +444,15 @@ final class TokenTankUITests: XCTestCase {
         let window = app.windows["Token Jar UI Test Detail"]
         XCTAssertTrue(window.waitForExistence(timeout: timeout))
         let weekly = window.descendants(matching: .any)["quota.ui-test.claude"]
-        let fable = weekly.descendants(matching: .any)["quota.scoped.ui-test.claude.fable"]
+        let fable = window.descendants(matching: .any)["quota.ui-test.claude.fable"]
         XCTAssertTrue(fable.waitForExistence(timeout: timeout))
-        XCTAssertTrue(fable.label.contains("Fable"))
-        XCTAssertEqual(fable.value as? String, "56%")
-        let headline = weekly.descendants(matching: .any)["field.percentage"]
-        XCTAssertGreaterThan(fable.frame.minY, headline.frame.maxY)
-        XCTAssertEqual(fable.frame.width, headline.frame.width, accuracy: 1)
-        XCTAssertGreaterThan(fable.frame.height, headline.frame.height + 3)
+        XCTAssertFalse(window.descendants(matching: .any)["quota.ui-test.claude.session"].exists)
+        let fableHeadline = fable.descendants(matching: .any)["field.percentage"]
+        XCTAssertTrue(fableHeadline.label.contains("Fable"))
+        XCTAssertTrue((fableHeadline.value as? String ?? "").hasPrefix("56%"))
+        XCTAssertGreaterThan(fable.frame.minY, weekly.frame.maxY - 1)
+        XCTAssertEqual(fable.frame.minX, weekly.frame.minX, accuracy: 1)
+        XCTAssertEqual(fable.frame.width, weekly.frame.width, accuracy: 1)
     }
 
     func testStatusUsesCompactLEDsInsteadOfText() {
@@ -621,9 +622,10 @@ final class TokenTankUITests: XCTestCase {
             app.launch()
             let window = app.windows["Token Jar UI Test Detail"]
             XCTAssertTrue(window.waitForExistence(timeout: timeout))
-            let weekly = window.descendants(matching: .any)["quota.ui-test.claude"]
+            let claude = window.descendants(matching: .any)["provider.claude"]
+            let weekly = claude.descendants(matching: .any)["quota.ui-test.claude"]
             XCTAssertTrue(weekly.exists)
-            let tickets = weekly.descendants(matching: .any)["provider.claude.reset-credits"]
+            let tickets = claude.descendants(matching: .any)["provider.claude.reset-credits"]
             XCTAssertTrue(tickets.exists)
             XCTAssertTrue(accessibilityText(tickets).contains(title))
             let count = tickets.descendants(matching: .any)["provider.claude.ticket-count"]
@@ -633,15 +635,17 @@ final class TokenTankUITests: XCTestCase {
             XCTAssertFalse((expiry.value as? String ?? "").isEmpty)
             XCTAssertNotEqual(expiry.value as? String, "—")
             XCTAssertFalse(window.descendants(matching: .any)["quota.rateLimitResetCredits"].exists)
-            let session = window.descendants(matching: .any)["quota.ui-test.claude.session"]
-            XCTAssertFalse(session.descendants(matching: .any)["provider.claude.reset-credits"].exists)
-            let fable = window.descendants(matching: .any)["quota.scoped.ui-test.claude.fable"]
+            XCTAssertFalse(window.descendants(matching: .any)["quota.ui-test.claude.session"].exists)
+            let fable = claude.descendants(matching: .any)["quota.ui-test.claude.fable"]
             XCTAssertTrue(fable.exists)
-            let fableTickets = weekly.descendants(matching: .any)["provider.claude.scoped.reset-credits"]
+            let fableTickets = claude.descendants(matching: .any)["provider.claude.scoped.reset-credits"]
             XCTAssertTrue(fableTickets.exists)
             XCTAssertEqual(fableTickets.descendants(matching: .any)["provider.claude.scoped.ticket-count"].value as? String, "1")
-            XCTAssertLessThan(tickets.frame.maxY, fable.frame.minY + 2)
-            XCTAssertGreaterThan(fableTickets.frame.minY, fable.frame.maxY - 2)
+            // Column 2 sits to the right of its own usage row.
+            XCTAssertGreaterThanOrEqual(tickets.frame.minX, weekly.frame.maxX)
+            XCTAssertEqual(tickets.frame.midY, weekly.frame.midY, accuracy: 12)
+            XCTAssertGreaterThanOrEqual(fableTickets.frame.minX, fable.frame.maxX)
+            XCTAssertEqual(fableTickets.frame.midY, fable.frame.midY, accuracy: 12)
             app.terminate()
             XCTAssertTrue(app.wait(for: .notRunning, timeout: timeout))
         }

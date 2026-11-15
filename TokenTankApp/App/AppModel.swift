@@ -1263,7 +1263,7 @@ final class AppModel: ObservableObject {
             quotas = snapshot.quotas
         }
         if providerID == .claude {
-            return quotas.filter { !QuotaDisplayFormatter.isResetCredit($0) }
+            return quotas.filter { !QuotaDisplayFormatter.isResetCredit($0) && !QuotaDisplayFormatter.isClaudeFiveHourQuota($0) }
         }
         guard providerID == .codex else { return quotas }
         return QuotaDisplayFormatter.displayedQuotas(quotas, providerID: .codex)

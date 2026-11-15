@@ -312,6 +312,9 @@ struct ProviderDetailView: View {
     private func snapshotContent(_ snapshot: ProviderSnapshot) -> some View {
         if providerID == .codex {
             CodexQuotaColumns(quotas: snapshot.quotas, refreshedAt: snapshot.refreshedAt, now: now)
+        } else if providerID == .claude, !snapshot.quotas.isEmpty {
+            ClaudeQuotaColumns(quotas: snapshot.quotas, isFresh: isFresh,
+                               refreshedAt: snapshot.refreshedAt, now: now)
         } else if snapshot.quotas.isEmpty {
             Label("state.source.empty", systemImage: "tray")
                 .font(.callout)
@@ -331,23 +334,7 @@ struct ProviderDetailView: View {
                     spacing: 8
                 ) {
                     ForEach(quotas) { quota in
-                        QuotaValueView(
-                            quota: quota,
-                            refreshedAt: snapshot.refreshedAt,
-                            now: now,
-                            scopedLimit: QuotaDisplayFormatter.claudeFableLimit(
-                                for: quota,
-                                in: snapshot.quotas
-                            ),
-                            resetCredits: providerID == .claude
-                                ? QuotaDisplayFormatter.claudeResetCredits(
-                                    for: quota, in: snapshot.quotas, scope: .weekly, isFresh: isFresh, now: now)
-                                : nil,
-                            scopedResetCredits: providerID == .claude
-                                ? QuotaDisplayFormatter.claudeResetCredits(
-                                    for: quota, in: snapshot.quotas, scope: .scoped, isFresh: isFresh, now: now)
-                                : nil
-                        )
+                        QuotaValueView(quota: quota, refreshedAt: snapshot.refreshedAt, now: now)
                     }
                 }
             }
@@ -544,23 +531,16 @@ private struct AccountDetailView: View {
                 CodexQuotaColumns(quotas: account.quotas,
                                   refreshedAt: account.refreshedAt ?? fallbackRefreshedAt,
                                   now: now, identifierPrefix: accessibilityID)
+            } else if providerID == .claude {
+                ClaudeQuotaColumns(quotas: account.quotas, isFresh: isFresh && account.failure == nil,
+                                   refreshedAt: account.refreshedAt ?? fallbackRefreshedAt,
+                                   now: now, identifierPrefix: accessibilityID)
             } else {
                 ForEach(QuotaDisplayFormatter.displayedQuotas(account.quotas, providerID: providerID)) { quota in
                     QuotaValueView(
                         quota: quota,
                         refreshedAt: account.refreshedAt ?? fallbackRefreshedAt,
                         now: now,
-                        scopedLimit: QuotaDisplayFormatter.claudeFableLimit(for: quota, in: account.quotas),
-                        resetCredits: providerID == .claude
-                            ? QuotaDisplayFormatter.claudeResetCredits(
-                                for: quota, in: account.quotas, scope: .weekly,
-                                isFresh: isFresh && account.failure == nil, now: now)
-                            : nil,
-                        scopedResetCredits: providerID == .claude
-                            ? QuotaDisplayFormatter.claudeResetCredits(
-                                for: quota, in: account.quotas, scope: .scoped,
-                                isFresh: isFresh && account.failure == nil, now: now)
-                            : nil,
                         identifierPrefix: accessibilityID
                     )
                 }
@@ -613,6 +593,47 @@ private struct CodexQuotaColumns: View {
                 .padding(.vertical, 6)
                 .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
         }
+    }
+}
+
+/// Claude: usage in column 1 and that limit's reset tickets in column 2, one row per limit.
+private struct ClaudeQuotaColumns: View {
+    let quotas: [RawQuotaItem]
+    let isFresh: Bool
+    let refreshedAt: Date
+    let now: Date
+    var identifierPrefix: String? = nil
+
+    var body: some View {
+        let rows = QuotaDisplayFormatter.claudeQuotaRows(quotas, isFresh: isFresh, now: now)
+        if rows.isEmpty {
+            Label("state.source.empty", systemImage: "tray")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(rows) { row in
+                    HStack(alignment: .top, spacing: 8) {
+                        QuotaValueView(quota: row.usage, refreshedAt: refreshedAt, now: now,
+                                       identifierPrefix: identifierPrefix)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if let tickets = row.tickets {
+                            ResetCreditsView(tickets: tickets, identifierPrefix: ticketPrefix(row.ticketScope))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+                        } else {
+                            Color.clear.frame(maxWidth: .infinity, maxHeight: 1)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func ticketPrefix(_ scope: QuotaDisplayFormatter.ClaudeResetScope) -> String {
+        let base = identifierPrefix ?? "provider.claude"
+        return scope == .scoped ? "\(base).scoped" : base
     }
 }
 
@@ -777,9 +798,6 @@ struct QuotaValueView: View {
     let quota: RawQuotaItem
     let refreshedAt: Date
     let now: Date
-    var scopedLimit: QuotaDisplayFormatter.ScopedLimit? = nil
-    var resetCredits: QuotaDisplayFormatter.ResetCredits? = nil
-    var scopedResetCredits: QuotaDisplayFormatter.ResetCredits? = nil
     var identifierPrefix: String? = nil
 
     var body: some View {
@@ -821,33 +839,6 @@ struct QuotaValueView: View {
 
             if let remainingPercentage {
                 percentageGauge(for: remainingPercentage)
-            }
-            if let resetCredits {
-                ResetCreditsView(tickets: resetCredits, identifierPrefix: "provider.claude")
-                    .padding(.top, 4)
-            }
-            if let scopedLimit {
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(verbatim: scopedLimit.title)
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-                        Spacer(minLength: 6)
-                        Text(verbatim: QuotaDisplayFormatter.percentageValue(scopedLimit.remaining, locale: locale))
-                            .font(.subheadline.weight(.semibold).monospacedDigit())
-                            .foregroundStyle(percentageTint(for: scopedLimit.remaining))
-                    }
-                    percentageGauge(for: scopedLimit.remaining)
-                }
-                .padding(.top, 4)
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("quota.scoped.\(scopedLimit.id)")
-                .accessibilityLabel(Text(verbatim: "\(scopedLimit.title), ") + Text("quota.percentage.remaining"))
-                .accessibilityValue(Text(verbatim: QuotaDisplayFormatter.percentageValue(scopedLimit.remaining, locale: locale)))
-            }
-            if let scopedResetCredits {
-                ResetCreditsView(tickets: scopedResetCredits, identifierPrefix: "provider.claude.scoped")
-                    .padding(.top, 2)
             }
         }
         .padding(.horizontal, 8)
@@ -916,7 +907,7 @@ enum QuotaDisplayFormatter {
         case .codex:
             return defaultCodexQuota(quotas).map { [$0] } ?? []
         case .claude:
-            let usage = quotas.filter { !isResetCredit($0) }
+            let usage = quotas.filter { !isResetCredit($0) && !isClaudeFiveHourQuota($0) }
             let popup = usage.filter(isClaudePopupQuota)
             return popup.isEmpty ? usage : popup
         case .grok:
@@ -980,27 +971,42 @@ enum QuotaDisplayFormatter {
         }
     }
 
-    struct ScopedLimit: Equatable {
-        let id: String
-        let title: String
-        let remaining: Decimal
+    /// One Claude line: a usage gauge in column 1 and, when it has any, its reset tickets in column 2.
+    struct ClaudeQuotaRow: Identifiable, Equatable {
+        let usage: RawQuotaItem
+        let tickets: ResetCredits?
+        let ticketScope: ClaudeResetScope
+        var id: RawQuotaID { usage.id }
     }
 
-    static func claudeFableLimit(
-        for quota: RawQuotaItem,
-        in quotas: [RawQuotaItem],
-        locale: Locale = .current
-    ) -> ScopedLimit? {
-        guard quota.originalName == "weekly_all" || quota.originalName == "seven_day" else {
-            return nil
+    /// Weekly usage paired with weekly reset tickets, then the Fable (model-scoped) weekly usage
+    /// paired with Fable reset tickets. Claude retired the five-hour limit, so it is never shown.
+    static func claudeQuotaRows(_ quotas: [RawQuotaItem], isFresh: Bool, now: Date) -> [ClaudeQuotaRow] {
+        func row(_ usage: RawQuotaItem) -> ClaudeQuotaRow {
+            if usage.originalName.hasPrefix("weekly_scoped.") {
+                return ClaudeQuotaRow(
+                    usage: usage,
+                    tickets: claudeResetCredits(quotas, scope: .scoped, isFresh: isFresh, now: now),
+                    ticketScope: .scoped
+                )
+            }
+            let isWeekly = usage.originalName == "weekly_all" || usage.originalName == "seven_day"
+            return ClaudeQuotaRow(
+                usage: usage,
+                tickets: isWeekly ? claudeResetCredits(quotas, scope: .weekly, isFresh: isFresh, now: now) : nil,
+                ticketScope: .weekly
+            )
         }
-        guard let fable = quotas.first(where: { $0.originalName.hasPrefix("weekly_scoped.") }),
-              let remaining = remainingPercentage(fable.percentage)
-        else {
-            return nil
+        var rows = displayedQuotas(quotas, providerID: .claude).map(row)
+        if let fable = quotas.first(where: { $0.originalName.hasPrefix("weekly_scoped.") }),
+           !rows.contains(where: { $0.usage.id == fable.id }) {
+            rows.append(row(fable))
         }
-        let title = fable.originalName.split(separator: ".").last.map(String.init) ?? "Fable"
-        return ScopedLimit(id: fable.id.rawValue, title: title, remaining: remaining)
+        return rows
+    }
+
+    static func isClaudeFiveHourQuota(_ quota: RawQuotaItem) -> Bool {
+        quota.originalName == "session" || quota.originalName == "five_hour"
     }
 
     struct ResetCredits: Equatable {
@@ -1039,13 +1045,12 @@ enum QuotaDisplayFormatter {
         case scoped
     }
 
-    /// Reset tickets for the weekly row (`scope: .weekly`) or its Fable block (`scope: .scoped`).
-    /// A grant whose `clears` names limits but not `seven_day` belongs to the Fable block;
-    /// every other grant belongs to the weekly row.
+    /// Reset tickets for the weekly row (`scope: .weekly`) or the Fable row (`scope: .scoped`).
+    /// A grant whose `clears` names limits but not `seven_day` belongs to the Fable row;
+    /// every other grant belongs to the weekly row. `nil` means the row shows no ticket column.
     static func claudeResetCredits(
-        for quota: RawQuotaItem, in quotas: [RawQuotaItem], scope: ClaudeResetScope, isFresh: Bool, now: Date
+        _ quotas: [RawQuotaItem], scope: ClaudeResetScope, isFresh: Bool, now: Date
     ) -> ResetCredits? {
-        guard quota.originalName == "weekly_all" || quota.originalName == "seven_day" else { return nil }
         guard isFresh else {
             return scope == .weekly ? ResetCredits(count: nil, expiresAt: nil) : nil
         }
@@ -1238,7 +1243,7 @@ enum QuotaDisplayFormatter {
 
     private static func isClaudePopupQuota(_ quota: RawQuotaItem) -> Bool {
         switch quota.originalName {
-        case "session", "weekly_all", "five_hour", "seven_day":
+        case "weekly_all", "seven_day":
             return true
         default:
             return false
@@ -1296,6 +1301,9 @@ enum QuotaDisplayFormatter {
             return korean ? "기타 모델" : "Other Models"
         default:
             break
+        }
+        if quota.originalName.hasPrefix("weekly_scoped.") {
+            return String(quota.originalName.dropFirst("weekly_scoped.".count))
         }
         if quota.originalName.hasSuffix(".5h") {
             return korean ? "5시간" : "5-hour"
