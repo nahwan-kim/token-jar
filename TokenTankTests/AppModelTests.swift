@@ -224,7 +224,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertNil(rows[1].tickets?.count)
         XCTAssertNil(rows[2].tickets)
         XCTAssertEqual(QuotaDisplayFormatter.name(for: rows[2].usage, locale: Locale(identifier: "ko_KR")), "Fable")
-        // A plan without the five-hour limit omits it at the source, so no row appears.
+        // An account without the five-hour limit omits it at the source, so no row appears.
         let withoutFiveHour = QuotaDisplayFormatter.claudeQuotaRows(Array(quotas.dropFirst(2)), isFresh: false, now: now)
         XCTAssertEqual(withoutFiveHour.map(\.usage.originalName), ["weekly_all", "weekly_scoped.Fable"])
     }

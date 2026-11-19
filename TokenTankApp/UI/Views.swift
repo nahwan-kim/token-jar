@@ -979,7 +979,7 @@ enum QuotaDisplayFormatter {
         var id: RawQuotaID { usage.id }
     }
 
-    /// Five-hour usage when the plan still has that limit (the source omits it otherwise), weekly usage
+    /// Five-hour usage when the account still has that limit (the source omits it otherwise), weekly usage
     /// paired with weekly reset tickets, then the Fable (model-scoped) weekly usage paired with Fable
     /// reset tickets.
     static func claudeQuotaRows(_ quotas: [RawQuotaItem], isFresh: Bool, now: Date) -> [ClaudeQuotaRow] {

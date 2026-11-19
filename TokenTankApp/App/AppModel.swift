@@ -852,7 +852,7 @@ final class AppModel: ObservableObject {
         }
         let displayed = QuotaDisplayFormatter.displayedQuotas(quotas, providerID: preference.providerID)
         if preference.providerID == .claude {
-            // Plans differ in whether they have a five-hour limit; weekly keeps every account comparable.
+            // Accounts differ in whether they have a five-hour limit; weekly keeps every account comparable.
             return displayed.first { $0.originalName == "weekly_all" || $0.originalName == "seven_day" }
                 ?? displayed.first
         }
