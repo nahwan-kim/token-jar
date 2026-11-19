@@ -850,10 +850,13 @@ final class AppModel: ObservableObject {
         if let selectedID = preference.representativeQuotaID {
             return quotas.first(where: { $0.id == selectedID })
         }
-        return QuotaDisplayFormatter.displayedQuotas(
-            quotas,
-            providerID: preference.providerID
-        ).first
+        let displayed = QuotaDisplayFormatter.displayedQuotas(quotas, providerID: preference.providerID)
+        if preference.providerID == .claude {
+            // Plans differ in whether they have a five-hour limit; weekly keeps every account comparable.
+            return displayed.first { $0.originalName == "weekly_all" || $0.originalName == "seven_day" }
+                ?? displayed.first
+        }
+        return displayed.first
     }
 
     /// Per-account cards of a provider, in display order; empty for a single-sign-in provider.
@@ -1263,7 +1266,7 @@ final class AppModel: ObservableObject {
             quotas = snapshot.quotas
         }
         if providerID == .claude {
-            return quotas.filter { !QuotaDisplayFormatter.isResetCredit($0) && !QuotaDisplayFormatter.isClaudeFiveHourQuota($0) }
+            return quotas.filter { !QuotaDisplayFormatter.isResetCredit($0) }
         }
         guard providerID == .codex else { return quotas }
         return QuotaDisplayFormatter.displayedQuotas(quotas, providerID: .codex)

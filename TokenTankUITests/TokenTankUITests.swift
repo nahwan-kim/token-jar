@@ -433,7 +433,7 @@ final class TokenTankUITests: XCTestCase {
             ).firstMatch.waitForExistence(timeout: timeout)
         )
     }
-    func testClaudeShowsWeeklyAndFableRowsWithoutFiveHour() {
+    func testClaudeShowsFiveHourWeeklyAndFableRows() {
         continueAfterFailure = false
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launchEnvironment["TOKENTANK_DISABLE_AUTOSTART"] = "1"
@@ -446,7 +446,9 @@ final class TokenTankUITests: XCTestCase {
         let weekly = window.descendants(matching: .any)["quota.ui-test.claude"]
         let fable = window.descendants(matching: .any)["quota.ui-test.claude.fable"]
         XCTAssertTrue(fable.waitForExistence(timeout: timeout))
-        XCTAssertFalse(window.descendants(matching: .any)["quota.ui-test.claude.session"].exists)
+        let session = window.descendants(matching: .any)["quota.ui-test.claude.session"]
+        XCTAssertTrue(session.exists)
+        XCTAssertLessThan(session.frame.minY, weekly.frame.minY)
         let fableHeadline = fable.descendants(matching: .any)["field.percentage"]
         XCTAssertTrue(fableHeadline.label.contains("Fable"))
         XCTAssertTrue((fableHeadline.value as? String ?? "").hasPrefix("56%"))
@@ -635,7 +637,7 @@ final class TokenTankUITests: XCTestCase {
             XCTAssertFalse((expiry.value as? String ?? "").isEmpty)
             XCTAssertNotEqual(expiry.value as? String, "—")
             XCTAssertFalse(window.descendants(matching: .any)["quota.rateLimitResetCredits"].exists)
-            XCTAssertFalse(window.descendants(matching: .any)["quota.ui-test.claude.session"].exists)
+            XCTAssertTrue(claude.descendants(matching: .any)["quota.ui-test.claude.session"].exists)
             let fable = claude.descendants(matching: .any)["quota.ui-test.claude.fable"]
             XCTAssertTrue(fable.exists)
             let fableTickets = claude.descendants(matching: .any)["provider.claude.scoped.reset-credits"]

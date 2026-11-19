@@ -907,7 +907,7 @@ enum QuotaDisplayFormatter {
         case .codex:
             return defaultCodexQuota(quotas).map { [$0] } ?? []
         case .claude:
-            let usage = quotas.filter { !isResetCredit($0) && !isClaudeFiveHourQuota($0) }
+            let usage = quotas.filter { !isResetCredit($0) }
             let popup = usage.filter(isClaudePopupQuota)
             return popup.isEmpty ? usage : popup
         case .grok:
@@ -979,8 +979,9 @@ enum QuotaDisplayFormatter {
         var id: RawQuotaID { usage.id }
     }
 
-    /// Weekly usage paired with weekly reset tickets, then the Fable (model-scoped) weekly usage
-    /// paired with Fable reset tickets. Claude retired the five-hour limit, so it is never shown.
+    /// Five-hour usage when the plan still has that limit (the source omits it otherwise), weekly usage
+    /// paired with weekly reset tickets, then the Fable (model-scoped) weekly usage paired with Fable
+    /// reset tickets.
     static func claudeQuotaRows(_ quotas: [RawQuotaItem], isFresh: Bool, now: Date) -> [ClaudeQuotaRow] {
         func row(_ usage: RawQuotaItem) -> ClaudeQuotaRow {
             if usage.originalName.hasPrefix("weekly_scoped.") {
@@ -997,20 +998,19 @@ enum QuotaDisplayFormatter {
                 ticketScope: .weekly
             )
         }
-        // One weekly row (weekly_all and seven_day are aliases); other usage only when no weekly limit exists.
+        // One row per window (session/five_hour and weekly_all/seven_day are aliases); other usage only
+        // when neither exists.
         let usage = displayedQuotas(quotas, providerID: .claude)
+        let fiveHour = usage.first { $0.originalName == "session" || $0.originalName == "five_hour" }
         let weekly = usage.first { $0.originalName == "weekly_all" || $0.originalName == "seven_day" }
-        var rows = (weekly.map { [$0] } ?? usage).map(row)
+        let windows = [fiveHour, weekly].compactMap { $0 }
+        var rows = (windows.isEmpty ? usage : windows).map(row)
         if let fable = quotas.first(where: { $0.originalName == "weekly_scoped.Fable" })
             ?? quotas.first(where: { $0.originalName.hasPrefix("weekly_scoped.") }),
            !rows.contains(where: { $0.usage.id == fable.id }) {
             rows.append(row(fable))
         }
         return rows
-    }
-
-    static func isClaudeFiveHourQuota(_ quota: RawQuotaItem) -> Bool {
-        quota.originalName == "session" || quota.originalName == "five_hour"
     }
 
     struct ResetCredits: Equatable {
@@ -1252,7 +1252,7 @@ enum QuotaDisplayFormatter {
 
     private static func isClaudePopupQuota(_ quota: RawQuotaItem) -> Bool {
         switch quota.originalName {
-        case "weekly_all", "seven_day":
+        case "session", "weekly_all", "five_hour", "seven_day":
             return true
         default:
             return false

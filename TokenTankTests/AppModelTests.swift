@@ -209,7 +209,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(QuotaDisplayFormatter.displayedQuotas(rows + [extra], providerID: .claude), [extra])
     }
 
-    func testClaudeRowsPairUsageWithTicketsAndDropFiveHour() {
+    func testClaudeRowsPairUsageWithTicketsAndShowFiveHourOnlyWhenProvided() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         func usage(_ name: String) -> RawQuotaItem {
             RawQuotaItem(id: RawQuotaID(rawValue: name), originalName: name, used: nil, remaining: nil,
@@ -217,13 +217,16 @@ final class AppModelTests: XCTestCase {
         }
         let quotas = [usage("five_hour"), usage("session"), usage("weekly_all"), usage("weekly_scoped.Fable")]
         let rows = QuotaDisplayFormatter.claudeQuotaRows(quotas, isFresh: false, now: now)
-        XCTAssertEqual(rows.map(\.usage.originalName), ["weekly_all", "weekly_scoped.Fable"])
-        // Stale weekly row keeps a "—" ticket column; Fable shows none without Fable grants.
-        XCTAssertNotNil(rows[0].tickets)
-        XCTAssertNil(rows[0].tickets?.count)
-        XCTAssertNil(rows[1].tickets)
-        XCTAssertEqual(QuotaDisplayFormatter.name(for: rows[1].usage, locale: Locale(identifier: "ko_KR")), "Fable")
-        XCTAssertTrue(QuotaDisplayFormatter.displayedQuotas([usage("five_hour")], providerID: .claude).isEmpty)
+        XCTAssertEqual(rows.map(\.usage.originalName), ["five_hour", "weekly_all", "weekly_scoped.Fable"])
+        // Five-hour has no tickets; a stale weekly row keeps a "—" ticket column; Fable shows none without Fable grants.
+        XCTAssertNil(rows[0].tickets)
+        XCTAssertNotNil(rows[1].tickets)
+        XCTAssertNil(rows[1].tickets?.count)
+        XCTAssertNil(rows[2].tickets)
+        XCTAssertEqual(QuotaDisplayFormatter.name(for: rows[2].usage, locale: Locale(identifier: "ko_KR")), "Fable")
+        // A plan without the five-hour limit omits it at the source, so no row appears.
+        let withoutFiveHour = QuotaDisplayFormatter.claudeQuotaRows(Array(quotas.dropFirst(2)), isFresh: false, now: now)
+        XCTAssertEqual(withoutFiveHour.map(\.usage.originalName), ["weekly_all", "weekly_scoped.Fable"])
     }
 
     func testClaudeResetTicketsNeverDisplayRetainedCountsAsCurrent() {
@@ -369,6 +372,8 @@ final class AppModelTests: XCTestCase {
         model.ensureStarted()
         let loaded = await eventually { model.states[.claude]?.snapshot != nil }
         XCTAssertTrue(loaded)
+        // Settings offers the five-hour limit as a representative choice when the source returns it.
+        XCTAssertEqual(model.quotas(for: .claude).map(\.originalName), ["five_hour", "seven_day"])
         let resetSoon = CodexAccountPresentation.localized("state.reset_soon", locale: model.locale)
         func claudeItem() -> MenuBarSummaryItem? {
             model.menuBarSummaryItems(now: now).first { $0.providerID == .claude }
@@ -387,6 +392,11 @@ final class AppModelTests: XCTestCase {
             MenuBarSummaryItem(providerID: .claude, text: "60%", isResetImminent: true)
         )
         XCTAssertTrue(model.menuBarLabelText(now: now).contains("Claude 60% (\(resetSoon))"))
+
+        // Without a choice the weekly limit is the default, even when a five-hour limit comes first.
+        preference.representativeQuotaID = nil
+        model.updatePreference(preference)
+        XCTAssertEqual(claudeItem(), MenuBarSummaryItem(providerID: .claude, text: "60%"))
 
         let plain = MenuBarSummaryRenderer.compose(
             summaryItems: [MenuBarSummaryItem(providerID: .claude, text: "60%")]
@@ -1435,7 +1445,7 @@ final class AppModelTests: XCTestCase {
                 ],
                 providerID: .claude
             ).map(\.originalName),
-            ["weekly_all"]
+            ["session", "weekly_all"]
         )
         let weeklyAll = RawQuotaItem(
             id: "weekly_all",
