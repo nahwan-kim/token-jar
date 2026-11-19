@@ -174,7 +174,9 @@ public struct ClaudeAdapter: ProviderAdapter {
         }
 
         let quotas = primaryQuotas + Self.activeResetCredits(resetCredits, now: refreshedAt)
-        let plan = claudeNonempty(session.subscriptionType)
+        // The sign-in's subscriptionType stays "max" for plans the profile names differently (e.g. Ultra).
+        let plan = profile?.planDisplayName
+            ?? claudeNonempty(session.subscriptionType)
             ?? profile?.organizationPlan
             ?? claudeNonempty(session.rateLimitTier)
         return ProviderAccountSnapshot(
@@ -461,6 +463,7 @@ private func claudeRetryAfter(_ raw: String?, now: Date) -> Date {
 
 struct ClaudeProfile: Sendable, Equatable {
     let email: String?
+    let planDisplayName: String?
     let organizationPlan: String?
 }
 
@@ -484,7 +487,11 @@ private func claudeProfile(token: String, network: any NetworkClient) async thro
         let plan = claudeNonempty(organization?["plan"] as? String)
             ?? claudeNonempty(organization?["subscription_type"] as? String)
             ?? claudeNonempty(organization?["organization_type"] as? String)
-        return ClaudeProfile(email: email, organizationPlan: plan)
+        return ClaudeProfile(
+            email: email,
+            planDisplayName: claudeNonempty(organization?["plan_display_name"] as? String),
+            organizationPlan: plan
+        )
     } catch is CancellationError {
         throw CancellationError()
     } catch let error as CollectionError where error.kind == .cancelled {

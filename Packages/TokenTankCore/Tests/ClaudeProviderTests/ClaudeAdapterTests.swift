@@ -129,6 +129,23 @@ struct ClaudeAdapterTests {
         #expect(snapshot.accounts.first?.plan == "Max 5x")
     }
 
+    @Test("the profile's plan display name wins over the sign-in subscription type")
+    func profilePlanDisplayName() async throws {
+        let sessions = MemoryClaudeSessionProvider(results: [.success(session)])
+        let profile = #"""
+        {"organization":{"organization_type":"claude_max","plan_display_name":"Ultra","plan_display_label":"Ultra plan"}}
+        """#
+        let network = QueueNetworkClient(results: [
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: fixture)),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data(profile.utf8))),
+            .success(NetworkResponse(statusCode: 200, headers: [:], body: Data("{}".utf8))),
+        ])
+        let snapshot = try await ClaudeAdapter().fetchSnapshot(
+            context: TestContextFactory.make(network: network, claudeSession: sessions)
+        )
+        #expect(snapshot.accounts.first?.plan == "Ultra")
+    }
+
     @Test("availability is descriptive and performs no session, network, or file operation")
     func availabilityDoesNotFetch() async {
         let sessions = MemoryClaudeSessionProvider(results: [])
