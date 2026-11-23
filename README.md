@@ -66,7 +66,7 @@ Token Jar 자체 계정은 필요하지 않습니다. Claude의 모든 수집(�
 | **Grok** | Grok CLI 세션으로 조회한 SuperGrok 크레딧 (세션 만료 시 설치된 Grok CLI가 스스로 갱신하도록 `grok models`를 수집당 한 번 실행, 프록시 우선, 사용량 누락 시 동일 세션 bearer의 제한된 billing fallback) | Grok CLI 설치·로그인 및 `~/.grok/auth.json` |
 | **Cursor** | Cursor 로컬 세션으로 조회한 계정 사용량 요약 | Cursor 앱 로그인 |
 | **Doubao** | 공식 `arkcli usage plan --format json`의 플랜 한도 | `arkcli` 설치 및 유효한 SSO 로그인 |
-| **Antigravity** | Google Code Assist 할당량 요약의 Gemini·Claude/GPT 5시간·주간 한도와 플랜 이름 | [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)의 Antigravity 로그인(`~/.cli-proxy-api/auths/antigravity-*.json` 또는 `~/.cli-proxy-api/antigravity-*.json`)과 실행 중인 CLIProxyAPI |
+| **Antigravity** | 공식 Antigravity CLI `agy -p /usage`의 Gemini·Claude/GPT 5시간·주간 한도와 별도의 Gemini 4 Argon 주간 한도 | `agy` 설치(`~/.local/bin/agy` 등) 및 로그인 |
 
 Claude는 웹·데스크톱 앱과 별개인 **Claude Code 로그인**을 사용합니다. 로그인이 여러 개면(`CLAUDE_CONFIG_DIR`, `~/.claude-*`) 각 디렉터리의 `Claude Code-credentials-<디렉터리 경로 SHA-256 앞 8자리>` 키체인 항목 또는 `<디렉터리>/.credentials.json`을 계정으로 보고, 이메일은 그 디렉터리의 `.claude.json`에서 가져옵니다. 아래의 갱신 한도(CLI 실행 1회)는 계정마다 따로 적용되며, 해당 계정의 갱신에는 `CLAUDE_CONFIG_DIR`을 넘겨 그 로그인만 갱신하게 합니다. 모든 Claude 수집은 정확한 원본 파일을 먼저, 파일에 쓸 수 있는 세션이 없으면 정확한 키체인 계정을 비대화형으로 다시 읽는 것으로 시작합니다. 바뀐 유효 토큰이 있으면 채택하고, 토큰 만료가 60초 이내이거나 사용량 API가 HTTP 401을 반환하는 등 갱신이 필요한 경우 해당 수집에 한 번뿐인 소유자 갱신 기회를 사용합니다. HTTP 403은 갱신을 시작하지 않습니다. 갱신 뒤에도 세션을 쓸 수 없으면 마지막 성공 값을 오래된 상태로 유지하고 ‘Claude Code CLI를 한 번 실행하면 갱신됨’(`RecoveryAction.runSourceCLI`)을 표시합니다.
 
@@ -90,7 +90,7 @@ Claude 리셋권은 사용량과 같은 OAuth 세션의 읽기 전용 조회로 
 
 - 공식 도구가 소유한 인증 저장소는 원칙적으로 읽기 전용입니다. Claude 저장소는 정확히 읽기만 하며 Token Jar가 토큰을 직접 POST·수정·복사·저장·캐시하지 않습니다. 키체인 항목은 `/usr/bin/security find-generic-password … -w`(5초 제한)로 읽고 접근 목록은 바꾸지 않습니다. 모든 시작·주기·수동 Claude 수집은 조용한 재읽기 후 필요할 때 수집당 계정별 최대 한 번의 제한된 Claude Code 소유자 `/usage`를 허용합니다.
 - Grok도 읽기 전용입니다. Token Jar는 `~/.grok/auth.json`을 읽기만 하고 토큰을 갱신 요청(POST)하거나 파일에 쓰지 않습니다. 액세스 토큰 만료가 60초 이내이거나 첫 크레딧 프록시 요청이 401/403이면, 설치된 Grok CLI를 고정 경로·빈 작업 디렉터리·30초 제한·출력 상한으로 수집당 한 번 `grok models` 실행해 CLI가 자기 잠금 아래에서 직접 갱신하게 한 뒤 파일을 다시 읽습니다. 그래도 만료 상태면 ‘Grok CLI를 한 번 실행하면 갱신됨’을 표시하고 다음 확인에서 다시 읽습니다. 브라우저 쿠키·수동 토큰 UI·Management API·Keychain 토큰 캐시를 사용하지 않습니다.
-- Antigravity도 읽기 전용입니다. CLIProxyAPI가 저장한 `antigravity-*.json`(비활성 파일 제외)을 계정별로 읽기만 하고, 토큰 갱신(만료 30분 전)은 CLIProxyAPI가 합니다. Token Jar는 갱신 요청을 보내거나 파일에 쓰지 않으며, 파일의 토큰이 만료됐으면 ‘CLIProxyAPI를 실행하면 갱신됨’을 표시합니다. Gemini CLI(`~/.gemini/oauth_creds.json`)는 지원하지 않습니다.
+- Antigravity도 공식 CLI에 맡깁니다. Token Jar는 설치된 `agy`를 고정 경로·빈 임시 작업 디렉터리·30초 제한·출력 상한으로 실행해 모델을 부르지 않는 읽기 전용 `/usage` 결과만 읽습니다. 로그인 토큰은 `agy`가 로그인 키체인에 두고 직접 갱신하며, Token Jar는 그 키체인 항목의 속성(수정 시각)만 확인하고 토큰은 읽지 않습니다. 항목이 없으면 `agy`를 실행하지 않고 로그인 안내만 표시합니다. `agy`가 브라우저 로그인을 요청하면 ‘터미널에서 agy를 실행해 로그인한 뒤 새로고침’을 표시하고, 키체인 항목이 바뀔 때까지 다시 실행하지 않습니다. Token Jar는 Antigravity에 직접 요청을 보내지 않으며, 한 Mac에 로그인된 `agy` 계정 하나만 표시합니다.
 - 사용량 스냅샷은 메모리에만 유지합니다. Claude 프로필(토큰이 바뀔 때만 재조회)과 리셋권(30분마다 재조회) 결과도 앱 실행 중 메모리에만 두며 디스크나 키체인에 저장하지 않습니다. 표시 설정은 로컬에 저장합니다.
 - Codex와 Doubao는 허용된 공식 CLI를 실행합니다. 공식 CLI 자체의 세션 관리는 해당 도구가 담당합니다. Codex 홈이 둘 이상이면 같은 계정을 한 번만 조회하기 위해 각 `auth.json`의 계정 식별 클레임만 읽고, 토큰은 보관하거나 사용하지 않습니다.
 - 네트워크 조회가 필요한 서비스는 해당 제공자에 직접 요청합니다. 완전한 오프라인 앱은 아닙니다.

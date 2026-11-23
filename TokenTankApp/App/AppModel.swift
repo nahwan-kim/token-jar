@@ -600,7 +600,7 @@ final class AppModel: ObservableObject {
                 doubaoPlan: ArkCLIPlanUsageReader(),
                 grokSession: GrokOAuthSessionProvider(clock: clock),
                 claudeSession: ClaudeCodeSessionProvider(clock: clock),
-                antigravitySession: CLIProxyAntigravitySessionProvider(clock: clock),
+                antigravityUsage: AgyCLIUsageReader(),
                 clock: clock,
                 diagnostics: diagnostics
             )

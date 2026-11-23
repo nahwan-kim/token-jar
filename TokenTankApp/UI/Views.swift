@@ -774,13 +774,13 @@ private struct FailureView: View {
         case .runSourceCLI:
             switch providerID {
             case .claude: "action.run_claude_cli"
-            case .antigravity: "action.run_cli_proxy"
+            case .antigravity: "action.sign_in_agy"
             default: "action.run_grok_cli"
             }
         case .signInSourceApp:
             switch providerID {
             case .claude: "action.sign_in_claude"
-            case .antigravity: "action.sign_in_cli_proxy"
+            case .antigravity: "action.sign_in_agy"
             default: "action.sign_in_source"
             }
         case .signInTokenTank: "action.sign_in_token_tank"
@@ -964,9 +964,7 @@ enum QuotaDisplayFormatter {
                 return nil
             }
             return readableName(normalized, locale: locale)
-        case .antigravity:
-            return quotas.lazy.compactMap { $0.sourceFields["plan"] }.first
-        case .claude, .grok:
+        case .claude, .grok, .antigravity:
             return nil
         }
     }

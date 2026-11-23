@@ -167,6 +167,11 @@ public protocol DoubaoPlanUsageReader: Sendable {
     func readPlanUsage() async throws -> Data
 }
 
+public protocol AntigravityUsageReader: Sendable {
+    /// The `command.data` object of the official CLI's `agy -p /usage --output-format json`.
+    func readUsage() async throws -> Data
+}
+
 /// Machine-level events that change when collection is useful: system sleep/wake and
 /// whether the default network path can currently reach anything.
 public enum SystemActivityEvent: Equatable, Sendable {
@@ -232,7 +237,7 @@ public struct CollectionContext: Sendable {
     public let doubaoPlan: any DoubaoPlanUsageReader
     public let grokSession: any GrokSessionProviding
     public let claudeSession: any ClaudeSessionProviding
-    public let antigravitySession: any AntigravitySessionProviding
+    public let antigravityUsage: any AntigravityUsageReader
     public let clock: any TokenTankClock
     public let diagnostics: any DiagnosticsSink
     public let correlationID: UUID
@@ -251,7 +256,7 @@ public struct CollectionContext: Sendable {
         doubaoPlan: any DoubaoPlanUsageReader,
         grokSession: any GrokSessionProviding,
         claudeSession: any ClaudeSessionProviding,
-        antigravitySession: any AntigravitySessionProviding = NoAntigravitySessionProvider(),
+        antigravityUsage: any AntigravityUsageReader = NoAntigravityUsageReader(),
         clock: any TokenTankClock,
         diagnostics: any DiagnosticsSink,
         correlationID: UUID = UUID(),
@@ -267,7 +272,7 @@ public struct CollectionContext: Sendable {
         self.doubaoPlan = doubaoPlan
         self.grokSession = grokSession
         self.claudeSession = claudeSession
-        self.antigravitySession = antigravitySession
+        self.antigravityUsage = antigravityUsage
         self.clock = clock
         self.diagnostics = diagnostics
         self.correlationID = correlationID
@@ -355,6 +360,16 @@ public struct NoDoubaoPlanUsageReader: DoubaoPlanUsageReader {
         throw CollectionError(
             kind: .sourceUnavailable,
             diagnosticCode: "doubao.arkcli.disabled"
+        )
+    }
+}
+public struct NoAntigravityUsageReader: AntigravityUsageReader {
+    public init() {}
+
+    public func readUsage() async throws -> Data {
+        throw CollectionError(
+            kind: .sourceUnavailable,
+            diagnosticCode: "antigravity.agy.disabled"
         )
     }
 }

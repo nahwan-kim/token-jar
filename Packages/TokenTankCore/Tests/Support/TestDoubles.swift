@@ -134,6 +134,20 @@ public actor MemoryDoubaoPlanUsageReader: DoubaoPlanUsageReader {
         return try results.removeFirst().get()
     }
 }
+public actor MemoryAntigravityUsageReader: AntigravityUsageReader {
+    private var results: [Result<Data, CollectionError>]
+
+    public init(results: [Result<Data, CollectionError>]) {
+        self.results = results
+    }
+
+    public func readUsage() throws -> Data {
+        guard !results.isEmpty else {
+            throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "test.antigravity.empty-queue")
+        }
+        return try results.removeFirst().get()
+    }
+}
 
 public actor ManualClock: TokenTankClock {
     private struct Waiter {
@@ -323,7 +337,7 @@ public enum TestContextFactory {
         network: any NetworkClient = QueueNetworkClient(results: []),
         grokSession: any GrokSessionProviding = NoGrokSessionProvider(),
         claudeSession: any ClaudeSessionProviding = NoClaudeSessionProvider(),
-        antigravitySession: any AntigravitySessionProviding = NoAntigravitySessionProvider(),
+        antigravityUsage: any AntigravityUsageReader = MemoryAntigravityUsageReader(results: []),
         credentials: any AppCredentialStore = InMemoryCredentialStore(),
         externalSessions: any ExternalSessionReader = MemoryExternalSessionReader(),
         sqlite: any ReadOnlySQLiteReader = MemorySQLiteReader(),
@@ -344,7 +358,7 @@ public enum TestContextFactory {
             doubaoPlan: doubaoPlan,
             grokSession: grokSession,
             claudeSession: claudeSession,
-            antigravitySession: antigravitySession,
+            antigravityUsage: antigravityUsage,
             clock: clock,
             diagnostics: diagnostics,
             isUserInitiated: isUserInitiated,

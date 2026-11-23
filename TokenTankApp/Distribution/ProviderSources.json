@@ -197,32 +197,33 @@
     {
       "provider": "antigravity",
       "surface": "Antigravity (Google Code Assist) Gemini and Claude/GPT 5-hour and weekly limits plus the Gemini 4 Argon weekly limit",
-      "selectedSource": "CLIProxyAPI-held Antigravity Google OAuth plus daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+      "selectedSource": "Official Antigravity CLI agy --output-format json -p /usage",
       "sourceStatus": "watch",
       "productionComposition": true,
-      "sourceStatusReason": "This follows the CodexBar Antigravity OAuth path without its token refresh: CLIProxyAPI owns the sign-in and renews each token 30 minutes before expiry, so Token Jar only reads the auth files. The quota summary endpoint is undocumented.",
-      "rejectedAlternative": "Gemini CLI ~/.gemini/oauth_creds.json (Google stopped serving consumer Gemini CLI OAuth), the Antigravity app language-server probe, and an own refresh-token grant are not composed.",
+      "sourceStatusReason": "The official agy CLI owns its Google sign-in in the login Keychain (service gemini, account antigravity), renews it itself, and answers the read-only /usage command without a model turn (num_turns 0, zero tokens). Token Jar starts only the allowlisted agy executable with literal arguments and sends no request of its own. The /usage output is a CLI convenience, not a documented API.",
+      "rejectedAlternative": "Reading agy's Keychain token and calling retrieveUserQuotaSummary directly (the token expires hourly and only agy renews it; Token Jar would send requests as the CLI), CLIProxyAPI antigravity-*.json files (the proxy account was retired on 2026-11-20), and Gemini CLI ~/.gemini/oauth_creds.json are not composed.",
       "documentation": [
-        "https://github.com/steipete/CodexBar/blob/main/docs/antigravity.md",
-        "https://github.com/router-for-me/CLIProxyAPI"
+        "https://antigravity.google"
       ],
-      "credentialOwner": "CLIProxyAPI",
-      "credentialPersistence": "CLIProxyAPI-owned antigravity-*.json; Token Jar does not persist, copy, write, or refresh the token",
+      "credentialOwner": "agy",
+      "credentialPersistence": "agy-owned login Keychain item; Token Jar reads only its attributes and never its token",
       "tokenTankIO": [
-        "List antigravity-*.json (at most 32) in ~/.cli-proxy-api/auths and ~/.cli-proxy-api; open each with O_NOFOLLOW and require a regular owner-only single-link file of at most 64 KiB",
-        "Skip disabled files; one account per email; a token within 60 seconds of expired/timestamp+expires_in is reported as waiting for CLIProxyAPI",
-        "POST retrieveUserQuotaSummary with {\"project\":<project_id>} or {}, then POST cloudcode-pa.googleapis.com/v1internal:loadCodeAssist with the fixed ANTIGRAVITY metadata body only for the plan name; a plan failure keeps usage",
-        "Expose every enabled bucket as <group>.<window> with remainingFraction x 100 as remaining percentage and resetTime"
+        "Skip while the console is locked; read only the attributes (mdat) of the generic-password item service gemini, account antigravity through /usr/bin/security find-generic-password without -w (5-second limit, terminated on timeout); when it is absent (exit 44), report a missing sign-in without starting agy",
+        "Launch one allowlisted agy executable candidate in an empty owner-only temporary directory with the literal arguments --output-format json --log-file /dev/null -p /usage, a fixed environment without API-key overrides, and a 30-second limit; stdout and stderr are drained concurrently with a 4 MiB cap each, then the directory is removed",
+        "A sign-in prompt on stderr or an authentication error in the envelope is reported as a sign-in request, and agy is not started again until the Keychain item's mdat (re-read after the failed run unless the console locked meanwhile) changes",
+        "Accept only status SUCCESS with command.name usage and num_turns 0; expose every bucket as <group>.<window> with remaining_fraction x 100 as remaining percentage and reset_time; a bucket without a window is a schema change"
       ],
       "externalPaths": [
-        "~/.cli-proxy-api/auths/antigravity-*.json",
-        "~/.cli-proxy-api/antigravity-*.json"
+        "~/.local/bin/agy",
+        "/opt/homebrew/bin/agy",
+        "/usr/local/bin/agy",
+        "login Keychain generic password gemini/antigravity (attributes only)"
       ],
       "tccClass": "none",
       "fdaRequired": false,
-      "liveValidation": "2026-10-30 current host: a CLIProxyAPI Antigravity sign-in returned two groups (Gemini Models, Claude and GPT models) with 5h and weekly buckets, and loadCodeAssist returned paidTier Google AI Pro.",
-      "mutationRisk": "None from Token Jar: no refresh grant, no file write. CLIProxyAPI rewrites the files on its own schedule.",
-      "releaseBlocker": "Revalidate the quota summary shape through the final frozen candidate"
+      "liveValidation": "2026-11-23 master MacBook, agy 1.5.15: /usage returned three groups (Gemini Models, Claude and GPT models, Gemini 4 Argon) with 5h and weekly buckets, status SUCCESS, num_turns 0; without a Keychain sign-in agy printed a browser sign-in URL on stderr and ended with 'authentication failed or timed out'.",
+      "mutationRisk": "agy renews and rewrites its own Keychain item while it runs; Token Jar writes nothing and sends no auth request.",
+      "releaseBlocker": "Revalidate the /usage JSON envelope and bucket shape through the final frozen candidate"
     }
   ],
   "refreshPolicy": {

@@ -753,10 +753,7 @@ extension CollectionContext {
                 base: claudeSession,
                 allowsClaudeRecovery: allowsClaudeRecovery
             ),
-            antigravitySession: ProviderScopedAntigravitySessionProvider(
-                providerID: providerID,
-                base: antigravitySession
-            ),
+            antigravityUsage: ProviderScopedAntigravityUsageReader(providerID: providerID, base: antigravityUsage),
             clock: clock,
             diagnostics: NoDiagnostics(),
             correlationID: correlationID,
@@ -813,18 +810,18 @@ private actor ProviderScopedGrokSessionProvider: GrokSessionProviding {
     }
 }
 
-private struct ProviderScopedAntigravitySessionProvider: AntigravitySessionProviding {
+private struct ProviderScopedAntigravityUsageReader: AntigravityUsageReader {
     let providerID: ProviderID
-    let base: any AntigravitySessionProviding
+    let base: any AntigravityUsageReader
 
-    func accounts() async throws -> [AntigravityAccountRead] {
+    func readUsage() async throws -> Data {
         guard providerID == .antigravity else {
             throw CollectionError(
                 kind: .sourceUnavailable,
-                diagnosticCode: "capability.antigravity-session.denied"
+                diagnosticCode: "capability.antigravity-usage.denied"
             )
         }
-        return try await base.accounts()
+        return try await base.readUsage()
     }
 }
 

@@ -132,7 +132,7 @@ actor NativeClaudeCredentialReader: ClaudeCredentialReading {
         self.keychainLookup = {
             try await Self.readWithSecurityTool(service: service, account: account, timeout: 5)
         }
-        self.screenIsUnlocked = Self.consoleIsUnlocked
+        self.screenIsUnlocked = consoleSessionIsUnlocked
     }
 
     init(
@@ -169,15 +169,6 @@ actor NativeClaudeCredentialReader: ClaudeCredentialReading {
             )
         }
         return try await keychainLookup()
-    }
-
-    private static func consoleIsUnlocked() -> Bool {
-        // On a locked console, even a no-UI legacy Keychain query can block in
-        // securityd. Do not start a foreign-item lookup until the session returns.
-        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
-              session[kCGSessionOnConsoleKey as String] as? Bool == true
-        else { return false }
-        return session["CGSSessionScreenIsLocked"] as? Bool != true
     }
 
     /// Reads a generic-password item through `/usr/bin/security`. Claude Code writes its
@@ -239,6 +230,15 @@ actor NativeClaudeCredentialReader: ClaudeCredentialReading {
         }
         return bytes
     }
+}
+
+/// Whether this user's console session is active and unlocked. On a locked console, even a no-UI
+/// legacy Keychain query can block in securityd, so foreign-item lookups wait for the session.
+func consoleSessionIsUnlocked() -> Bool {
+    guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+          session[kCGSessionOnConsoleKey as String] as? Bool == true
+    else { return false }
+    return session["CGSSessionScreenIsLocked"] as? Bool != true
 }
 
 /// One bounded `/usr/bin/security` launch that a timeout or task cancellation terminates.

@@ -147,7 +147,7 @@ public actor URLSessionNetworkClient: NetworkClient {
 
         let expectedNames: Set<String>
         switch request.providerID {
-        case .codex, .doubao:
+        case .codex, .doubao, .antigravity:
             expectedNames = []
         case .claude:
             expectedNames = ["accept", "authorization", "anthropic-beta", "content-type", "user-agent"]
@@ -183,15 +183,6 @@ public actor URLSessionNetworkClient: NetworkClient {
             }
         case .cursor:
             expectedNames = ["accept", "cookie"]
-        case .antigravity:
-            expectedNames = ["authorization", "content-type", "user-agent"]
-            let headers = Dictionary(uniqueKeysWithValues: request.headers.map { ($0.key.lowercased(), $0.value) })
-            guard headers["content-type"] == "application/json",
-                  headers["user-agent"] == AntigravityRequestPolicy.userAgent,
-                  let authorization = headers["authorization"],
-                  authorization.hasPrefix("Bearer "),
-                  antigravityAccessTokenIsSafe(String(authorization.dropFirst("Bearer ".count)))
-            else { return false }
         }
         return Set(normalizedNames) == expectedNames
     }
@@ -244,7 +235,7 @@ public actor URLSessionNetworkClient: NetworkClient {
         else { return false }
 
         switch request.providerID {
-        case .codex, .doubao:
+        case .codex, .doubao, .antigravity:
             return false
         case .claude:
             let isResetCredits = components.percentEncodedPath == "/api/oauth/usage"
@@ -279,21 +270,6 @@ public actor URLSessionNetworkClient: NetworkClient {
                 && components.percentEncodedPath == "/api/usage-summary"
                 && components.query == nil
                 && request.body == nil
-        case .antigravity:
-            guard request.method == .post,
-                  components.query == nil,
-                  let body = request.body,
-                  body.count <= AntigravityRequestPolicy.maximumBodyBytes,
-                  request.timeout <= AntigravityRequestPolicy.timeout
-            else { return false }
-            let summary = AntigravityRequestPolicy.quotaSummaryURL
-            let loadCodeAssist = AntigravityRequestPolicy.loadCodeAssistURL
-            if host == summary.host, components.percentEncodedPath == summary.path {
-                return AntigravityRequestPolicy.isQuotaSummaryBody(body)
-            }
-            return host == loadCodeAssist.host
-                && components.percentEncodedPath == loadCodeAssist.path
-                && body == AntigravityRequestPolicy.loadCodeAssistBody
         }
     }
 
@@ -1402,9 +1378,9 @@ public actor ArkCLIPlanUsageReader: DoubaoPlanUsageReader {
 
         let stdoutHandle = output.fileHandleForReading
         let fileDescriptor = stdoutHandle.fileDescriptor
-        let timeout = timeout
+        let deadline = ContinuousClock.now.advanced(by: timeout)
         let reader = Task.detached(priority: .utility) {
-            try Self.readBoundedOutput(fileDescriptor: fileDescriptor, timeout: timeout)
+            try readBoundedProcessOutput(fileDescriptor: fileDescriptor, deadline: deadline, diagnosticPrefix: "doubao.arkcli")
         }
         let data: Data
         do {
@@ -1452,56 +1428,6 @@ public actor ArkCLIPlanUsageReader: DoubaoPlanUsageReader {
         ]
     }
 
-
-    private nonisolated static func readBoundedOutput(
-        fileDescriptor: Int32,
-        timeout: Duration
-    ) throws -> Data {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        var data = Data()
-        var descriptor = pollfd(
-            fd: fileDescriptor,
-            events: Int16(POLLIN | POLLHUP | POLLERR),
-            revents: 0
-        )
-        while true {
-            if Task.isCancelled { throw CancellationError() }
-            let remaining = clock.now.duration(to: deadline)
-            guard remaining > .zero else {
-                throw CollectionError(
-                    kind: .sourceUnavailable,
-                    diagnosticCode: "doubao.arkcli.timeout"
-                )
-            }
-            let components = remaining.components
-            let remainingSeconds =
-                Double(components.seconds) + Double(components.attoseconds) / 1_000_000_000_000_000_000
-            let pollMilliseconds = max(1, min(100, Int(ceil(remainingSeconds * 1_000))))
-            descriptor.revents = 0
-            let pollResult = Darwin.poll(&descriptor, 1, Int32(pollMilliseconds))
-            if pollResult == 0 { continue }
-            if pollResult < 0 {
-                if errno == EINTR { continue }
-                throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "doubao.arkcli.read-failed")
-            }
-            var buffer = [UInt8](repeating: 0, count: 4_096)
-            let count = Darwin.read(fileDescriptor, &buffer, buffer.count)
-            if count == 0 { return data }
-            if count < 0 {
-                if errno == EINTR || errno == EAGAIN { continue }
-                throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "doubao.arkcli.read-failed")
-            }
-            data.append(contentsOf: buffer.prefix(count))
-            guard data.count <= 4 * 1024 * 1024 else {
-                throw CollectionError(
-                    kind: .malformedResponse,
-                    diagnosticCode: "doubao.arkcli.response-size-limit"
-                )
-            }
-        }
-    }
-
     private static func looksLikeMissingSession(_ data: Data) -> Bool {
         guard let text = String(data: data, encoding: .utf8)?.lowercased() else { return false }
         return text.contains("auth login")
@@ -1547,6 +1473,81 @@ actor ProcessTermination {
         await wait()
     }
 }
+
+/// Reads a CLI's output until EOF before `deadline` and within 4 MiB. Failures are `<prefix>.timeout`,
+/// `<prefix>.read-failed` and `<prefix>.response-size-limit`.
+func readBoundedProcessOutput(
+    fileDescriptor: Int32,
+    deadline: ContinuousClock.Instant,
+    diagnosticPrefix: String
+) throws -> Data {
+    let output = try readBoundedProcessOutputPrefix(
+        fileDescriptor: fileDescriptor,
+        deadline: deadline,
+        diagnosticPrefix: diagnosticPrefix
+    )
+    if let cutShort = output.cutShort { throw cutShort }
+    return output.data
+}
+
+/// What a bounded read got: the bytes that arrived, and the timeout or size failure that ended it
+/// before EOF, if any.
+struct BoundedOutput: Sendable {
+    let data: Data
+    let cutShort: CollectionError?
+}
+
+/// Like `readBoundedProcessOutput`, but the deadline and the size cap end the read with the bytes so
+/// far (for best-effort diagnostics such as a sign-in prompt) instead of discarding them.
+func readBoundedProcessOutputPrefix(
+    fileDescriptor: Int32,
+    deadline: ContinuousClock.Instant,
+    diagnosticPrefix: String
+) throws -> BoundedOutput {
+    let clock = ContinuousClock()
+    var data = Data()
+    var descriptor = pollfd(
+        fd: fileDescriptor,
+        events: Int16(POLLIN | POLLHUP | POLLERR),
+        revents: 0
+    )
+    while true {
+        if Task.isCancelled { throw CancellationError() }
+        let remaining = clock.now.duration(to: deadline)
+        guard remaining > .zero else {
+            return BoundedOutput(
+                data: data,
+                cutShort: CollectionError(kind: .sourceUnavailable, diagnosticCode: "\(diagnosticPrefix).timeout")
+            )
+        }
+        let components = remaining.components
+        let remainingSeconds =
+            Double(components.seconds) + Double(components.attoseconds) / 1_000_000_000_000_000_000
+        let pollMilliseconds = max(1, min(100, Int(ceil(remainingSeconds * 1_000))))
+        descriptor.revents = 0
+        let pollResult = Darwin.poll(&descriptor, 1, Int32(pollMilliseconds))
+        if pollResult == 0 { continue }
+        if pollResult < 0 {
+            if errno == EINTR { continue }
+            throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "\(diagnosticPrefix).read-failed")
+        }
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        let count = Darwin.read(fileDescriptor, &buffer, buffer.count)
+        if count == 0 { return BoundedOutput(data: data, cutShort: nil) }
+        if count < 0 {
+            if errno == EINTR || errno == EAGAIN { continue }
+            throw CollectionError(kind: .sourceUnavailable, diagnosticCode: "\(diagnosticPrefix).read-failed")
+        }
+        data.append(contentsOf: buffer.prefix(count))
+        guard data.count <= 4 * 1024 * 1024 else {
+            return BoundedOutput(
+                data: data.prefix(4 * 1024 * 1024),
+                cutShort: CollectionError(kind: .malformedResponse, diagnosticCode: "\(diagnosticPrefix).response-size-limit")
+            )
+        }
+    }
+}
+
 public struct UnifiedDiagnostics: DiagnosticsSink {
     private let subsystem: String
 

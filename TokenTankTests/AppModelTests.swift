@@ -1606,7 +1606,7 @@ final class AppModelTests: XCTestCase {
         )
     }
 
-    func testAntigravityQuotasNameTheirModelGroupAndCarryThePlan() {
+    func testAntigravityQuotasNameTheirModelGroup() {
         func quota(_ id: String, _ name: String, group: String) -> RawQuotaItem {
             RawQuotaItem(
                 id: RawQuotaID(rawValue: id),
@@ -1615,7 +1615,7 @@ final class AppModelTests: XCTestCase {
                 remaining: nil,
                 percentage: SourcePercentage(value: 40, rawText: "40", meaning: .remaining),
                 resetsAt: nil,
-                sourceFields: ["antigravityGroup": group, "plan": "Google AI Pro", "window": String(name.split(separator: ".").last!)]
+                sourceFields: ["antigravityGroup": group, "window": String(name.split(separator: ".").last!)]
             )
         }
         let quotas = [
@@ -1630,7 +1630,6 @@ final class AppModelTests: XCTestCase {
             ["Gemini 5-hour", "Gemini Weekly", "Claude/GPT 5-hour", "Claude/GPT Weekly"]
         )
         XCTAssertEqual(QuotaDisplayFormatter.name(for: quotas[3], locale: Locale(identifier: "ko_KR")), "Claude/GPT 주간")
-        XCTAssertEqual(QuotaDisplayFormatter.planName(for: .antigravity, quotas: quotas, locale: english), "Google AI Pro")
         XCTAssertEqual(QuotaDisplayFormatter.resetWindow(for: quotas[0]), .fiveHour)
         XCTAssertEqual(QuotaDisplayFormatter.resetWindow(for: quotas[1]), .weekly)
     }
